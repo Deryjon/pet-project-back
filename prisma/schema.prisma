@@ -1,6 +1,5 @@
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
@@ -8,33 +7,94 @@ datasource db {
 }
 
 model User {
-  id         Int       @id @default(autoincrement())
-  fullName   String
-  phone      String?   @unique
-  email      String?   @unique
-  password   String
-  isActive   Boolean   @default(true)
+  id       Int     @id @default(autoincrement())
+  fullName String
+  phone    String? @unique
+  password String
+  isActive Boolean @default(true)
+
   roleId     Int
   locationId Int?
-  role       Role      @relation(fields: [roleId], references: [id])
-  location   Location? @relation(fields: [locationId], references: [id])
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+
+  role     Role      @relation(fields: [roleId], references: [id])
+  location Location? @relation(fields: [locationId], references: [id])
+  sales    Sale[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Role {
-  id        Int      @id @default(autoincrement())
-  name      String   @unique
-  users     User[]
+  id    Int    @id @default(autoincrement())
+  name  String @unique
+  users User[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
 model Location {
-  id        Int      @id @default(autoincrement())
-  name      String
-  address   String?
-  users     User[]
+  id      Int     @id @default(autoincrement())
+  name    String
+  address String?
+
+  users    User[]
+  products Product[]
+  sales    Sale[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model Category {
+  id       Int       @id @default(autoincrement())
+  name     String
+  products Product[]
+
+  createdAt DateTime @default(now())
+}
+
+model Product {
+  id       Int    @id @default(autoincrement())
+  name     String
+  price    Float
+  quantity Int    @default(0)
+
+  categoryId Int?
+  locationId Int
+
+  category Category? @relation(fields: [categoryId], references: [id])
+  location Location  @relation(fields: [locationId], references: [id])
+
+  saleItems SaleItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Sale {
+  id    Int   @id @default(autoincrement())
+  total Float
+
+  userId     Int
+  locationId Int
+
+  user     User     @relation(fields: [userId], references: [id])
+  location Location @relation(fields: [locationId], references: [id])
+
+  items SaleItem[]
+
+  createdAt DateTime @default(now())
+}
+
+model SaleItem {
+  id       Int   @id @default(autoincrement())
+  quantity Int
+  price    Float
+
+  productId Int
+  saleId    Int
+
+  product Product @relation(fields: [productId], references: [id])
+  sale    Sale    @relation(fields: [saleId], references: [id])
 }
