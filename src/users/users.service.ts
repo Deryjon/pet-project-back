@@ -89,6 +89,28 @@ export class UsersService {
     });
   }
 
+  findShopByIdentifier(shopIdentifier: string) {
+    const shopDefinition = this.resolveShopDefinition(shopIdentifier);
+
+    if (!shopDefinition) {
+      return null;
+    }
+
+    return this.toShopItem(shopDefinition.branchCode);
+  }
+
+  findBranchCodeByShopIdentifier(shopIdentifier: string) {
+    return this.resolveShopDefinition(shopIdentifier)?.branchCode ?? null;
+  }
+
+  userHasAccessToBranch(user: User, branchCode: string) {
+    if (this.hasGlobalLocationAccess(user.role)) {
+      return true;
+    }
+
+    return user.branchCode === branchCode;
+  }
+
   async findByIdOrThrow(id: number) {
     const user = await this.prisma.user.findUnique({
       where: { id },

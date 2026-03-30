@@ -1,12 +1,10 @@
-import {
-  Injectable,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
 import { UsersService } from '../users/users.service';
 import { LoginDto } from './dto/login.dto';
+import { ShopLoginDto } from './dto/shop-login.dto';
 
 @Injectable()
 export class AuthService {
@@ -14,6 +12,18 @@ export class AuthService {
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
   ) {}
+
+  shopLogin(dto: ShopLoginDto) {
+    const shop = this.usersService.findShopByIdentifier(dto.shop_login);
+
+    if (!shop) {
+      throw new UnauthorizedException('Shop not found');
+    }
+
+    return {
+      shop,
+    };
+  }
 
   async login(dto: LoginDto) {
     const user = await this.usersService.findByPhoneNumber(dto.phone_number);
@@ -28,10 +38,23 @@ export class AuthService {
       throw new UnauthorizedException('Invalid password');
     }
 
+    const effectiveBranchCode =
+      this.usersService.findBranchCodeByShopIdentifier(dto.shop_login);
+
+    if (!effectiveBranchCode) {
+      throw new UnauthorizedException('Shop not found');
+    }
+
+    if (!this.usersService.userHasAccessToBranch(user, effectiveBranchCode)) {
+      throw new UnauthorizedException(
+        'This user does not have access to the requested shop',
+      );
+    }
+
     const payload = {
       sub: user.id,
       role: user.role,
-      branchCode: user.branchCode,
+      branchCode: effectiveBranchCode,
       phoneNumber: user.phoneNumber,
     };
     const accessToken = await this.jwtService.signAsync(payload);
@@ -39,7 +62,10 @@ export class AuthService {
     return {
       token: accessToken,
       access_token: accessToken,
-      user: await this.usersService.toAuthProfile(user),
+      user: await this.usersService.toAuthProfile({
+        ...user,
+        branchCode: effectiveBranchCode,
+      }),
     };
   }
 
