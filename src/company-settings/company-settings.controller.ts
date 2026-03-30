@@ -50,4 +50,35 @@ export class CompanySettingsController {
       companyId,
     });
   }
+
+  @Get('cheque')
+  getCheque(@Query('limit') limit?: string) {
+    return this.companySettingsService.getCheque(Number(limit));
+  }
+
+  @Get('company-payment-type')
+  getCompanyPaymentTypes(
+    @Query('limit') limit?: string,
+    @Query('company_id') companyId?: string,
+  ) {
+    return this.companySettingsService.getCompanyPaymentTypes(
+      Number(limit),
+      companyId,
+    );
+  }
+
+  @Get('cash-box')
+  getCashBoxes(
+    @Query('limit') limit?: string,
+    @Query('page') page?: string,
+    @Query('name') name?: string,
+    @Query('company_id') companyId?: string,
+  ) {
+    return this.companySettingsService.getCashBoxes({
+      limit: Number(limit),
+      page: Number(page),
+      name,
+      companyId,
+    });
+  }
 }
