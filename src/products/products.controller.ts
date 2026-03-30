@@ -127,6 +127,13 @@ export class ProductsController {
       throw new BadRequestException(
         'POST /api/v2/product is deprecated for catalog create. Use POST /api/v2/product/create.',
       );
+
+    }
+
+    if (this.isCatalogCreateRequest(body) && this.hasSearchPayload(body)) {
+      throw new BadRequestException(
+        'Ambiguous payload. Use POST /api/v2/product/create to create a catalog product.',
+      );
     }
 
     return this.productsService.findAllV2Extended({
@@ -278,6 +285,21 @@ export class ProductsController {
         body.shop_prices !== undefined ||
         body.shop_measurement_values !== undefined ||
         body.shipments !== undefined)
+    );
+  }
+
+  private hasSearchPayload(body: Record<string, unknown>) {
+    return (
+      body.page !== undefined ||
+      body.limit !== undefined ||
+      body.search !== undefined ||
+      body.field_search_key !== undefined ||
+      body.statistics !== undefined ||
+      body.status !== undefined ||
+      body.archived_list !== undefined ||
+      body.brand_ids !== undefined ||
+      body.supplier_ids !== undefined ||
+      body.order !== undefined
     );
   }
 }

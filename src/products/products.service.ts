@@ -1347,6 +1347,7 @@ export class ProductsService {
     retailPriceTo?: number,
     wholesalePrice?: number,
     freePrice?: boolean,
+
   ): Prisma.ProductWhereInput | undefined {
     const and: Prisma.ProductWhereInput[] = [];
 
@@ -1506,6 +1507,7 @@ export class ProductsService {
         },
       });
     }
+
 
     if (!and.length) {
       return undefined;
@@ -1971,7 +1973,6 @@ export class ProductsService {
             !!item && typeof item === 'object',
         )
       : undefined;
-
     return {
       brand_id: this.optionalString(body.brand_id) ?? null,
       brand_name: this.optionalString(body.brand_name) ?? null,
@@ -1988,6 +1989,7 @@ export class ProductsService {
         this.toNumber(firstShopPrice?.wholesale_price) ??
         null,
       free_price: this.toBooleanValue(body.free_price),
+
     } satisfies Prisma.JsonObject;
   }
 
