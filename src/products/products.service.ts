@@ -188,9 +188,19 @@ type FindProductsArgs = {
   page: number;
   limit: number;
   search?: string;
+  sku?: string;
   statistics?: boolean;
   status?: string;
   archivedList?: boolean;
+  shopIds?: string[];
+  categoryIds?: string[];
+  measurementType?: string;
+  supplyPriceFrom?: number;
+  supplyPriceTo?: number;
+  retailPriceFrom?: number;
+  retailPriceTo?: number;
+  wholesalePrice?: number;
+  freePrice?: boolean;
   brandIds?: string[];
   supplierIds?: string[];
   order?: string[];
@@ -306,6 +316,16 @@ export class ProductsService {
     statistics,
     status,
     archivedList,
+    shopIds,
+    categoryIds,
+    sku,
+    measurementType,
+    supplyPriceFrom,
+    supplyPriceTo,
+    retailPriceFrom,
+    retailPriceTo,
+    wholesalePrice,
+    freePrice,
     brandIds,
     supplierIds,
     order,
@@ -318,6 +338,16 @@ export class ProductsService {
       supplierIds,
       status,
       archivedList,
+      shopIds,
+      categoryIds,
+      sku,
+      measurementType,
+      supplyPriceFrom,
+      supplyPriceTo,
+      retailPriceFrom,
+      retailPriceTo,
+      wholesalePrice,
+      freePrice,
     );
     const orderBy = this.buildProductOrderBy(order);
 
@@ -373,6 +403,61 @@ export class ProductsService {
     }
 
     return response;
+  }
+
+  async getCatalogStatistics({
+    search,
+    brandIds,
+    supplierIds,
+    status,
+    archivedList,
+    shopIds,
+    categoryIds,
+    sku,
+    measurementType,
+    supplyPriceFrom,
+    supplyPriceTo,
+    retailPriceFrom,
+    retailPriceTo,
+    wholesalePrice,
+    freePrice,
+  }: Omit<FindProductsArgs, 'page' | 'limit' | 'statistics' | 'order'>) {
+    const where = this.buildProductWhere(
+      search,
+      brandIds,
+      supplierIds,
+      status,
+      archivedList,
+      shopIds,
+      categoryIds,
+      sku,
+      measurementType,
+      supplyPriceFrom,
+      supplyPriceTo,
+      retailPriceFrom,
+      retailPriceTo,
+      wholesalePrice,
+      freePrice,
+    );
+
+    const productsForStatistics = await this.prisma.product.findMany({
+      where,
+      select: {
+        id: true,
+        quantity: true,
+        purchasePrice: true,
+        salePrice: true,
+        stocks: {
+          select: {
+            quantity: true,
+            purchasePrice: true,
+            salePrice: true,
+          },
+        },
+      },
+    });
+
+    return this.buildProductsStatistics(productsForStatistics);
   }
 
   async create(body: Record<string, unknown>) {
@@ -1252,6 +1337,17 @@ export class ProductsService {
     supplierIds?: string[],
     status?: string,
     archivedList?: boolean,
+    shopIds?: string[],
+    categoryIds?: string[],
+    sku?: string,
+    measurementType?: string,
+    supplyPriceFrom?: number,
+    supplyPriceTo?: number,
+    retailPriceFrom?: number,
+    retailPriceTo?: number,
+    wholesalePrice?: number,
+    freePrice?: boolean,
+
   ): Prisma.ProductWhereInput | undefined {
     const and: Prisma.ProductWhereInput[] = [];
 
@@ -1262,6 +1358,24 @@ export class ProductsService {
           { sku: { contains: search, mode: 'insensitive' } },
           { barcode: { contains: search, mode: 'insensitive' } },
         ],
+      });
+    }
+
+    if (sku) {
+      and.push({
+        sku: {
+          contains: sku,
+          mode: 'insensitive',
+        },
+      });
+    }
+
+    if (measurementType) {
+      and.push({
+        unit: {
+          equals: measurementType,
+          mode: 'insensitive',
+        },
       });
     }
 
@@ -1310,6 +1424,90 @@ export class ProductsService {
         },
       });
     }
+
+    const resolvedShopIds = this.toBranchCodes(shopIds);
+    if (resolvedShopIds.length) {
+      and.push({
+        stocks: {
+          some: {
+            branchCode: {
+              in: resolvedShopIds,
+            },
+          },
+        },
+      });
+    }
+
+    if (categoryIds?.length) {
+      const numericCategoryIds = this.normalizeNumericStringArray(categoryIds);
+      const namedCategoryIds = categoryIds
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0 && !/^\d+$/.test(item));
+      const categoryFilters: Prisma.ProductWhereInput[] = [];
+
+      if (numericCategoryIds.length) {
+        categoryFilters.push({
+          categoryId: {
+            in: numericCategoryIds,
+          },
+        });
+      }
+
+      if (namedCategoryIds.length) {
+        categoryFilters.push({
+          category: {
+            name: {
+              in: namedCategoryIds,
+            },
+          },
+        });
+      }
+
+      if (categoryFilters.length) {
+        and.push(
+          categoryFilters.length === 1
+            ? categoryFilters[0]
+            : { OR: categoryFilters },
+        );
+      }
+    }
+
+    if (supplyPriceFrom !== undefined || supplyPriceTo !== undefined) {
+      and.push({
+        purchasePrice: {
+          gte: supplyPriceFrom,
+          lte: supplyPriceTo,
+        },
+      });
+    }
+
+    if (retailPriceFrom !== undefined || retailPriceTo !== undefined) {
+      and.push({
+        salePrice: {
+          gte: retailPriceFrom,
+          lte: retailPriceTo,
+        },
+      });
+    }
+
+    if (wholesalePrice !== undefined) {
+      and.push({
+        metadata: {
+          path: ['wholesale_price'],
+          equals: wholesalePrice,
+        },
+      });
+    }
+
+    if (freePrice !== undefined) {
+      and.push({
+        metadata: {
+          path: ['free_price'],
+          equals: freePrice,
+        },
+      });
+    }
+
 
     if (!and.length) {
       return undefined;
@@ -1769,6 +1967,12 @@ export class ProductsService {
       variants: Array<Record<string, unknown>>;
     },
   ) {
+    const firstShopPrice = Array.isArray(body.shop_prices)
+      ? body.shop_prices.find(
+          (item): item is Record<string, unknown> =>
+            !!item && typeof item === 'object',
+        )
+      : undefined;
     return {
       brand_id: this.optionalString(body.brand_id) ?? null,
       brand_name: this.optionalString(body.brand_name) ?? null,
@@ -1780,6 +1984,12 @@ export class ProductsService {
       is_variative: options.isVariative,
       selected_attributes: options.selectedAttributes,
       variants: options.variants,
+      wholesale_price:
+        this.toNumber(body.wholesale_price) ??
+        this.toNumber(firstShopPrice?.wholesale_price) ??
+        null,
+      free_price: this.toBooleanValue(body.free_price),
+
     } satisfies Prisma.JsonObject;
   }
 
@@ -1791,6 +2001,16 @@ export class ProductsService {
     return values
       .map((value) => Number(value))
       .filter((value) => Number.isInteger(value));
+  }
+
+  private toBranchCodes(values?: string[]) {
+    if (!values?.length) {
+      return [];
+    }
+
+    return values
+      .map((value) => this.resolveBranchCodeByShopId(value))
+      .filter((value) => value.trim().length > 0);
   }
 
   private requireString(value: unknown, field: string) {
