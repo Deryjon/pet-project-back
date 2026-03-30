@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Put,
+  Query,
+} from '@nestjs/common';
 import { ProductsService } from './products.service';
 
 @Controller()
@@ -38,12 +47,16 @@ export class ProductsController {
     @Query('brand_ids') brandIds?: string | string[],
     @Query('supplier_ids') supplierIds?: string | string[],
     @Query('order') order?: string | string[],
+    @Query('status') status?: string,
+    @Query('archived_list') archivedList?: string,
   ) {
     return this.productsService.findAllV2Extended({
       page: Number(page) || 1,
       limit: Number(limit) || 20,
       search: search?.trim() || fieldSearchKey?.trim(),
       statistics: this.toBoolean(statistics),
+      status: status?.trim(),
+      archivedList: this.toBoolean(archivedList),
       brandIds: this.toStringArray(brandIds),
       supplierIds: this.toStringArray(supplierIds),
       order: this.toStringArray(order),
@@ -52,14 +65,22 @@ export class ProductsController {
 
   @Post('v2/product')
   findAllV2Post(@Body() body: Record<string, unknown>) {
-    if (this.isCatalogCreateRequest(body)) {
+    if (this.isCatalogCreateRequest(body) && !this.hasSearchPayload(body)) {
       return this.productsService.createCatalogProduct(body);
+    }
+
+    if (this.isCatalogCreateRequest(body) && this.hasSearchPayload(body)) {
+      throw new BadRequestException(
+        'Ambiguous payload. Use POST /api/v2/product/create to create a catalog product.',
+      );
     }
 
     return this.productsService.findAllV2Extended({
       page: this.toNumber(body.page) || 1,
       limit: this.toNumber(body.limit) || 20,
-      search: this.toOptionalString(body.search) ?? this.toOptionalString(body.field_search_key),
+      search:
+        this.toOptionalString(body.search) ??
+        this.toOptionalString(body.field_search_key),
       statistics: this.toBoolean(body.statistics),
       status: this.toOptionalString(body.status),
       archivedList: this.toBoolean(body.archived_list),
@@ -69,12 +90,37 @@ export class ProductsController {
     });
   }
 
+  @Post('v2/product/create')
+  createCatalogProduct(@Body() body: Record<string, unknown>) {
+    return this.productsService.createCatalogProduct(body);
+  }
+
+  @Put('v2/product/:id')
+  updateCatalogProduct(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.productsService.updateCatalogProduct(id, body);
+  }
+
+  @Post('v2/product/generate-sku')
+  generateSku(@Body() body: Record<string, unknown>) {
+    return this.productsService.generateSku(body);
+  }
+
+  @Post('v2/product/generate-barcode')
+  generateBarcode() {
+    return this.productsService.generateBarcode();
+  }
+
   @Post('v2/product-search-with-filters')
   findAllV2Catalog(@Body() body: Record<string, unknown>) {
     return this.productsService.findAllV2Extended({
       page: this.toNumber(body.page) || 1,
       limit: this.toNumber(body.limit) || 20,
-      search: this.toOptionalString(body.search) ?? this.toOptionalString(body.field_search_key),
+      search:
+        this.toOptionalString(body.search) ??
+        this.toOptionalString(body.field_search_key),
       statistics: this.toBoolean(body.statistics),
       status: this.toOptionalString(body.status),
       archivedList: this.toBoolean(body.archived_list),
@@ -97,7 +143,9 @@ export class ProductsController {
   }
 
   private toOptionalString(value: unknown) {
-    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+    return typeof value === 'string' && value.trim().length > 0
+      ? value.trim()
+      : undefined;
   }
 
   private toNumber(value: unknown) {
@@ -125,6 +173,21 @@ export class ProductsController {
         body.shop_prices !== undefined ||
         body.shop_measurement_values !== undefined ||
         body.shipments !== undefined)
+    );
+  }
+
+  private hasSearchPayload(body: Record<string, unknown>) {
+    return (
+      body.page !== undefined ||
+      body.limit !== undefined ||
+      body.search !== undefined ||
+      body.field_search_key !== undefined ||
+      body.statistics !== undefined ||
+      body.status !== undefined ||
+      body.archived_list !== undefined ||
+      body.brand_ids !== undefined ||
+      body.supplier_ids !== undefined ||
+      body.order !== undefined
     );
   }
 }

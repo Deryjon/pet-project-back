@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  ParseIntPipe,
   Query,
   Param,
   Post,
@@ -55,30 +56,36 @@ export class SalesController {
   }
 
   @Get('new-sale/:id')
-  findDraft(@Param('id') id: string) {
-    return this.salesService.findDraft(Number(id));
+  findDraft(@Param('id', ParseIntPipe) id: number) {
+    return this.salesService.findDraft(id);
   }
 
   @Post('new-sale/:id/items')
-  addItem(@Param('id') id: string, @Body() body: Record<string, unknown>) {
-    return this.salesService.addItem(Number(id), body);
+  addItem(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.salesService.addItem(id, body);
   }
 
   @Put('new-sale/:id/discount')
   updateDiscount(
-    @Param('id') id: string,
+    @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
   ) {
-    return this.salesService.updateDiscount(Number(id), body);
+    return this.salesService.updateDiscount(id, body);
   }
 
   @Post('new-sale/:id/pay')
-  pay(@Param('id') id: string, @Body() body: Record<string, unknown>) {
-    return this.salesService.pay(Number(id), body);
+  pay(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.salesService.pay(id, body);
   }
 
   @Delete('new-sale/:id')
-  remove(@Param('id') id: string) {
-    return this.salesService.removeDraft(Number(id));
+  remove(@Param('id', ParseIntPipe) id: number) {
+    return this.salesService.removeDraft(id);
   }
 }
