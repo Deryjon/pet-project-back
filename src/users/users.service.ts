@@ -128,7 +128,9 @@ export class UsersService {
 
     const existingUser = await this.findByPhoneNumber(phoneNumber);
     if (existingUser) {
-      throw new BadRequestException('User with this phone number already exists');
+      throw new BadRequestException(
+        'User with this phone number already exists',
+      );
     }
 
     const user = await this.prisma.user.create({
@@ -169,8 +171,10 @@ export class UsersService {
 
     const user = await this.findByIdOrThrow(payload.sub);
 
-    if (user.role.trim().toLowerCase() !== 'admin') {
-      throw new ForbiddenException('Only admin can manage employees');
+    if (!this.hasGlobalLocationAccess(user.role)) {
+      throw new ForbiddenException(
+        'Only admin/owner/superadmin can manage employees',
+      );
     }
 
     return user;
@@ -201,7 +205,8 @@ export class UsersService {
     }
 
     if (body.birth_date !== undefined) {
-      data.birthDate = this.parseBirthDate(this.optionalString(body.birth_date)) ?? null;
+      data.birthDate =
+        this.parseBirthDate(this.optionalString(body.birth_date)) ?? null;
     }
 
     if (body.phone_number !== undefined) {
@@ -281,7 +286,10 @@ export class UsersService {
     );
     const newPassword = this.requireString(body.new_password, 'new_password');
 
-    const isPasswordValid = await bcrypt.compare(currentPassword, user.password);
+    const isPasswordValid = await bcrypt.compare(
+      currentPassword,
+      user.password,
+    );
     if (!isPasswordValid) {
       throw new BadRequestException('Current password is incorrect');
     }
@@ -300,7 +308,12 @@ export class UsersService {
 
   async uploadAvatar(
     authorization: string | undefined,
-    file?: { originalname: string; mimetype: string; size: number; buffer: Buffer },
+    file?: {
+      originalname: string;
+      mimetype: string;
+      size: number;
+      buffer: Buffer;
+    },
   ) {
     const user = await this.getAuthenticatedUser(authorization);
 
@@ -368,7 +381,9 @@ export class UsersService {
         ? [user.branchCode]
         : [];
     const shops = locationCodes.map((code) => this.toShopItem(code));
-    const currentShop = user.branchCode ? this.toShopItem(user.branchCode) : null;
+    const currentShop = user.branchCode
+      ? this.toShopItem(user.branchCode)
+      : null;
     const roles = this.resolveRoles(user.role, hasGlobalLocationAccess);
 
     return {
@@ -401,7 +416,9 @@ export class UsersService {
       !this.hasGlobalLocationAccess(user.role) &&
       user.branchCode !== targetBranchCode
     ) {
-      throw new BadRequestException('This user does not have access to the requested shop');
+      throw new BadRequestException(
+        'This user does not have access to the requested shop',
+      );
     }
 
     await this.prisma.user.update({
@@ -464,11 +481,11 @@ export class UsersService {
       return undefined;
     }
 
-    const match = /^(?<day>\d{2})\.(?<month>\d{2})\.(?<year>\d{4})$/.exec(value);
+    const match = /^(?<day>\d{2})\.(?<month>\d{2})\.(?<year>\d{4})$/.exec(
+      value,
+    );
     if (!match?.groups) {
-      throw new BadRequestException(
-        'birth_date must be in DD.MM.YYYY format',
-      );
+      throw new BadRequestException('birth_date must be in DD.MM.YYYY format');
     }
 
     const day = Number(match.groups.day);
@@ -540,7 +557,8 @@ export class UsersService {
           ...stockLocations.map((item) => item.branchCode),
         ]
           .filter(
-            (branchCode): branchCode is string => typeof branchCode === 'string',
+            (branchCode): branchCode is string =>
+              typeof branchCode === 'string',
           )
           .map((branchCode) => this.normalizeLocationCode(branchCode)),
       ),
@@ -561,7 +579,11 @@ export class UsersService {
     }
 
     const normalizedRole = role.trim().toLowerCase();
-    return [this.toRoleItem(normalizedRole in ROLE_DEFINITIONS ? normalizedRole : role)];
+    return [
+      this.toRoleItem(
+        normalizedRole in ROLE_DEFINITIONS ? normalizedRole : role,
+      ),
+    ];
   }
 
   private toRoleItem(roleCode: string) {
@@ -610,23 +632,28 @@ export class UsersService {
   }
 
   private normalizeLocationCode(locationCode: string) {
-    return this.resolveShopDefinition(locationCode)?.branchCode ?? locationCode.trim();
+    return (
+      this.resolveShopDefinition(locationCode)?.branchCode ??
+      locationCode.trim()
+    );
   }
 
   private resolveShopDefinition(locationIdentifier: string) {
     const normalizedIdentifier = locationIdentifier.trim();
     const loweredIdentifier = normalizedIdentifier.toLowerCase();
-    const match = Object.entries(SHOP_DEFINITIONS).find(([branchCode, definition]) => {
-      const aliases = definition.aliases ?? [];
+    const match = Object.entries(SHOP_DEFINITIONS).find(
+      ([branchCode, definition]) => {
+        const aliases = definition.aliases ?? [];
 
-      return (
-        branchCode === normalizedIdentifier ||
-        definition.id === normalizedIdentifier ||
-        definition.shop_id === normalizedIdentifier ||
-        definition.name.toLowerCase() === loweredIdentifier ||
-        aliases.includes(normalizedIdentifier)
-      );
-    });
+        return (
+          branchCode === normalizedIdentifier ||
+          definition.id === normalizedIdentifier ||
+          definition.shop_id === normalizedIdentifier ||
+          definition.name.toLowerCase() === loweredIdentifier ||
+          aliases.includes(normalizedIdentifier)
+        );
+      },
+    );
 
     if (!match) {
       return undefined;
