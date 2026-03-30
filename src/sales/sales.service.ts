@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 const COMPANY_ID = process.env.COMPANY_ID ?? '';
@@ -36,7 +37,10 @@ const SHOP_BY_BRANCH_CODE: Record<
 
 @Injectable()
 export class SalesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly companySettingsService: CompanySettingsService,
+  ) {}
 
   async findAll() {
     const sales = await this.prisma.sale.findMany({
@@ -163,6 +167,8 @@ export class SalesService {
       }),
     ]);
 
+    const currencyCode =
+      this.companySettingsService.getDefaultCurrencyIsoCode();
     const normalizedProducts = products.map((product) =>
       this.toNewSaleProductResponse(product, branchCode),
     );
@@ -203,7 +209,7 @@ export class SalesService {
         total_supply_price: totals.totalSupplyPrice,
         total_prices_by_currency: [
           {
-            currency: 'UZS',
+            currency: currencyCode,
             total_retail_price: totals.totalRetailPrice,
             total_supply_price: totals.totalSupplyPrice,
           },
@@ -932,6 +938,8 @@ export class SalesService {
     },
     branchCode?: string,
   ) {
+    const currencyCode =
+      this.companySettingsService.getDefaultCurrencyIsoCode();
     const relevantStocks = branchCode
       ? product.stocks.filter((stock) => stock.branchCode === branchCode)
       : product.stocks;
@@ -1009,8 +1017,8 @@ export class SalesService {
         return {
           shop_id: this.resolveShopByBranchCode(stock.branchCode).shop_id,
           retail_price: retailPrice,
-          retail_currency: 'UZS',
-          supply_currency: 'UZS',
+          retail_currency: currencyCode,
+          supply_currency: currencyCode,
           min_supply_price: supplyPrice,
           max_supply_price: supplyPrice,
           supply_price: supplyPrice,
@@ -1021,7 +1029,7 @@ export class SalesService {
           from_supply_price: 0,
           currency_prices: [
             {
-              currency: 'UZS',
+              currency: currencyCode,
               retail_price: retailPrice,
               min_supply_price: supplyPrice,
               max_supply_price: supplyPrice,
