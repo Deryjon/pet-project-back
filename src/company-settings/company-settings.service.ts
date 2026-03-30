@@ -53,6 +53,11 @@ const DEFAULT_CURRENCY_PRECISION = Number(
 const DEFAULT_CURRENCY_EDITABLE =
   String(process.env.DEFAULT_CURRENCY_EDITABLE ?? 'false').toLowerCase() ===
   'true';
+const DEFAULT_CURRENCY_CONFIG_ID =
+  process.env.DEFAULT_CURRENCY_CONFIG_ID ??
+  '810ee86f-ce2d-4de0-a9f0-635aff745a48';
+const DEFAULT_CURRENCY_ID =
+  process.env.DEFAULT_CURRENCY_ID ?? '925d8f76-70f8-4a4c-ada8-0e61a906b56e';
 
 const DEFAULT_COUNTRIES: CountryItem[] = [
   { id: 'ce6a779e-edd4-47c2-92de-751f0b0c2c7a', name: 'Казахстан', code: 'KZ' },
@@ -390,10 +395,10 @@ export class CompanySettingsService {
     const fromMap = targetCompanyId ? map[targetCompanyId] : undefined;
 
     return {
-      id: fromMap?.id ?? randomUUID(),
+      id: fromMap?.id ?? DEFAULT_CURRENCY_CONFIG_ID,
       company_id: targetCompanyId,
       currency: {
-        id: fromMap?.currency?.id ?? randomUUID(),
+        id: fromMap?.currency?.id ?? DEFAULT_CURRENCY_ID,
         name: fromMap?.currency?.name ?? DEFAULT_CURRENCY_NAME,
         symbol: fromMap?.currency?.symbol ?? DEFAULT_CURRENCY_SYMBOL,
         iso_code: fromMap?.currency?.iso_code ?? DEFAULT_CURRENCY_ISO_CODE,
@@ -495,18 +500,17 @@ export class CompanySettingsService {
     const allForCompany = shops.filter(
       (shop) => this.stringOrDefault(shop.company_id, '') === companyId,
     );
+    const filtered = allForCompany.filter(
+      (shop) =>
+        !normalizedName ||
+        this.stringOrDefault(shop.name, '')
+          .toLowerCase()
+          .includes(normalizedName),
+    );
 
     return {
-      count: allForCompany.length,
-      shops: allForCompany
-        .filter(
-          (shop) =>
-            !normalizedName ||
-            this.stringOrDefault(shop.name, '')
-              .toLowerCase()
-              .includes(normalizedName),
-        )
-        .slice((safePage - 1) * safeLimit, safePage * safeLimit),
+      count: filtered.length,
+      shops: filtered.slice((safePage - 1) * safeLimit, safePage * safeLimit),
     };
   }
 
