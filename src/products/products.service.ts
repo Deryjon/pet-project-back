@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
+import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 const PRODUCT_CHARACTERISTICS = [
@@ -208,7 +209,10 @@ type FindProductsArgs = {
 
 @Injectable()
 export class ProductsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly companySettingsService: CompanySettingsService,
+  ) {}
 
   getProductCharacteristics(limit?: string) {
     const parsedLimit = limit ? Number(limit) : PRODUCT_CHARACTERISTICS.length;
@@ -1042,6 +1046,8 @@ export class ProductsService {
       salePrice: number | null;
     }[];
   }) {
+    const currencyCode =
+      this.companySettingsService.getDefaultCurrencyIsoCode();
     const stockSummaries = product.stocks.map((stock) => {
       const shop = this.resolveShopByBranchCode(stock.branchCode);
       const measurementValue = stock.quantity;
@@ -1125,8 +1131,8 @@ export class ProductsService {
       shop_prices: stockSummaries.map((stock) => ({
         shop_id: stock.shop.shop_id,
         retail_price: stock.retailPrice,
-        retail_currency: 'UZS',
-        supply_currency: 'UZS',
+        retail_currency: currencyCode,
+        supply_currency: currencyCode,
         min_supply_price: stock.supplyPrice,
         max_supply_price: stock.supplyPrice,
         supply_price: stock.supplyPrice,
@@ -1137,7 +1143,7 @@ export class ProductsService {
         from_supply_price: 0,
         currency_prices: [
           {
-            currency: 'UZS',
+            currency: currencyCode,
             retail_price: stock.retailPrice,
             min_supply_price: stock.supplyPrice,
             max_supply_price: stock.supplyPrice,
@@ -1239,6 +1245,8 @@ export class ProductsService {
     }>,
     supplierIds: string[],
   ) {
+    const currencyCode =
+      this.companySettingsService.getDefaultCurrencyIsoCode();
     const shopPrices = this.extractShopPrices(
       body,
       shipments,
@@ -1307,7 +1315,7 @@ export class ProductsService {
       product_supply_stock: null,
       product_type_id:
         productType ?? product.productType ?? DEFAULT_PRODUCT_TYPE_ID,
-      retail_currency: 'UZS',
+      retail_currency: currencyCode,
       retail_price: product.salePrice ?? 0,
       scale_code: 0,
       scale_plu: 0,
@@ -1322,7 +1330,7 @@ export class ProductsService {
       supplier_id: supplierIds[0] ?? '',
       supplier_ids: supplierIds,
       suppliers: null,
-      supply_currency: 'UZS',
+      supply_currency: currencyCode,
       supply_price: product.purchasePrice ?? 0,
       updated_at: '',
       variation_id: '',
@@ -1347,7 +1355,6 @@ export class ProductsService {
     retailPriceTo?: number,
     wholesalePrice?: number,
     freePrice?: boolean,
-
   ): Prisma.ProductWhereInput | undefined {
     const and: Prisma.ProductWhereInput[] = [];
 
@@ -1508,7 +1515,6 @@ export class ProductsService {
       });
     }
 
-
     if (!and.length) {
       return undefined;
     }
@@ -1568,6 +1574,8 @@ export class ProductsService {
       }[];
     }[],
   ) {
+    const currencyCode =
+      this.companySettingsService.getDefaultCurrencyIsoCode();
     const totals = products.reduce(
       (acc, product) => {
         const measurementValue = product.stocks.length
@@ -1618,7 +1626,7 @@ export class ProductsService {
         total_supply_price: totals.totalSupplyPrice,
         total_prices_by_currency: [
           {
-            currency: 'UZS',
+            currency: currencyCode,
             total_retail_price: totals.totalRetailPrice,
             total_supply_price: totals.totalSupplyPrice,
           },
@@ -1989,7 +1997,6 @@ export class ProductsService {
         this.toNumber(firstShopPrice?.wholesale_price) ??
         null,
       free_price: this.toBooleanValue(body.free_price),
-
     } satisfies Prisma.JsonObject;
   }
 
