@@ -64,7 +64,9 @@ export class SalesService {
 
   async createOrder(body: Record<string, unknown>) {
     const shopId = this.optionalString(body.shop_id) ?? '';
-    const branchCode = shopId ? this.resolveBranchCodeByShopId(shopId) : undefined;
+    const branchCode = shopId
+      ? this.resolveBranchCodeByShopId(shopId)
+      : undefined;
 
     const sale = await this.prisma.sale.create({
       data: {
@@ -128,14 +130,18 @@ export class SalesService {
   }) {
     const safePage = Math.max(1, args.page);
     const safeLimit = Math.min(Math.max(1, args.limit), 100);
-    const branchCode = args.shopId ? this.resolveBranchCodeByShopId(args.shopId) : undefined;
+    const branchCode = args.shopId
+      ? this.resolveBranchCodeByShopId(args.shopId)
+      : undefined;
 
     const where = args.search
       ? {
           OR: [
             { name: { contains: args.search, mode: 'insensitive' as const } },
             { sku: { contains: args.search, mode: 'insensitive' as const } },
-            { barcode: { contains: args.search, mode: 'insensitive' as const } },
+            {
+              barcode: { contains: args.search, mode: 'insensitive' as const },
+            },
           ],
         }
       : undefined;
@@ -157,29 +163,87 @@ export class SalesService {
       }),
     ]);
 
+    const normalizedProducts = products.map((product) =>
+      this.toNewSaleProductResponse(product, branchCode),
+    );
+    const totals = normalizedProducts.reduce(
+      (acc, product) => {
+        const measurementValue =
+          this.toNumber(
+            (product.measurement_values as Record<string, unknown>)
+              ?.total_measurement_value,
+          ) ?? 0;
+        const retailPrice = this.toNumber(product.retail_price) ?? 0;
+        const supplyPrice = this.toNumber(product.supply_price) ?? 0;
+
+        acc.totalMeasurementValue += measurementValue;
+        acc.totalRetailPrice += measurementValue * retailPrice;
+        acc.totalSupplyPrice += measurementValue * supplyPrice;
+        acc.zeroLeftCount += measurementValue <= 0 ? 1 : 0;
+        acc.smallLeftCount +=
+          measurementValue > 0 && measurementValue <= 5 ? 1 : 0;
+        return acc;
+      },
+      {
+        totalMeasurementValue: 0,
+        totalRetailPrice: 0,
+        totalSupplyPrice: 0,
+        zeroLeftCount: 0,
+        smallLeftCount: 0,
+      },
+    );
+
     return {
-      products: products.map((product) =>
-        this.toNewSaleProductResponse(product, branchCode),
-      ),
+      products: normalizedProducts,
       count,
       statistics: {
-        total_products_count: 0,
-        total_measurement_value: 0,
-        total_retail_price: 0,
-        total_supply_price: 0,
-        total_prices_by_currency: null,
+        total_products_count: count,
+        total_measurement_value: totals.totalMeasurementValue,
+        total_retail_price: totals.totalRetailPrice,
+        total_supply_price: totals.totalSupplyPrice,
+        total_prices_by_currency: [
+          {
+            currency: 'UZS',
+            total_retail_price: totals.totalRetailPrice,
+            total_supply_price: totals.totalSupplyPrice,
+          },
+        ],
         total_products_scalable_count: 0,
       },
       statistics_by_status: {
-        total_measurement_value: 0,
-        total_active_measurement_value: 0,
+        total_measurement_value: totals.totalMeasurementValue,
+        total_active_measurement_value: totals.totalMeasurementValue,
         total_inactive_measurement_value: 0,
-        measurement_value: null,
-        active_measurement_value: null,
-        inactive_measurement_value: null,
-        small_left_count: 0,
-        zero_left_count: 0,
-        count: 0,
+        measurement_value: {
+          total: totals.totalMeasurementValue,
+          measurement_units: [
+            {
+              measurement_unit: DEFAULT_MEASUREMENT_UNIT.short_name,
+              measurement_value: totals.totalMeasurementValue,
+            },
+          ],
+        },
+        active_measurement_value: {
+          total: totals.totalMeasurementValue,
+          measurement_units: [
+            {
+              measurement_unit: DEFAULT_MEASUREMENT_UNIT.short_name,
+              measurement_value: totals.totalMeasurementValue,
+            },
+          ],
+        },
+        inactive_measurement_value: {
+          total: 0,
+          measurement_units: [
+            {
+              measurement_unit: DEFAULT_MEASUREMENT_UNIT.short_name,
+              measurement_value: 0,
+            },
+          ],
+        },
+        small_left_count: totals.smallLeftCount,
+        zero_left_count: totals.zeroLeftCount,
+        count,
       },
       fields: null,
     };
@@ -278,15 +342,21 @@ export class SalesService {
       await this.prisma.product.update({
         where: { id: product.id },
         data: {
-          quantity: product.stocks.reduce((sum, stock) => sum + stock.quantity, 0),
+          quantity: product.stocks.reduce(
+            (sum, stock) => sum + stock.quantity,
+            0,
+          ),
         },
       });
     }
 
     const paymentMethod =
       this.optionalString(
-        Array.isArray(body.payments) && body.payments[0] && typeof body.payments[0] === 'object'
-          ? (body.payments[0] as Record<string, unknown>).company_payment_type_id
+        Array.isArray(body.payments) &&
+          body.payments[0] &&
+          typeof body.payments[0] === 'object'
+          ? (body.payments[0] as Record<string, unknown>)
+              .company_payment_type_id
           : undefined,
       ) ?? 'cash';
 
@@ -865,13 +935,17 @@ export class SalesService {
     const relevantStocks = branchCode
       ? product.stocks.filter((stock) => stock.branchCode === branchCode)
       : product.stocks;
-    const selectedStocks = relevantStocks.length ? relevantStocks : product.stocks;
+    const selectedStocks = relevantStocks.length
+      ? relevantStocks
+      : product.stocks;
     const totalMeasurementValue = selectedStocks.reduce(
       (sum, stock) => sum + stock.quantity,
       0,
     );
     const metadata =
-      product.metadata && typeof product.metadata === 'object' && !Array.isArray(product.metadata)
+      product.metadata &&
+      typeof product.metadata === 'object' &&
+      !Array.isArray(product.metadata)
         ? (product.metadata as Record<string, unknown>)
         : undefined;
 
@@ -885,7 +959,9 @@ export class SalesService {
       retail_price: product.salePrice ?? 0,
       supply_price: product.purchasePrice ?? 0,
       description:
-        typeof metadata?.description === 'string' ? metadata.description : undefined,
+        typeof metadata?.description === 'string'
+          ? metadata.description
+          : undefined,
       measurement_values: {
         total_measurement_value: totalMeasurementValue,
         total_active_measurement_value: totalMeasurementValue,

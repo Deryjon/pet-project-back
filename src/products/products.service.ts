@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -141,6 +145,19 @@ const PRODUCT_CHARACTERISTICS = [
 const COMPANY_ID = process.env.COMPANY_ID ?? '';
 const DEFAULT_PRODUCT_TYPE_ID =
   process.env.DEFAULT_PRODUCT_TYPE_ID ?? '69e939aa-9b8f-46a9-b605-8b2675475b7b';
+const PRODUCT_TYPE_IDS = {
+  goods:
+    process.env.PRODUCT_TYPE_GOODS_ID ?? '69e939aa-9b8f-46a9-b605-8b2675475b7b',
+  service:
+    process.env.PRODUCT_TYPE_SERVICE_ID ??
+    'f3e4d8de-5d2c-4ff0-b1c2-5ed0f7a27401',
+  kit:
+    process.env.PRODUCT_TYPE_KIT_ID ?? '85a7f6a9-0737-4f7e-a1a5-9d5f8f27d2f4',
+} as const;
+const SKU_PREFIX_LENGTH = 3;
+const SKU_NUMBER_LENGTH = 5;
+const BARCODE_BASE = 2000000000000;
+const BARCODE_MAX = 2999999999999;
 const DEFAULT_MEASUREMENT_UNIT = {
   id: '12a69bc0-c575-4586-9f0f-76e8295d4139',
   name: 'Штука',
@@ -171,9 +188,19 @@ type FindProductsArgs = {
   page: number;
   limit: number;
   search?: string;
+  sku?: string;
   statistics?: boolean;
   status?: string;
   archivedList?: boolean;
+  shopIds?: string[];
+  categoryIds?: string[];
+  measurementType?: string;
+  supplyPriceFrom?: number;
+  supplyPriceTo?: number;
+  retailPriceFrom?: number;
+  retailPriceTo?: number;
+  wholesalePrice?: number;
+  freePrice?: boolean;
   brandIds?: string[];
   supplierIds?: string[];
   order?: string[];
@@ -189,7 +216,10 @@ export class ProductsService {
       throw new BadRequestException('limit must be a positive number');
     }
 
-    const safeLimit = Math.min(Math.trunc(parsedLimit), PRODUCT_CHARACTERISTICS.length);
+    const safeLimit = Math.min(
+      Math.trunc(parsedLimit),
+      PRODUCT_CHARACTERISTICS.length,
+    );
 
     return {
       active_count: PRODUCT_CHARACTERISTICS.length,
@@ -284,13 +314,41 @@ export class ProductsService {
     limit,
     search,
     statistics,
+    status,
+    archivedList,
+    shopIds,
+    categoryIds,
+    sku,
+    measurementType,
+    supplyPriceFrom,
+    supplyPriceTo,
+    retailPriceFrom,
+    retailPriceTo,
+    wholesalePrice,
+    freePrice,
     brandIds,
     supplierIds,
     order,
   }: FindProductsArgs) {
     const safePage = Math.max(1, page);
     const safeLimit = Math.min(Math.max(1, limit), 1000);
-    const where = this.buildProductWhere(search, brandIds, supplierIds);
+    const where = this.buildProductWhere(
+      search,
+      brandIds,
+      supplierIds,
+      status,
+      archivedList,
+      shopIds,
+      categoryIds,
+      sku,
+      measurementType,
+      supplyPriceFrom,
+      supplyPriceTo,
+      retailPriceFrom,
+      retailPriceTo,
+      wholesalePrice,
+      freePrice,
+    );
     const orderBy = this.buildProductOrderBy(order);
 
     const [count, products] = await this.prisma.$transaction([
@@ -338,10 +396,68 @@ export class ProductsService {
         },
       });
 
-      Object.assign(response, this.buildProductsStatistics(productsForStatistics));
+      Object.assign(
+        response,
+        this.buildProductsStatistics(productsForStatistics),
+      );
     }
 
     return response;
+  }
+
+  async getCatalogStatistics({
+    search,
+    brandIds,
+    supplierIds,
+    status,
+    archivedList,
+    shopIds,
+    categoryIds,
+    sku,
+    measurementType,
+    supplyPriceFrom,
+    supplyPriceTo,
+    retailPriceFrom,
+    retailPriceTo,
+    wholesalePrice,
+    freePrice,
+  }: Omit<FindProductsArgs, 'page' | 'limit' | 'statistics' | 'order'>) {
+    const where = this.buildProductWhere(
+      search,
+      brandIds,
+      supplierIds,
+      status,
+      archivedList,
+      shopIds,
+      categoryIds,
+      sku,
+      measurementType,
+      supplyPriceFrom,
+      supplyPriceTo,
+      retailPriceFrom,
+      retailPriceTo,
+      wholesalePrice,
+      freePrice,
+    );
+
+    const productsForStatistics = await this.prisma.product.findMany({
+      where,
+      select: {
+        id: true,
+        quantity: true,
+        purchasePrice: true,
+        salePrice: true,
+        stocks: {
+          select: {
+            quantity: true,
+            purchasePrice: true,
+            salePrice: true,
+          },
+        },
+      },
+    });
+
+    return this.buildProductsStatistics(productsForStatistics);
   }
 
   async create(body: Record<string, unknown>) {
@@ -358,7 +474,9 @@ export class ProductsService {
     const quantity = this.toInt(body.quantity) ?? 0;
     const metadata = this.toJsonValue(body.metadata);
     const stocks = Array.isArray(body.stocks) ? body.stocks : [];
-    const supplierIds = Array.isArray(body.supplier_ids) ? body.supplier_ids : [];
+    const supplierIds = Array.isArray(body.supplier_ids)
+      ? body.supplier_ids
+      : [];
 
     const metadataObject =
       metadata && typeof metadata === 'object' && !Array.isArray(metadata)
@@ -367,7 +485,8 @@ export class ProductsService {
 
     const categoryName = this.optionalString(metadataObject?.category);
     const brandName = this.optionalString(
-      (metadataObject?.attributes as Record<string, unknown> | undefined)?.brand,
+      (metadataObject?.attributes as Record<string, unknown> | undefined)
+        ?.brand,
     );
     const supplierNames = new Set<string>();
 
@@ -379,7 +498,8 @@ export class ProductsService {
     }
 
     const metadataSupplier = this.optionalString(
-      (metadataObject?.attributes as Record<string, unknown> | undefined)?.supplier,
+      (metadataObject?.attributes as Record<string, unknown> | undefined)
+        ?.supplier,
     );
     if (metadataSupplier) {
       supplierNames.add(metadataSupplier);
@@ -390,7 +510,9 @@ export class ProductsService {
         return sum;
       }
 
-      return sum + (this.toInt((stock as Record<string, unknown>).quantity) ?? 0);
+      return (
+        sum + (this.toInt((stock as Record<string, unknown>).quantity) ?? 0)
+      );
     }, 0);
 
     const createdProduct = await this.prisma.product.create({
@@ -406,7 +528,7 @@ export class ProductsService {
         markupPercent,
         salePrice,
         quantity: totalQuantityFromStocks || quantity,
-        metadata: metadata as Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput | undefined,
+        metadata: metadata,
         category: categoryName
           ? {
               connectOrCreate: {
@@ -476,9 +598,11 @@ export class ProductsService {
     const name = this.requireString(body.name, 'name');
     const sku = this.optionalString(body.sku);
     const barcode = this.optionalString(body.barcode);
-    const productType = this.optionalString(body.product_type_id);
-    const variantType = this.optionalString(body.variant_type);
+    const productType = this.resolveProductType(body.product_type_id);
+    const isVariative = this.toBooleanValue(body.is_variative);
+    const variantType = isVariative ? 'variative' : 'simple';
     const unit = this.optionalString(body.measurement_type);
+    const measurementUnitId = this.optionalString(body.measurement_unit_id);
     const purchasePrice = this.toNumber(body.supply_price) ?? 0;
     const salePrice = this.toNumber(body.retail_price) ?? 0;
     const markupPercent = this.toNumber(body.profit_margin);
@@ -486,8 +610,32 @@ export class ProductsService {
     const brandName = this.optionalString(body.brand_name);
     const imageUrl = this.extractFirstImage(body.images);
     const supplierIds = this.toStringArrayValue(body.supplier_ids);
+    const supplierIdNumbers = supplierIds
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value));
     const shipments = this.extractStockPayload(body);
-    const totalQuantity = shipments.reduce((sum, shipment) => sum + shipment.quantity, 0);
+    const selectedAttributes = this.extractSelectedAttributes(
+      body.selected_attributes,
+    );
+    const variants = this.extractVariants(body.variants);
+    const isServiceProduct = this.isServiceProductType(productType);
+    const supportsStock = !isServiceProduct;
+    const totalQuantity = supportsStock
+      ? shipments.reduce((sum, shipment) => sum + shipment.quantity, 0)
+      : 0;
+
+    if (isVariative && !this.isGoodsProductType(productType)) {
+      throw new BadRequestException(
+        'Variative products are supported only for product type "товар"',
+      );
+    }
+
+    if (
+      (this.isGoodsProductType(productType) || isServiceProduct) &&
+      !measurementUnitId
+    ) {
+      throw new BadRequestException('measurement_unit_id is required');
+    }
 
     const createdProduct = await this.prisma.product.create({
       data: {
@@ -502,7 +650,11 @@ export class ProductsService {
         markupPercent,
         salePrice,
         quantity: totalQuantity,
-        metadata: this.buildCatalogMetadata(body, description),
+        metadata: this.buildCatalogMetadata(body, description, {
+          isVariative,
+          selectedAttributes,
+          variants,
+        }),
         brand: brandName
           ? {
               connectOrCreate: {
@@ -511,16 +663,28 @@ export class ProductsService {
               },
             }
           : undefined,
-        stocks: shipments.length
+        suppliers: supplierIdNumbers.length
           ? {
-              create: shipments.map((shipment) => ({
-                branchCode: this.resolveBranchCodeByShopId(shipment.shopId),
-                quantity: shipment.quantity,
-                purchasePrice: shipment.supplyPrice,
-                salePrice: shipment.retailPrice,
+              create: supplierIdNumbers.map((supplierId) => ({
+                supplier: {
+                  connect: {
+                    id: supplierId,
+                  },
+                },
               })),
             }
           : undefined,
+        stocks:
+          supportsStock && shipments.length
+            ? {
+                create: shipments.map((shipment) => ({
+                  branchCode: this.resolveBranchCodeByShopId(shipment.shopId),
+                  quantity: shipment.quantity,
+                  purchasePrice: shipment.supplyPrice,
+                  salePrice: shipment.retailPrice,
+                })),
+              }
+            : undefined,
       },
       include: {
         category: true,
@@ -537,7 +701,7 @@ export class ProductsService {
     const productResponse = this.toCatalogCreateProductResponse(
       createdProduct,
       body,
-      shipments,
+      supportsStock ? shipments : [],
       supplierIds,
     );
 
@@ -559,11 +723,254 @@ export class ProductsService {
         product_ids: null,
         products: [productResponse],
         props_updated: false,
-        shipments: this.buildCatalogShipmentResponse(createdProduct.id, shipments),
+        shipments: this.buildCatalogShipmentResponse(
+          createdProduct.id,
+          shipments,
+        ),
         stocktaking_id: this.optionalString(body.stocktaking_id) ?? '',
       },
       correlation_id: randomUUID(),
       topic: 'v2.catalog_service.product.created',
+    };
+  }
+
+  async updateCatalogProduct(id: string, body: Record<string, unknown>) {
+    const productId = this.parseProductId(id);
+    const existingProduct = await this.prisma.product.findUnique({
+      where: { id: productId },
+      include: {
+        stocks: true,
+      },
+    });
+
+    if (!existingProduct) {
+      throw new NotFoundException('Product not found');
+    }
+
+    const productType = this.resolveProductType(
+      body.product_type_id ?? existingProduct.productType,
+    );
+    const isVariative = this.toBooleanValue(
+      body.is_variative ??
+        (existingProduct.metadata as Record<string, unknown> | null)
+          ?.is_variative ??
+        false,
+    );
+    const measurementUnitId = this.optionalString(body.measurement_unit_id);
+    const supportsStock = !this.isServiceProductType(productType);
+
+    if (isVariative && !this.isGoodsProductType(productType)) {
+      throw new BadRequestException(
+        'Variative products are supported only for product type "товар"',
+      );
+    }
+
+    if (
+      (this.isGoodsProductType(productType) ||
+        this.isServiceProductType(productType)) &&
+      !measurementUnitId &&
+      this.optionalString(
+        (existingProduct.metadata as Record<string, unknown> | null)
+          ?.measurement_unit_id,
+      ) === undefined
+    ) {
+      throw new BadRequestException('measurement_unit_id is required');
+    }
+
+    const shipments = this.extractStockPayload(body);
+    const selectedAttributes = this.extractSelectedAttributes(
+      body.selected_attributes,
+    );
+    const variants = this.extractVariants(body.variants);
+    const supplierIds = this.toStringArrayValue(body.supplier_ids);
+    const supplierIdNumbers = supplierIds
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value));
+    const description = this.optionalString(body.description);
+
+    const updatedProduct = await this.prisma.product.update({
+      where: { id: productId },
+      data: {
+        name: this.optionalString(body.name) ?? existingProduct.name,
+        sku: this.optionalString(body.sku) ?? existingProduct.sku,
+        barcode: this.optionalString(body.barcode) ?? existingProduct.barcode,
+        photo: this.extractFirstImage(body.images) ?? existingProduct.photo,
+        productType,
+        variantType: isVariative ? 'variative' : 'simple',
+        unit:
+          this.optionalString(body.measurement_type) ?? existingProduct.unit,
+        purchasePrice:
+          this.toNumber(body.supply_price) ??
+          existingProduct.purchasePrice ??
+          0,
+        salePrice:
+          this.toNumber(body.retail_price) ?? existingProduct.salePrice ?? 0,
+        markupPercent:
+          this.toNumber(body.profit_margin) ??
+          existingProduct.markupPercent ??
+          0,
+        quantity: supportsStock
+          ? shipments.length
+            ? shipments.reduce((sum, shipment) => sum + shipment.quantity, 0)
+            : existingProduct.quantity
+          : 0,
+        metadata: this.buildCatalogMetadata(body, description, {
+          isVariative,
+          selectedAttributes,
+          variants,
+        }),
+        suppliers:
+          body.supplier_ids !== undefined
+            ? {
+                deleteMany: {},
+                ...(supplierIdNumbers.length
+                  ? {
+                      create: supplierIdNumbers.map((supplierId) => ({
+                        supplier: {
+                          connect: {
+                            id: supplierId,
+                          },
+                        },
+                      })),
+                    }
+                  : {}),
+              }
+            : undefined,
+        stocks:
+          body.shipments !== undefined ||
+          body.shop_measurement_values !== undefined
+            ? supportsStock
+              ? {
+                  deleteMany: {},
+                  ...(shipments.length
+                    ? {
+                        create: shipments.map((shipment) => ({
+                          branchCode: this.resolveBranchCodeByShopId(
+                            shipment.shopId,
+                          ),
+                          quantity: shipment.quantity,
+                          purchasePrice: shipment.supplyPrice,
+                          salePrice: shipment.retailPrice,
+                        })),
+                      }
+                    : {}),
+                }
+              : {
+                  deleteMany: {},
+                }
+            : undefined,
+      },
+      include: {
+        category: true,
+        brand: true,
+        suppliers: {
+          include: {
+            supplier: true,
+          },
+        },
+        stocks: true,
+      },
+    });
+
+    const productResponse = this.toCatalogCreateProductResponse(
+      updatedProduct,
+      body,
+      supportsStock ? shipments : [],
+      supplierIds,
+    );
+
+    return {
+      session_id: randomUUID(),
+      status_code: 200,
+      id: String(updatedProduct.id),
+      error: {
+        code: '',
+        message: '',
+      },
+      data: {
+        brand_id: this.optionalString(body.brand_id) ?? '',
+        category_ids: this.toStringArrayValue(body.category_ids),
+        created_by: {
+          id: '',
+          name: '',
+        },
+        product_ids: null,
+        products: [productResponse],
+        props_updated: false,
+        shipments: supportsStock
+          ? this.buildCatalogShipmentResponse(updatedProduct.id, shipments)
+          : [],
+        stocktaking_id: this.optionalString(body.stocktaking_id) ?? '',
+      },
+      correlation_id: randomUUID(),
+      topic: 'v2.catalog_service.product.updated',
+    };
+  }
+
+  async generateSku(body: Record<string, unknown>) {
+    const requestedPrefix = this.optionalString(body.prefix);
+    const name = this.optionalString(body.name);
+    const prefix = (requestedPrefix ?? this.buildSkuPrefix(name) ?? 'SKU')
+      .replace(/[^A-Za-z0-9]/g, '')
+      .toUpperCase()
+      .slice(0, SKU_PREFIX_LENGTH)
+      .padEnd(SKU_PREFIX_LENGTH, 'X');
+
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const randomNumber = Math.floor(Math.random() * 10 ** SKU_NUMBER_LENGTH);
+      const candidate = `${prefix}-${String(randomNumber).padStart(SKU_NUMBER_LENGTH, '0')}`;
+      const existing = await this.prisma.product.findUnique({
+        where: { sku: candidate },
+        select: { id: true },
+      });
+
+      if (!existing) {
+        return {
+          sku: candidate,
+        };
+      }
+    }
+
+    throw new BadRequestException('Could not generate unique sku');
+  }
+
+  async generateBarcode() {
+    const latestBarcodeRecord = await this.prisma.product.findFirst({
+      where: {
+        barcode: {
+          startsWith: '2',
+        },
+      },
+      orderBy: {
+        barcode: 'desc',
+      },
+      select: {
+        barcode: true,
+      },
+    });
+
+    const latestValue = Number(latestBarcodeRecord?.barcode);
+    const nextValue =
+      Number.isFinite(latestValue) && latestValue >= BARCODE_BASE
+        ? latestValue + 1
+        : BARCODE_BASE;
+
+    if (nextValue > BARCODE_MAX) {
+      throw new BadRequestException('Barcode range exceeded');
+    }
+
+    const barcode = String(nextValue);
+    const existing = await this.prisma.product.findUnique({
+      where: { barcode },
+      select: { id: true },
+    });
+
+    if (existing) {
+      return this.generateBarcode();
+    }
+
+    return {
+      barcode,
     };
   }
 
@@ -774,7 +1181,9 @@ export class ProductsService {
           }))
         : undefined,
       product_supplier_stock: stockSummaries.map((stock) => ({
-        supplier_id: primarySupplier ? String(primarySupplier.id) : DEFAULT_EMPTY_SUPPLIER_ID,
+        supplier_id: primarySupplier
+          ? String(primarySupplier.id)
+          : DEFAULT_EMPTY_SUPPLIER_ID,
         supplier_name: primarySupplier?.name ?? '',
         shop_id: stock.shop.shop_id,
         measurement_value: stock.measurementValue,
@@ -830,13 +1239,22 @@ export class ProductsService {
     }>,
     supplierIds: string[],
   ) {
-    const shopPrices = this.extractShopPrices(body, shipments, product.purchasePrice ?? 0, product.salePrice ?? 0);
+    const shopPrices = this.extractShopPrices(
+      body,
+      shipments,
+      product.purchasePrice ?? 0,
+      product.salePrice ?? 0,
+    );
     const shopFreePrices = this.extractShopFreePrices(body, shipments);
     const measurementUnit = {
       ...DEFAULT_MEASUREMENT_UNIT,
       company_id: COMPANY_ID,
       is_default: true,
     };
+    const productType = this.resolveProductType(body.product_type_id);
+    const isVariative = this.toBooleanValue(body.is_variative);
+    const measurementType = this.optionalString(body.measurement_type);
+    const supportsStock = !this.isServiceProductType(productType);
 
     return {
       additional_barcodes: null,
@@ -862,9 +1280,9 @@ export class ProductsService {
       is_archived: false,
       is_marked: this.toBooleanValue(body.is_marked),
       is_scalable: false,
-      is_variative: this.toBooleanValue(body.is_variative),
+      is_variative: isVariative,
       main_image: product.photo ?? '',
-      measurement_type: this.optionalString(body.measurement_type) ?? '',
+      measurement_type: measurementType ?? '',
       measurement_unit: measurementUnit,
       measurement_values: {
         total_active_measurement_value: 0,
@@ -887,15 +1305,16 @@ export class ProductsService {
       product_attributes: [],
       product_supplier_stock: null,
       product_supply_stock: null,
-      product_type_id: product.productType ?? DEFAULT_PRODUCT_TYPE_ID,
+      product_type_id:
+        productType ?? product.productType ?? DEFAULT_PRODUCT_TYPE_ID,
       retail_currency: 'UZS',
       retail_price: product.salePrice ?? 0,
       scale_code: 0,
       scale_plu: 0,
       set_products: [],
-      shop_free_prices: shopFreePrices,
-      shop_measurement_values: null,
-      shop_prices: shopPrices,
+      shop_free_prices: supportsStock ? shopFreePrices : [],
+      shop_measurement_values: supportsStock ? null : [],
+      shop_prices: supportsStock ? shopPrices : [],
       sku: product.sku,
       sku_lower: '',
       sku_upper: '',
@@ -916,6 +1335,18 @@ export class ProductsService {
     search?: string,
     brandIds?: string[],
     supplierIds?: string[],
+    status?: string,
+    archivedList?: boolean,
+    shopIds?: string[],
+    categoryIds?: string[],
+    sku?: string,
+    measurementType?: string,
+    supplyPriceFrom?: number,
+    supplyPriceTo?: number,
+    retailPriceFrom?: number,
+    retailPriceTo?: number,
+    wholesalePrice?: number,
+    freePrice?: boolean,
   ): Prisma.ProductWhereInput | undefined {
     const and: Prisma.ProductWhereInput[] = [];
 
@@ -926,6 +1357,24 @@ export class ProductsService {
           { sku: { contains: search, mode: 'insensitive' } },
           { barcode: { contains: search, mode: 'insensitive' } },
         ],
+      });
+    }
+
+    if (sku) {
+      and.push({
+        sku: {
+          contains: sku,
+          mode: 'insensitive',
+        },
+      });
+    }
+
+    if (measurementType) {
+      and.push({
+        unit: {
+          equals: measurementType,
+          mode: 'insensitive',
+        },
       });
     }
 
@@ -951,6 +1400,113 @@ export class ProductsService {
       });
     }
 
+    if (status === 'active') {
+      and.push({
+        quantity: {
+          gt: 0,
+        },
+      });
+    }
+
+    if (status === 'inactive') {
+      and.push({
+        quantity: {
+          lte: 0,
+        },
+      });
+    }
+
+    if (archivedList) {
+      and.push({
+        quantity: {
+          lte: 0,
+        },
+      });
+    }
+
+    const resolvedShopIds = this.toBranchCodes(shopIds);
+    if (resolvedShopIds.length) {
+      and.push({
+        stocks: {
+          some: {
+            branchCode: {
+              in: resolvedShopIds,
+            },
+          },
+        },
+      });
+    }
+
+    if (categoryIds?.length) {
+      const numericCategoryIds = this.normalizeNumericStringArray(categoryIds);
+      const namedCategoryIds = categoryIds
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0 && !/^\d+$/.test(item));
+      const categoryFilters: Prisma.ProductWhereInput[] = [];
+
+      if (numericCategoryIds.length) {
+        categoryFilters.push({
+          categoryId: {
+            in: numericCategoryIds,
+          },
+        });
+      }
+
+      if (namedCategoryIds.length) {
+        categoryFilters.push({
+          category: {
+            name: {
+              in: namedCategoryIds,
+            },
+          },
+        });
+      }
+
+      if (categoryFilters.length) {
+        and.push(
+          categoryFilters.length === 1
+            ? categoryFilters[0]
+            : { OR: categoryFilters },
+        );
+      }
+    }
+
+    if (supplyPriceFrom !== undefined || supplyPriceTo !== undefined) {
+      and.push({
+        purchasePrice: {
+          gte: supplyPriceFrom,
+          lte: supplyPriceTo,
+        },
+      });
+    }
+
+    if (retailPriceFrom !== undefined || retailPriceTo !== undefined) {
+      and.push({
+        salePrice: {
+          gte: retailPriceFrom,
+          lte: retailPriceTo,
+        },
+      });
+    }
+
+    if (wholesalePrice !== undefined) {
+      and.push({
+        metadata: {
+          path: ['wholesale_price'],
+          equals: wholesalePrice,
+        },
+      });
+    }
+
+    if (freePrice !== undefined) {
+      and.push({
+        metadata: {
+          path: ['free_price'],
+          equals: freePrice,
+        },
+      });
+    }
+
     if (!and.length) {
       return undefined;
     }
@@ -958,7 +1514,9 @@ export class ProductsService {
     return and.length === 1 ? and[0] : { AND: and };
   }
 
-  private buildProductOrderBy(order?: string[]): Prisma.ProductOrderByWithRelationInput {
+  private buildProductOrderBy(
+    order?: string[],
+  ): Prisma.ProductOrderByWithRelationInput {
     const normalizedOrder = order
       ?.map((item) => item.trim())
       .filter((item) => item.length > 0);
@@ -974,9 +1532,13 @@ export class ProductsService {
 
     switch (field) {
       case 'id':
+        return { id: direction };
       case 'name':
+        return { name: direction };
       case 'sku':
+        return { sku: direction };
       case 'barcode':
+        return { barcode: direction };
       case 'created_at':
         return { createdAt: direction };
       case 'updated_at':
@@ -1013,14 +1575,18 @@ export class ProductsService {
         const supplySum = product.stocks.length
           ? product.stocks.reduce(
               (sum, stock) =>
-                sum + stock.quantity * (stock.purchasePrice ?? product.purchasePrice ?? 0),
+                sum +
+                stock.quantity *
+                  (stock.purchasePrice ?? product.purchasePrice ?? 0),
               0,
             )
           : measurementValue * (product.purchasePrice ?? 0);
 
         const retailSum = product.stocks.length
           ? product.stocks.reduce(
-              (sum, stock) => sum + stock.quantity * (stock.salePrice ?? product.salePrice ?? 0),
+              (sum, stock) =>
+                sum +
+                stock.quantity * (stock.salePrice ?? product.salePrice ?? 0),
               0,
             )
           : measurementValue * (product.salePrice ?? 0);
@@ -1029,7 +1595,8 @@ export class ProductsService {
         acc.totalSupplyPrice += supplySum;
         acc.totalRetailPrice += retailSum;
         acc.zeroLeftCount += measurementValue <= 0 ? 1 : 0;
-        acc.smallLeftCount += measurementValue > 0 && measurementValue <= 5 ? 1 : 0;
+        acc.smallLeftCount +=
+          measurementValue > 0 && measurementValue <= 5 ? 1 : 0;
         return acc;
       },
       {
@@ -1109,7 +1676,9 @@ export class ProductsService {
       name: 'Наименование',
     };
 
-    return PRODUCT_CHARACTERISTICS.filter((field) => field.system_name !== 'name')
+    return PRODUCT_CHARACTERISTICS.filter(
+      (field) => field.system_name !== 'name',
+    )
       .slice(0, 10)
       .map((field, index) => ({
         id: '',
@@ -1129,7 +1698,10 @@ export class ProductsService {
         : [];
 
     return rawShipments
-      .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+      .filter(
+        (item): item is Record<string, unknown> =>
+          !!item && typeof item === 'object',
+      )
       .map((item) => {
         const shopId = this.optionalString(item.shop_id) ?? '';
         const quantity =
@@ -1144,7 +1716,8 @@ export class ProductsService {
           retailPrice: this.resolvePriceForShop(body, shopId, 'retail_price'),
           supplierId: this.optionalString(item.supplier_id),
           hasTrigger: this.toBooleanValue(item.has_trigger),
-          smallLeftMeasurementValue: this.toInt(item.small_left_measurement_value) ?? 0,
+          smallLeftMeasurementValue:
+            this.toInt(item.small_left_measurement_value) ?? 0,
         };
       })
       .filter((item) => item.shopId.length > 0);
@@ -1160,34 +1733,44 @@ export class ProductsService {
       (item) =>
         !!item &&
         typeof item === 'object' &&
-        this.optionalString((item as Record<string, unknown>).shop_id) === shopId,
+        this.optionalString((item as Record<string, unknown>).shop_id) ===
+          shopId,
     ) as Record<string, unknown> | undefined;
 
     return (
-      this.toNumber(matchedShopPrice?.[key]) ??
-      this.toNumber(body[key]) ??
-      0
+      this.toNumber(matchedShopPrice?.[key]) ?? this.toNumber(body[key]) ?? 0
     );
   }
 
   private extractShopPrices(
     body: Record<string, unknown>,
-    shipments: Array<{ shopId: string; supplyPrice: number; retailPrice: number }>,
+    shipments: Array<{
+      shopId: string;
+      supplyPrice: number;
+      retailPrice: number;
+    }>,
     defaultSupplyPrice: number,
     defaultRetailPrice: number,
   ) {
-    const rawShopPrices = Array.isArray(body.shop_prices) ? body.shop_prices : [];
+    const rawShopPrices = Array.isArray(body.shop_prices)
+      ? body.shop_prices
+      : [];
 
     if (rawShopPrices.length) {
       return rawShopPrices
-        .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+        .filter(
+          (item): item is Record<string, unknown> =>
+            !!item && typeof item === 'object',
+        )
         .map((item) => ({
           currency_prices: null,
           from_supply_price: 0,
           max_price: this.toNumber(item.max_price) ?? 0,
-          max_supply_price: this.toNumber(item.supply_price) ?? defaultSupplyPrice,
+          max_supply_price:
+            this.toNumber(item.supply_price) ?? defaultSupplyPrice,
           min_price: this.toNumber(item.min_price) ?? 0,
-          min_supply_price: this.toNumber(item.supply_price) ?? defaultSupplyPrice,
+          min_supply_price:
+            this.toNumber(item.supply_price) ?? defaultSupplyPrice,
           prices_list: [],
           promo_price: 0,
           promos: null,
@@ -1223,11 +1806,16 @@ export class ProductsService {
     body: Record<string, unknown>,
     shipments: Array<{ shopId: string }>,
   ) {
-    const rawFreePrices = Array.isArray(body.shop_free_prices) ? body.shop_free_prices : [];
+    const rawFreePrices = Array.isArray(body.shop_free_prices)
+      ? body.shop_free_prices
+      : [];
 
     if (rawFreePrices.length) {
       return rawFreePrices
-        .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+        .filter(
+          (item): item is Record<string, unknown> =>
+            !!item && typeof item === 'object',
+        )
         .map((item) => ({
           sell_with_free_price: false,
           shop_id: this.optionalString(item.shop_id) ?? '',
@@ -1295,13 +1883,111 @@ export class ProductsService {
     }));
   }
 
-  private buildCatalogMetadata(body: Record<string, unknown>, description?: string) {
+  private resolveProductType(value: unknown) {
+    const normalized = this.optionalString(value)?.toLowerCase();
+    if (!normalized) {
+      return DEFAULT_PRODUCT_TYPE_ID;
+    }
+
+    if (normalized === PRODUCT_TYPE_IDS.goods || normalized === 'товар') {
+      return PRODUCT_TYPE_IDS.goods;
+    }
+
+    if (normalized === PRODUCT_TYPE_IDS.service || normalized === 'услуга') {
+      return PRODUCT_TYPE_IDS.service;
+    }
+
+    if (normalized === PRODUCT_TYPE_IDS.kit || normalized === 'комплект') {
+      return PRODUCT_TYPE_IDS.kit;
+    }
+
+    return normalized;
+  }
+
+  private isGoodsProductType(productType: string) {
+    return productType === PRODUCT_TYPE_IDS.goods;
+  }
+
+  private isServiceProductType(productType: string) {
+    return productType === PRODUCT_TYPE_IDS.service;
+  }
+
+  private extractSelectedAttributes(value: unknown) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.filter(
+      (item): item is Record<string, unknown> =>
+        !!item && typeof item === 'object',
+    );
+  }
+
+  private extractVariants(value: unknown) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.filter(
+      (item): item is Record<string, unknown> =>
+        !!item && typeof item === 'object',
+    );
+  }
+
+  private buildSkuPrefix(name?: string) {
+    if (!name) {
+      return undefined;
+    }
+
+    const cleaned = name.replace(/[^A-Za-zА-Яа-я0-9]/g, '').toUpperCase();
+    if (!cleaned.length) {
+      return undefined;
+    }
+
+    return cleaned.slice(0, SKU_PREFIX_LENGTH);
+  }
+
+  private parseProductId(id: string) {
+    const parsed = Number(id);
+    if (!Number.isInteger(parsed)) {
+      throw new BadRequestException('product id must be a number');
+    }
+
+    return parsed;
+  }
+
+  private buildCatalogMetadata(
+    body: Record<string, unknown>,
+    description: string | undefined,
+    options: {
+      isVariative: boolean;
+      selectedAttributes: Array<Record<string, unknown>>;
+      variants: Array<Record<string, unknown>>;
+    },
+  ) {
+    const firstShopPrice = Array.isArray(body.shop_prices)
+      ? body.shop_prices.find(
+          (item): item is Record<string, unknown> =>
+            !!item && typeof item === 'object',
+        )
+      : undefined;
+
     return {
       brand_id: this.optionalString(body.brand_id) ?? null,
       brand_name: this.optionalString(body.brand_name) ?? null,
       description: description ?? null,
-      measurement_unit_id: this.optionalString(body.measurement_unit_id) ?? null,
+      measurement_unit_id:
+        this.optionalString(body.measurement_unit_id) ?? null,
       company_id: this.optionalString(body.company_id) ?? COMPANY_ID,
+      product_type_id: this.resolveProductType(body.product_type_id) ?? null,
+      is_variative: options.isVariative,
+      selected_attributes: options.selectedAttributes,
+      variants: options.variants,
+      wholesale_price:
+        this.toNumber(body.wholesale_price) ??
+        this.toNumber(firstShopPrice?.wholesale_price) ??
+        null,
+      free_price: this.toBooleanValue(body.free_price),
     } satisfies Prisma.JsonObject;
   }
 
@@ -1313,6 +1999,16 @@ export class ProductsService {
     return values
       .map((value) => Number(value))
       .filter((value) => Number.isInteger(value));
+  }
+
+  private toBranchCodes(values?: string[]) {
+    if (!values?.length) {
+      return [];
+    }
+
+    return values
+      .map((value) => this.resolveBranchCodeByShopId(value))
+      .filter((value) => value.trim().length > 0);
   }
 
   private requireString(value: unknown, field: string) {
