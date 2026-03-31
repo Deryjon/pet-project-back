@@ -6,30 +6,13 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { User } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
 import { extname, join } from 'path';
 import { PrismaService } from '../prisma/prisma.service';
-
-const SHOP_DEFINITIONS: Record<
-  string,
-  { id: string; shop_id: string; name: string; aliases?: string[] }
-> = {
-  main: {
-    id: 'eaca6237-dc5c-4d4b-83e5-62a1eeb9a89a',
-    shop_id: '11dc3536-e1ce-447b-aedb-ce3784c4b1ad',
-    name: 'Samarqand Darvoza',
-    aliases: ['2222'],
-  },
-  a: {
-    id: '5a256a71-34c1-42a0-a84d-1061bf84eb6c',
-    shop_id: 'be25385b-8db2-4d96-8240-f1bb6bb3420c',
-    name: 'Globus Mall',
-  },
-};
 
 const ROLE_DEFINITIONS: Record<
   string,
@@ -45,15 +28,30 @@ const ROLE_DEFINITIONS: Record<
     role_id: '70f2f91d-ff29-4c86-ae0c-ce0b181018e0',
     name: 'Админ',
   },
+  owner: {
+    id: '7c88f602-449e-487f-bd6b-cf7d3e01f072',
+    role_id: 'owner',
+    name: 'Owner',
+  },
   store_manager: {
     id: '2afe4c1a-01bf-49b6-b1eb-af4f5b094302',
     role_id: 'ddf1c050-b868-4231-8a72-d9fa68e8f586',
-    name: 'Управляющий магазина',
+    name: 'Управляющий магазином',
   },
   employee: {
     id: '14699b27-9b77-4ae5-be8c-ff798a9cd7f1',
     role_id: '32146a0a-c622-440b-ad8b-27f64e39aba8',
-    name: 'Кассир',
+    name: 'Сотрудник',
+  },
+  platform_admin: {
+    id: 'df1d8bf5-97ab-4ab6-a77e-bf0efcb44db7',
+    role_id: 'platform_admin',
+    name: 'Админ платформы',
+  },
+  support: {
+    id: '8c1dc25f-9a41-4b6e-b8ae-f5a11d0c6bd2',
+    role_id: 'support',
+    name: 'Поддержка',
   },
 };
 
@@ -65,6 +63,10 @@ const ALLOWED_AVATAR_MIME_TYPES = new Set([
   'image/png',
 ]);
 const MAX_AVATAR_SIZE_BYTES = 5 * 1024 * 1024;
+const PLATFORM_ADMIN_ROLES = new Set(['platform_admin', 'superadmin']);
+const COMPANY_ADMIN_ROLES = new Set(['admin', 'owner', 'superadmin']);
+
+type UserWithRelations = any;
 
 @Injectable()
 export class UsersService {
@@ -73,8 +75,24 @@ export class UsersService {
     private readonly jwtService: JwtService,
   ) {}
 
-  async findAll() {
-    const users = await this.prisma.user.findMany({
+  private get db(): any {
+    return this.prisma as any;
+  }
+
+  async findAll(authorization?: string) {
+    const actor = await this.getAuthenticatedUser(authorization);
+    const where = this.buildUserVisibilityWhere(actor);
+    const users = await this.db.user.findMany({
+      where,
+      include: {
+        company: true,
+        currentShop: true,
+        shopAccesses: {
+          include: {
+            shop: true,
+          },
+        },
+      },
       orderBy: {
         id: 'asc',
       },
@@ -83,37 +101,67 @@ export class UsersService {
     return users.map((user) => this.toListItem(user));
   }
 
-  findByPhoneNumber(phoneNumber: string) {
-    return this.prisma.user.findUnique({
-      where: { phoneNumber },
+  async findPlatformUserByPhoneNumber(phoneNumber: string) {
+    const phoneNumberVariants = this.buildPhoneNumberLookupVariants(phoneNumber);
+
+    return this.db.user.findFirst({
+      where: {
+        phoneNumber: {
+          in: phoneNumberVariants,
+        },
+        userType: 'platform',
+      },
+      include: this.userRelationsInclude(),
+      orderBy: {
+        id: 'asc',
+      },
     });
   }
 
-  findShopByIdentifier(shopIdentifier: string) {
-    const shopDefinition = this.resolveShopDefinition(shopIdentifier);
+  async findByPhoneNumberAndCompany(phoneNumber: string, companyId: string) {
+    const phoneNumberVariants = this.buildPhoneNumberLookupVariants(phoneNumber);
 
-    if (!shopDefinition) {
-      return null;
-    }
-
-    return this.toShopItem(shopDefinition.branchCode);
+    return this.db.user.findFirst({
+      where: {
+        phoneNumber: {
+          in: phoneNumberVariants,
+        },
+        companyId,
+        userType: 'company',
+      },
+      include: this.userRelationsInclude(),
+      orderBy: {
+        id: 'asc',
+      },
+    });
   }
 
-  findBranchCodeByShopIdentifier(shopIdentifier: string) {
-    return this.resolveShopDefinition(shopIdentifier)?.branchCode ?? null;
+  async findCompanyByIdentifier(companyIdentifier: string) {
+    const identifier = companyIdentifier.trim();
+    const loweredIdentifier = identifier.toLowerCase();
+    const company = await this.db.company.findFirst({
+      where: {
+        isActive: true,
+        OR: [
+          { id: identifier },
+          { login: loweredIdentifier },
+          { subdomain: loweredIdentifier },
+        ],
+      },
+    });
+
+    return company ? this.toCompanyItem(company) : null;
   }
 
-  userHasAccessToBranch(user: User, branchCode: string) {
-    if (this.hasGlobalLocationAccess(user.role)) {
-      return true;
-    }
-
-    return user.branchCode === branchCode;
+  async findCompanyIdByIdentifier(companyIdentifier: string) {
+    const company = await this.findCompanyByIdentifier(companyIdentifier);
+    return company?.company_id ?? null;
   }
 
   async findByIdOrThrow(id: number) {
-    const user = await this.prisma.user.findUnique({
+    const user = await this.db.user.findUnique({
       where: { id },
+      include: this.userRelationsInclude(),
     });
 
     if (!user) {
@@ -123,96 +171,179 @@ export class UsersService {
     return user;
   }
 
-  async findOneResponse(id: number) {
+  async findOneResponse(id: number, authorization?: string) {
+    const actor = await this.getAuthenticatedUser(authorization);
     const user = await this.findByIdOrThrow(id);
+
+    this.assertUserVisibleToActor(actor, user);
 
     return {
       id: user.id,
+      user_type: user.userType,
       first_name: user.firstName,
       last_name: user.lastName,
       birth_date: this.formatBirthDate(user.birthDate),
       phone_number: user.phoneNumber,
       role: user.role,
+      company_id: user.companyId,
+      company: user.company ? this.toCompanyItem(user.company) : null,
       branch_location: user.branchCode,
-      branch_code: user.branchCode,
+      current_shop_id: user.currentShopId,
+      current_shop: user.currentShop ? this.toShopItem(user.currentShop) : null,
+      allowed_shop_ids: user.shopAccesses.map((access) => access.shopId),
+      can_switch_shops: Boolean(user.canSwitchShops),
       is_active: user.isActive,
     };
   }
 
-  async create(body: Record<string, unknown>) {
+  async create(body: Record<string, unknown>, actor?: UserWithRelations) {
     const firstName = this.requireString(body.first_name, 'first_name');
     const lastName = this.requireString(body.last_name, 'last_name');
-    const phoneNumber = this.requireString(body.phone_number, 'phone_number');
+    const phoneNumber = this.normalizePhoneNumber(
+      this.requireString(body.phone_number, 'phone_number'),
+    );
     const password = this.requireString(body.password, 'password');
     const role = this.optionalString(body.role) ?? 'employee';
-    const branchCode = this.optionalString(body.branch_location);
+    const userType = this.parseUserType(body.user_type);
     const birthDate = this.parseBirthDate(this.optionalString(body.birth_date));
 
-    const existingUser = await this.findByPhoneNumber(phoneNumber);
-    if (existingUser) {
+    if (userType === 'platform') {
+      if (actor && !this.isPlatformAdmin(actor)) {
+        throw new ForbiddenException('Only platform admin can create platform users');
+      }
+
+      const existingPlatformUser = await this.db.user.findFirst({
+        where: {
+          phoneNumber,
+          userType: 'platform',
+        },
+      });
+
+      if (existingPlatformUser) {
+        throw new BadRequestException(
+          'Platform user with this phone number already exists',
+        );
+      }
+
+      const user = await this.db.user.create({
+        data: {
+          firstName,
+          lastName,
+          phoneNumber,
+          password: await bcrypt.hash(password, 10),
+          userType: 'platform',
+          role,
+          canSwitchShops: false,
+          birthDate,
+        },
+        include: this.userRelationsInclude(),
+      });
+
+      return this.findOneResponse(user.id);
+    }
+
+    const companyId = await this.resolveCompanyIdForActor(body.company_id, actor);
+    const allowedShops = await this.resolveAllowedShopsForWrite(
+      companyId,
+      body.allowed_shop_ids,
+      this.optionalString(body.current_shop_id) ??
+        this.optionalString(body.branch_location),
+    );
+    const currentShop =
+      await this.resolveCurrentShopForWrite(
+        companyId,
+        this.optionalString(body.current_shop_id) ??
+          this.optionalString(body.branch_location),
+        allowedShops,
+      );
+    const canSwitchShops =
+      (this.optionalBoolean(body.can_switch_shops) ?? allowedShops.length > 1) &&
+      allowedShops.length > 1;
+
+    const existingCompanyUser = await this.db.user.findFirst({
+      where: {
+        phoneNumber,
+        companyId,
+        userType: 'company',
+      },
+    });
+
+    if (existingCompanyUser) {
       throw new BadRequestException(
-        'User with this phone number already exists',
+        'User with this phone number already exists in this company',
       );
     }
 
-    const user = await this.prisma.user.create({
+    const user = await this.db.user.create({
       data: {
         firstName,
         lastName,
         phoneNumber,
         password: await bcrypt.hash(password, 10),
+        userType: 'company',
         role,
-        branchCode,
+        companyId,
+        branchCode: currentShop?.branchCode ?? null,
+        currentShopId: currentShop?.id ?? null,
+        canSwitchShops,
         birthDate,
+        shopAccesses: allowedShops.length
+          ? {
+              createMany: {
+                data: allowedShops.map((shop) => ({
+                  shopId: shop.id,
+                })),
+              },
+            }
+          : undefined,
       },
+      include: this.userRelationsInclude(),
     });
 
     return this.findOneResponse(user.id);
   }
 
-  async assertAdminAccess(authorization?: string) {
-    const token = this.extractToken(authorization);
+  async assertPlatformAdminAccess(authorization?: string) {
+    const user = await this.getAuthenticatedUser(authorization);
 
-    let payload: { sub: number };
-
-    try {
-      payload = await this.jwtService.verifyAsync<{
-        sub: number;
-      }>(token);
-    } catch (error) {
-      if (error instanceof TokenExpiredError) {
-        throw new UnauthorizedException('Token expired');
-      }
-
-      if (error instanceof JsonWebTokenError) {
-        throw new UnauthorizedException('Invalid token');
-      }
-
-      throw error;
-    }
-
-    const user = await this.findByIdOrThrow(payload.sub);
-
-    if (!this.hasGlobalLocationAccess(user.role)) {
-      throw new ForbiddenException(
-        'Only admin/owner/superadmin can manage employees',
-      );
+    if (!this.isPlatformAdmin(user)) {
+      throw new ForbiddenException('Only platform admin can perform this action');
     }
 
     return user;
   }
 
-  async update(id: number, body: Record<string, unknown>) {
-    await this.findByIdOrThrow(id);
+  async assertAdminAccess(authorization?: string) {
+    const user = await this.getAuthenticatedUser(authorization);
 
-    const data: {
-      firstName?: string;
-      lastName?: string;
-      birthDate?: Date | null;
-      branchCode?: string | null;
-      phoneNumber?: string;
-      password?: string;
-    } = {};
+    if (this.isPlatformAdmin(user) || this.isCompanyAdmin(user)) {
+      return user;
+    }
+
+    throw new ForbiddenException(
+      'Only platform admin or company admin can manage employees',
+    );
+  }
+
+  async update(
+    id: number,
+    body: Record<string, unknown>,
+    actor?: UserWithRelations,
+  ) {
+    const targetUser = await this.findByIdOrThrow(id);
+
+    if (actor && !this.canManageUser(actor, targetUser)) {
+      throw new ForbiddenException('You cannot manage this user');
+    }
+
+    const companyId =
+      targetUser.userType === 'platform'
+        ? null
+        : await this.resolveCompanyIdForActor(
+            body.company_id ?? targetUser.companyId,
+            actor,
+          );
+    const data: Prisma.UserUpdateInput = {};
 
     if (body.first_name !== undefined) {
       data.firstName = this.requireString(body.first_name, 'first_name');
@@ -222,8 +353,17 @@ export class UsersService {
       data.lastName = this.requireString(body.last_name, 'last_name');
     }
 
-    if (body.branch_location !== undefined) {
-      data.branchCode = this.optionalString(body.branch_location) ?? null;
+    if (body.phone_number !== undefined) {
+      data.phoneNumber = this.normalizePhoneNumber(
+        this.requireString(body.phone_number, 'phone_number'),
+      );
+    }
+
+    if (body.password !== undefined) {
+      data.password = await bcrypt.hash(
+        this.requireString(body.password, 'password'),
+        10,
+      );
     }
 
     if (body.birth_date !== undefined) {
@@ -231,16 +371,91 @@ export class UsersService {
         this.parseBirthDate(this.optionalString(body.birth_date)) ?? null;
     }
 
-    if (body.phone_number !== undefined) {
-      data.phoneNumber = this.requireString(body.phone_number, 'phone_number');
+    if (body.role !== undefined) {
+      data.role = this.requireString(body.role, 'role');
     }
 
-    if (body.password !== undefined) {
-      const password = this.requireString(body.password, 'password');
-      data.password = await bcrypt.hash(password, 10);
+    if (body.can_switch_shops !== undefined) {
+      data.canSwitchShops = this.optionalBoolean(body.can_switch_shops) ?? false;
     }
 
-    await this.prisma.user.update({
+    if (targetUser.userType === 'company' && companyId) {
+      data.company = {
+        connect: {
+          id: companyId,
+        },
+      };
+
+      const allowedShops =
+        body.allowed_shop_ids !== undefined || body.current_shop_id !== undefined
+          ? await this.resolveAllowedShopsForWrite(
+              companyId,
+              body.allowed_shop_ids ??
+                targetUser.shopAccesses.map((access) => access.shopId),
+              this.optionalString(body.current_shop_id) ??
+                this.optionalString(body.branch_location) ??
+                targetUser.currentShopId,
+            )
+          : targetUser.shopAccesses.map((access) => access.shop);
+
+      const currentShop =
+        body.allowed_shop_ids !== undefined ||
+        body.current_shop_id !== undefined ||
+        body.branch_location !== undefined
+          ? await this.resolveCurrentShopForWrite(
+              companyId,
+              this.optionalString(body.current_shop_id) ??
+                this.optionalString(body.branch_location) ??
+                targetUser.currentShopId,
+              allowedShops,
+            )
+          : targetUser.currentShop;
+
+      data.currentShop = currentShop
+        ? {
+            connect: {
+              id: currentShop.id,
+            },
+          }
+        : { disconnect: true };
+      data.branchCode = currentShop?.branchCode ?? null;
+      data.canSwitchShops =
+        (body.can_switch_shops !== undefined
+          ? this.optionalBoolean(body.can_switch_shops) ?? false
+          : targetUser.canSwitchShops) && allowedShops.length > 1;
+      data.shopAccesses =
+        body.allowed_shop_ids !== undefined ||
+        body.current_shop_id !== undefined ||
+        body.branch_location !== undefined
+          ? {
+              deleteMany: {},
+              createMany: {
+                data: allowedShops.map((shop) => ({
+                  shopId: shop.id,
+                })),
+              },
+            }
+          : undefined;
+    }
+
+    if (data.phoneNumber) {
+      const duplicate = await this.db.user.findFirst({
+        where: {
+          id: {
+            not: id,
+          },
+          phoneNumber: data.phoneNumber,
+          userType: targetUser.userType,
+          companyId,
+        },
+      });
+
+      if (duplicate) {
+        throw new BadRequestException('User with this phone number already exists');
+      }
+    }
+
+    await this.db.user.update({
       where: { id },
       data,
     });
@@ -259,12 +474,7 @@ export class UsersService {
     body: Record<string, unknown>,
   ) {
     const user = await this.getAuthenticatedUser(authorization);
-    const data: {
-      firstName?: string;
-      lastName?: string;
-      language?: string;
-      theme?: string;
-    } = {};
+    const data: Prisma.UserUpdateInput = {};
 
     if (body.first_name !== undefined) {
       data.firstName = this.requireString(body.first_name, 'first_name');
@@ -286,9 +496,10 @@ export class UsersService {
       data.theme = this.requireEnumValue(body.theme, 'theme', ALLOWED_THEMES);
     }
 
-    const updatedUser = await this.prisma.user.update({
+    const updatedUser = await this.db.user.update({
       where: { id: user.id },
       data,
+      include: this.userRelationsInclude(),
     });
 
     return {
@@ -316,7 +527,7 @@ export class UsersService {
       throw new BadRequestException('Current password is incorrect');
     }
 
-    await this.prisma.user.update({
+    await this.db.user.update({
       where: { id: user.id },
       data: {
         password: await bcrypt.hash(newPassword, 10),
@@ -363,7 +574,7 @@ export class UsersService {
     await fs.writeFile(filePath, file.buffer);
 
     const avatarUrl = this.buildAvatarUrl(fileName);
-    await this.prisma.user.update({
+    await this.db.user.update({
       where: { id: user.id },
       data: {
         avatarUrl,
@@ -381,7 +592,7 @@ export class UsersService {
 
     await this.removeStoredAvatar(user.avatarUrl);
 
-    await this.prisma.user.update({
+    await this.db.user.update({
       where: { id: user.id },
       data: {
         avatarUrl: null,
@@ -394,25 +605,111 @@ export class UsersService {
     };
   }
 
-  async toAuthProfile(user: User) {
-    const name = `${user.firstName} ${user.lastName}`.trim();
-    const hasGlobalLocationAccess = this.hasGlobalLocationAccess(user.role);
-    const locationCodes = hasGlobalLocationAccess
-      ? await this.findAllLocationCodes()
-      : user.branchCode
-        ? [user.branchCode]
+  async prepareAuthenticatedUserForLogin(userId: number, companyId: string) {
+    const user = await this.findByIdOrThrow(userId);
+
+    if (user.userType !== 'company' || user.companyId !== companyId) {
+      throw new UnauthorizedException('User does not belong to this company');
+    }
+
+    return this.prepareAuthenticatedUser(userId);
+  }
+
+  async prepareAuthenticatedUser(userId: number) {
+    const user = await this.findByIdOrThrow(userId);
+
+    if (user.userType === 'platform') {
+      return user;
+    }
+
+    const companyId = user.companyId;
+    if (!companyId) {
+      throw new UnauthorizedException('Company user is missing company');
+    }
+
+    const availableShops = await this.resolveAvailableShopsForUser(user);
+    const currentShop = this.resolveCurrentShop(user, availableShops);
+    const canSwitchShops =
+      Boolean(user.canSwitchShops) && availableShops.length > 1;
+
+    const needsUpdate =
+      user.currentShopId !== (currentShop?.id ?? null) ||
+      user.branchCode !== (currentShop?.branchCode ?? null) ||
+      user.canSwitchShops !== canSwitchShops;
+
+    if (!needsUpdate) {
+      return user;
+    }
+
+    return this.db.user.update({
+      where: { id: user.id },
+      data: {
+        currentShopId: currentShop?.id ?? null,
+        branchCode: currentShop?.branchCode ?? null,
+        canSwitchShops,
+      },
+      include: this.userRelationsInclude(),
+    });
+  }
+
+  async getRequestContext(authorization?: string) {
+    const user = await this.prepareAuthenticatedUser(
+      (await this.getAuthenticatedUser(authorization)).id,
+    );
+    const allowedShops =
+      user.userType === 'company'
+        ? await this.resolveAvailableShopsForUser(user)
         : [];
-    const shops = locationCodes.map((code) => this.toShopItem(code));
-    const currentShop = user.branchCode
-      ? this.toShopItem(user.branchCode)
-      : null;
-    const roles = this.resolveRoles(user.role, hasGlobalLocationAccess);
+
+    return {
+      userId: user.id,
+      fullName: `${user.firstName} ${user.lastName}`.trim(),
+      userType: user.userType,
+      role: user.role,
+      companyId: user.companyId,
+      currentShopId: user.currentShopId,
+      currentBranchCode: user.branchCode,
+      allowedShopIds: allowedShops.map((shop) => shop.id),
+      allowedBranchCodes: allowedShops.map((shop) => shop.branchCode),
+      canSwitchShops: Boolean(user.canSwitchShops) && allowedShops.length > 1,
+    };
+  }
+
+  async toAuthProfile(userInput: UserWithRelations) {
+    const user = await this.prepareAuthenticatedUser(userInput.id);
+    const roles = this.resolveRoles(user.role, user.userType);
+
+    if (user.userType === 'platform') {
+      return {
+        id: user.id,
+        user_type: user.userType,
+        first_name: user.firstName,
+        last_name: user.lastName,
+        full_name: `${user.firstName} ${user.lastName}`.trim(),
+        birth_date: this.formatIsoDate(user.birthDate),
+        birth_year: user.birthDate?.getUTCFullYear() ?? null,
+        phone_number: user.phoneNumber,
+        avatar_url: user.avatarUrl,
+        is_active: user.isActive,
+        role: roles[0]?.role ?? null,
+        roles,
+        company_id: null,
+        company: null,
+        can_switch_shops: false,
+        current_shop_id: null,
+        current_shop: null,
+        shops: [],
+      };
+    }
+
+    const shops = await this.resolveAvailableShopsForUser(user);
 
     return {
       id: user.id,
+      user_type: user.userType,
       first_name: user.firstName,
       last_name: user.lastName,
-      full_name: name,
+      full_name: `${user.firstName} ${user.lastName}`.trim(),
       birth_date: this.formatIsoDate(user.birthDate),
       birth_year: user.birthDate?.getUTCFullYear() ?? null,
       phone_number: user.phoneNumber,
@@ -420,51 +717,115 @@ export class UsersService {
       is_active: user.isActive,
       role: roles[0]?.role ?? null,
       roles,
-      current_shop_id: currentShop?.shop_id ?? null,
-      current_shop: currentShop,
-      shops,
+      company_id: user.companyId,
+      company: user.company ? this.toCompanyItem(user.company) : null,
+      can_switch_shops: Boolean(user.canSwitchShops) && shops.length > 1,
+      current_shop_id: user.currentShopId,
+      current_shop: user.currentShop ? this.toShopItem(user.currentShop) : null,
+      shops: shops.map((shop) => this.toShopItem(shop)),
     };
   }
 
   async setCurrentShop(userId: number, shopId: string) {
-    const user = await this.findByIdOrThrow(userId);
-    const targetBranchCode = this.findBranchCodeByShopId(shopId);
+    const user = await this.prepareAuthenticatedUser(userId);
 
-    if (!targetBranchCode) {
-      throw new NotFoundException('Shop not found');
+    if (user.userType !== 'company' || !user.companyId) {
+      throw new BadRequestException('Platform user cannot switch shops');
     }
 
-    if (
-      !this.hasGlobalLocationAccess(user.role) &&
-      user.branchCode !== targetBranchCode
-    ) {
+    const availableShops = await this.resolveAvailableShopsForUser(user);
+    const targetShop = await this.findShopByIdentifierOrThrow(
+      shopId,
+      user.companyId,
+    );
+
+    if (!Boolean(user.canSwitchShops) || availableShops.length <= 1) {
+      throw new BadRequestException(
+        'This user is not allowed to switch shops',
+      );
+    }
+
+    if (!availableShops.some((shop) => shop.id === targetShop.id)) {
       throw new BadRequestException(
         'This user does not have access to the requested shop',
       );
     }
 
-    await this.prisma.user.update({
+    await this.db.user.update({
       where: { id: userId },
       data: {
-        branchCode: targetBranchCode,
+        currentShopId: targetShop.id,
+        branchCode: targetShop.branchCode,
       },
     });
 
     return {
-      message: shopId,
+      message: 'Current shop updated',
+      current_shop_id: targetShop.id,
+      current_shop: this.toShopItem(targetShop),
     };
   }
 
-  private toListItem(user: User) {
+  private userRelationsInclude() {
+    return {
+      company: true,
+      currentShop: true,
+      shopAccesses: {
+        include: {
+          shop: true,
+        },
+      },
+    };
+  }
+
+  private toListItem(user: UserWithRelations) {
     return {
       id: user.id,
+      user_type: user.userType,
       first_name: user.firstName,
       last_name: user.lastName,
       phone_number: user.phoneNumber,
       role: user.role,
-      branch_location: user.branchCode,
+      company_id: user.companyId,
+      current_shop_id: user.currentShopId,
+      can_switch_shops: Boolean(user.canSwitchShops),
       is_active: user.isActive,
     };
+  }
+
+  private buildUserVisibilityWhere(actor: UserWithRelations) {
+    if (this.isPlatformAdmin(actor)) {
+      return undefined;
+    }
+
+    if (actor.userType === 'company' && actor.companyId) {
+      return {
+        userType: 'company',
+        companyId: actor.companyId,
+      };
+    }
+
+    throw new ForbiddenException('You cannot view users');
+  }
+
+  private assertUserVisibleToActor(
+    actor: UserWithRelations,
+    targetUser: UserWithRelations,
+  ) {
+    if (this.isPlatformAdmin(actor)) {
+      return;
+    }
+
+    if (
+      actor.userType === 'company' &&
+      actor.companyId &&
+      targetUser.userType === 'company' &&
+      targetUser.companyId === actor.companyId
+    ) {
+      return;
+    }
+
+    throw new NotFoundException('User not found');
   }
 
   private requireString(value: unknown, field: string) {
@@ -496,6 +857,45 @@ export class UsersService {
 
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  private optionalBoolean(value: unknown) {
+    if (typeof value === 'boolean') {
+      return value;
+    }
+
+    return undefined;
+  }
+
+  private normalizePhoneNumber(value: string) {
+    const normalized = value.replace(/\D/g, '');
+
+    if (!normalized) {
+      throw new BadRequestException('phone_number must contain digits');
+    }
+
+    return normalized;
+  }
+
+  private buildPhoneNumberLookupVariants(value: string) {
+    const trimmed = this.requireString(value, 'phone_number');
+    const normalized = this.normalizePhoneNumber(trimmed);
+
+    return Array.from(new Set([trimmed, normalized, `+${normalized}`]));
+  }
+
+  private parseUserType(value: unknown) {
+    const normalized = (this.optionalString(value) ?? 'company').toLowerCase();
+
+    if (normalized === 'platform') {
+      return 'platform';
+    }
+
+    if (normalized === 'company') {
+      return 'company';
+    }
+
+    throw new BadRequestException('user_type has an invalid value');
   }
 
   private parseBirthDate(value?: string) {
@@ -539,73 +939,52 @@ export class UsersService {
     return `${day}.${month}.${year}`;
   }
 
-  private async findAllLocationCodes() {
-    const [userLocations, saleLocations, stockLocations] = await Promise.all([
-      this.prisma.user.findMany({
-        where: {
-          branchCode: {
-            not: null,
-          },
-        },
-        select: {
-          branchCode: true,
-        },
-        distinct: ['branchCode'],
-      }),
-      this.prisma.sale.findMany({
-        where: {
-          branchCode: {
-            not: null,
-          },
-        },
-        select: {
-          branchCode: true,
-        },
-        distinct: ['branchCode'],
-      }),
-      this.prisma.productStock.findMany({
-        select: {
-          branchCode: true,
-        },
-        distinct: ['branchCode'],
-      }),
-    ]);
-
-    return [
-      ...new Set(
-        [
-          ...userLocations.map((item) => item.branchCode),
-          ...saleLocations.map((item) => item.branchCode),
-          ...stockLocations.map((item) => item.branchCode),
-        ]
-          .filter(
-            (branchCode): branchCode is string =>
-              typeof branchCode === 'string',
-          )
-          .map((branchCode) => this.normalizeLocationCode(branchCode)),
-      ),
-    ].sort();
+  private isPlatformAdmin(user: UserWithRelations) {
+    return (
+      user.userType === 'platform' &&
+      PLATFORM_ADMIN_ROLES.has(user.role.trim().toLowerCase())
+    );
   }
 
-  private hasGlobalLocationAccess(role: string) {
-    return ['admin', 'owner', 'superadmin'].includes(role.trim().toLowerCase());
+  private isCompanyAdmin(user: UserWithRelations) {
+    return (
+      user.userType === 'company' &&
+      COMPANY_ADMIN_ROLES.has(user.role.trim().toLowerCase())
+    );
   }
 
-  private resolveRoles(role: string, hasGlobalLocationAccess: boolean) {
-    if (hasGlobalLocationAccess) {
+  private canManageUser(actor: UserWithRelations, targetUser: UserWithRelations) {
+    if (this.isPlatformAdmin(actor)) {
+      return true;
+    }
+
+    if (!this.isCompanyAdmin(actor)) {
+      return false;
+    }
+
+    return (
+      actor.userType === 'company' &&
+      targetUser.userType === 'company' &&
+      actor.companyId === targetUser.companyId
+    );
+  }
+
+  private resolveRoles(role: string, userType: 'platform' | 'company') {
+    const normalizedRole = role.trim().toLowerCase();
+
+    if (userType === 'platform') {
+      return [this.toRoleItem(normalizedRole)];
+    }
+
+    if (COMPANY_ADMIN_ROLES.has(normalizedRole)) {
       return [
-        this.toRoleItem('cashier'),
-        this.toRoleItem('admin'),
+        this.toRoleItem(normalizedRole),
         this.toRoleItem('store_manager'),
+        this.toRoleItem('cashier'),
       ];
     }
 
-    const normalizedRole = role.trim().toLowerCase();
-    return [
-      this.toRoleItem(
-        normalizedRole in ROLE_DEFINITIONS ? normalizedRole : role,
-      ),
-    ];
+    return [this.toRoleItem(normalizedRole)];
   }
 
   private toRoleItem(roleCode: string) {
@@ -626,66 +1005,259 @@ export class UsersService {
     };
   }
 
-  private toShopItem(locationCode: string) {
-    const normalizedLocationCode = this.normalizeLocationCode(locationCode);
-    const definition = SHOP_DEFINITIONS[normalizedLocationCode];
-
-    if (definition) {
-      return {
-        id: definition.id,
-        shop_id: definition.shop_id,
-        shop: {
-          name: definition.name,
-        },
-      };
-    }
-
+  private toCompanyItem(company: {
+    id: string;
+    login: string;
+    name: string;
+    subdomain: string;
+    isActive: boolean;
+  }) {
     return {
-      id: normalizedLocationCode,
-      shop_id: normalizedLocationCode,
+      id: company.id,
+      company_id: company.id,
+      login: company.login,
+      subdomain: company.subdomain,
+      name: company.name,
+      is_active: company.isActive,
+    };
+  }
+
+  private toShopItem(shop: {
+    id: string;
+    companyId: string;
+    name: string;
+    branchCode: string;
+    isActive: boolean;
+  }) {
+    return {
+      id: shop.id,
+      shop_id: shop.id,
+      company_id: shop.companyId,
+      branch_code: shop.branchCode,
+      is_active: shop.isActive,
       shop: {
-        name: normalizedLocationCode,
+        name: shop.name,
       },
     };
   }
 
-  private findBranchCodeByShopId(shopId: string) {
-    return this.resolveShopDefinition(shopId)?.branchCode;
-  }
+  private async resolveCompanyIdForActor(value: unknown, actor?: UserWithRelations) {
+    if (actor?.userType === 'company') {
+      const companyActor = actor;
 
-  private normalizeLocationCode(locationCode: string) {
-    return (
-      this.resolveShopDefinition(locationCode)?.branchCode ??
-      locationCode.trim()
-    );
-  }
+      if (!companyActor.companyId) {
+        throw new ForbiddenException('Company admin is missing company');
+      }
 
-  private resolveShopDefinition(locationIdentifier: string) {
-    const normalizedIdentifier = locationIdentifier.trim();
-    const loweredIdentifier = normalizedIdentifier.toLowerCase();
-    const match = Object.entries(SHOP_DEFINITIONS).find(
-      ([branchCode, definition]) => {
-        const aliases = definition.aliases ?? [];
+      const requestedCompanyId = this.optionalString(value);
+      if (requestedCompanyId && requestedCompanyId !== companyActor.companyId) {
+        throw new ForbiddenException('You cannot create users for another company');
+      }
 
-        return (
-          branchCode === normalizedIdentifier ||
-          definition.id === normalizedIdentifier ||
-          definition.shop_id === normalizedIdentifier ||
-          definition.name.toLowerCase() === loweredIdentifier ||
-          aliases.includes(normalizedIdentifier)
-        );
-      },
-    );
-
-    if (!match) {
-      return undefined;
+      return companyActor.companyId;
     }
 
-    const [branchCode, definition] = match;
-    return {
-      branchCode,
-      definition,
-    };
+    const identifier = this.requireString(value, 'company_id');
+    const company = await this.db.company.findFirst({
+      where: {
+        OR: [{ id: identifier }, { login: identifier.toLowerCase() }],
+      },
+    });
+
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    return company.id;
+  }
+
+  private async resolveAllowedShopsForWrite(
+    companyId: string,
+    rawAllowedShopIds: unknown,
+    fallbackShopIdentifier?: string,
+  ) {
+    const explicitIds = Array.isArray(rawAllowedShopIds)
+      ? rawAllowedShopIds.filter(
+          (value): value is string =>
+            typeof value === 'string' && value.trim().length > 0,
+        )
+      : [];
+    const identifiers = explicitIds.length
+      ? explicitIds
+      : fallbackShopIdentifier
+        ? [fallbackShopIdentifier]
+        : [];
+
+    if (!identifiers.length) {
+      const companyShops = await this.db.shop.findMany({
+        where: {
+          companyId,
+          isActive: true,
+        },
+        orderBy: {
+          name: 'asc',
+        },
+      });
+
+      return companyShops.length === 1 ? companyShops : [];
+    }
+
+    const shops = await Promise.all(
+      identifiers.map((identifier) =>
+        this.findShopByIdentifierOrThrow(identifier, companyId),
+      ),
+    );
+
+    return shops.filter(
+      (shop, index, array) => array.findIndex((item) => item.id === shop.id) === index,
+    );
+  }
+
+  private async resolveCurrentShopForWrite(
+    companyId: string,
+    requestedShopIdentifier: string | undefined,
+    allowedShops: Array<{
+      id: string;
+      companyId: string;
+      name: string;
+      branchCode: string;
+      isActive: boolean;
+      createdAt: Date;
+      updatedAt: Date;
+    }>,
+  ) {
+    if (requestedShopIdentifier) {
+      const requestedShop = await this.findShopByIdentifierOrThrow(
+        requestedShopIdentifier,
+        companyId,
+      );
+
+      if (!allowedShops.some((shop) => shop.id === requestedShop.id)) {
+        throw new BadRequestException(
+          'current_shop_id must be included in allowed_shop_ids',
+        );
+      }
+
+      return requestedShop;
+    }
+
+    return allowedShops[0] ?? null;
+  }
+
+  private async findShopByIdentifierOrThrow(shopIdentifier: string, companyId: string) {
+    const identifier = shopIdentifier.trim();
+    const shop = await this.db.shop.findFirst({
+      where: {
+        companyId,
+        OR: [{ id: identifier }, { branchCode: identifier }],
+      },
+    });
+
+    if (!shop) {
+      throw new NotFoundException('Shop not found');
+    }
+
+    return shop;
+  }
+
+  private async resolveAvailableShopsForUser(user: UserWithRelations) {
+    if (user.userType !== 'company' || !user.companyId) {
+      return [];
+    }
+
+    if (COMPANY_ADMIN_ROLES.has(user.role.trim().toLowerCase())) {
+      const allCompanyShops = await this.db.shop.findMany({
+        where: {
+          companyId: user.companyId,
+          isActive: true,
+        },
+        orderBy: {
+          name: 'asc',
+        },
+      });
+
+      if (!user.shopAccesses.length && allCompanyShops.length === 1) {
+        await this.db.userShopAccess.createMany({
+          data: [
+            {
+              userId: user.id,
+              shopId: allCompanyShops[0].id,
+            },
+          ],
+          skipDuplicates: true,
+        });
+      }
+
+      return allCompanyShops;
+    }
+
+    if (user.shopAccesses.length) {
+      return user.shopAccesses
+        .map((access) => access.shop)
+        .filter((shop) => shop.isActive);
+    }
+
+    if (user.currentShop) {
+      await this.db.userShopAccess.createMany({
+        data: [
+          {
+            userId: user.id,
+            shopId: user.currentShop.id,
+          },
+        ],
+        skipDuplicates: true,
+      });
+
+      return [user.currentShop];
+    }
+
+    const allCompanyShops = await this.db.shop.findMany({
+      where: {
+        companyId: user.companyId,
+        isActive: true,
+      },
+      orderBy: {
+        name: 'asc',
+      },
+    });
+
+    if (allCompanyShops.length === 1) {
+      await this.db.userShopAccess.createMany({
+        data: [
+          {
+            userId: user.id,
+            shopId: allCompanyShops[0].id,
+          },
+        ],
+        skipDuplicates: true,
+      });
+
+      return allCompanyShops;
+    }
+
+    return [];
+  }
+
+  private resolveCurrentShop(
+    user: UserWithRelations,
+    availableShops: Array<{
+      id: string;
+      companyId: string;
+      name: string;
+      branchCode: string;
+      isActive: boolean;
+      createdAt: Date;
+      updatedAt: Date;
+    }>,
+  ) {
+    if (!availableShops.length) {
+      return null;
+    }
+
+    return (
+      availableShops.find((shop) => shop.id === user.currentShopId) ??
+      availableShops[0]
+    );
   }
 
   private extractToken(authorization?: string) {
@@ -726,9 +1298,10 @@ export class UsersService {
     }
   }
 
-  private toProfileResponse(user: User) {
+  private toProfileResponse(user: UserWithRelations) {
     return {
       id: user.id,
+      user_type: user.userType,
       first_name: user.firstName,
       last_name: user.lastName,
       full_name: `${user.firstName} ${user.lastName}`.trim(),
@@ -736,6 +1309,10 @@ export class UsersService {
       avatar_url: user.avatarUrl,
       language: user.language,
       theme: user.theme,
+      company_id: user.companyId,
+      current_shop_id: user.currentShopId,
+      can_switch_shops: Boolean(user.canSwitchShops),
+      allowed_shop_ids: user.shopAccesses.map((access) => access.shopId),
     };
   }
 

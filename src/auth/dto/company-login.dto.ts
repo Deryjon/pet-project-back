@@ -1,7 +1,7 @@
 import { IsNotEmpty, IsString } from 'class-validator';
 
-export class ShopLoginDto {
+export class CompanyLoginDto {
   @IsString()
   @IsNotEmpty()
-  shop_login!: string;
+  company_login!: string;
 }

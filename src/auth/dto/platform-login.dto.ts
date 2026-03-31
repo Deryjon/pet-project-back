@@ -1,10 +1,6 @@
 import { IsNotEmpty, IsString, Matches, MinLength } from 'class-validator';
 
-export class LoginDto {
-  @IsString()
-  @IsNotEmpty()
-  company_login!: string;
-
+export class PlatformLoginDto {
   @IsString()
   @IsNotEmpty()
   @Matches(/^\+?[0-9]{7,15}$/)

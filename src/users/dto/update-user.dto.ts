@@ -1,4 +1,11 @@
-import { IsOptional, IsString, Matches, MinLength } from 'class-validator';
+import {
+  IsArray,
+  IsBoolean,
+  IsOptional,
+  IsString,
+  Matches,
+  MinLength,
+} from 'class-validator';
 
 export class UpdateUserDto {
   @IsOptional()
@@ -21,7 +28,27 @@ export class UpdateUserDto {
 
   @IsOptional()
   @IsString()
+  user_type?: string;
+
+  @IsOptional()
+  @IsString()
+  company_id?: string;
+
+  @IsOptional()
+  @IsString()
   branch_location?: string;
+
+  @IsOptional()
+  @IsString()
+  current_shop_id?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  can_switch_shops?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  allowed_shop_ids?: string[];
 
   @IsOptional()
   @IsString()

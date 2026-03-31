@@ -24,8 +24,8 @@ export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Get('users')
-  findAll() {
-    return this.usersService.findAll();
+  findAll(@Headers('authorization') authorization?: string) {
+    return this.usersService.findAll(authorization);
   }
 
   @Post('users/add')
@@ -33,14 +33,20 @@ export class UsersController {
     @Body() body: CreateUserDto,
     @Headers('authorization') authorization?: string,
   ) {
-    await this.usersService.assertAdminAccess(authorization);
+    const actor = await this.usersService.assertAdminAccess(authorization);
 
-    return this.usersService.create(body as unknown as Record<string, unknown>);
+    return this.usersService.create(
+      body as unknown as Record<string, unknown>,
+      actor,
+    );
   }
 
   @Get('users/:id')
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.usersService.findOneResponse(id);
+  findOne(
+    @Param('id', ParseIntPipe) id: number,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.usersService.findOneResponse(id, authorization);
   }
 
   @Put('users/:id')
@@ -49,11 +55,12 @@ export class UsersController {
     @Body() body: UpdateUserDto,
     @Headers('authorization') authorization?: string,
   ) {
-    await this.usersService.assertAdminAccess(authorization);
+    const actor = await this.usersService.assertAdminAccess(authorization);
 
     return this.usersService.update(
       id,
       body as unknown as Record<string, unknown>,
+      actor,
     );
   }
 

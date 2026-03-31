@@ -3,6 +3,8 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
+  HttpCode,
   Param,
   Post,
   Put,
@@ -19,17 +21,21 @@ export class ProductsController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('search') search?: string,
+    @Headers('authorization') authorization?: string,
   ) {
     return this.productsService.findAll({
       page: Number(page) || 1,
       limit: Number(limit) || 20,
       search: search?.trim(),
-    });
+    }, authorization);
   }
 
   @Post('products')
-  create(@Body() body: Record<string, unknown>) {
-    return this.productsService.create(body);
+  create(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.create(body, authorization);
   }
 
   @Get('v2/product-characteristic')
@@ -59,6 +65,7 @@ export class ProductsController {
     @Query('retail_price_to') retailPriceTo?: string,
     @Query('wholesale_price') wholesalePrice?: string,
     @Query('free_price') freePrice?: string,
+    @Headers('authorization') authorization?: string,
   ) {
     return this.productsService.findAllV2Extended({
       page: Number(page) || 1,
@@ -80,7 +87,7 @@ export class ProductsController {
       retailPriceTo: this.toNumber(retailPriceTo),
       wholesalePrice: this.toNumber(wholesalePrice),
       freePrice: this.toOptionalBoolean(freePrice),
-    });
+    }, authorization);
   }
 
   @Get('v2/product-stats')
@@ -101,6 +108,7 @@ export class ProductsController {
     @Query('retail_price_to') retailPriceTo?: string,
     @Query('wholesale_price') wholesalePrice?: string,
     @Query('free_price') freePrice?: string,
+    @Headers('authorization') authorization?: string,
   ) {
     return this.productsService.getCatalogStatistics({
       search: search?.trim() || fieldSearchKey?.trim(),
@@ -118,11 +126,15 @@ export class ProductsController {
       retailPriceTo: this.toNumber(retailPriceTo),
       wholesalePrice: this.toNumber(wholesalePrice),
       freePrice: this.toOptionalBoolean(freePrice),
-    });
+    }, authorization);
   }
 
   @Post('v2/product')
-  findAllV2Post(@Body() body: Record<string, unknown>) {
+  @HttpCode(200)
+  findAllV2Post(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
     if (this.isCatalogCreateRequest(body)) {
       throw new BadRequestException(
         'POST /api/v2/product is deprecated for catalog create. Use POST /api/v2/product/create.',
@@ -158,20 +170,24 @@ export class ProductsController {
       retailPriceTo: this.toNumber(body.retail_price_to),
       wholesalePrice: this.toNumber(body.wholesale_price),
       freePrice: this.toOptionalBoolean(body.free_price),
-    });
+    }, authorization);
   }
 
   @Post('v2/product/create')
-  createCatalogProduct(@Body() body: Record<string, unknown>) {
-    return this.productsService.createCatalogProduct(body);
+  createCatalogProduct(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.createCatalogProduct(body, authorization);
   }
 
   @Put('v2/product/:id')
   updateCatalogProduct(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
   ) {
-    return this.productsService.updateCatalogProduct(id, body);
+    return this.productsService.updateCatalogProduct(id, body, authorization);
   }
 
   @Post('v2/product/generate-sku')
@@ -185,7 +201,11 @@ export class ProductsController {
   }
 
   @Post('v2/product-search-with-filters')
-  findAllV2Catalog(@Body() body: Record<string, unknown>) {
+  @HttpCode(200)
+  findAllV2Catalog(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
     return this.productsService.findAllV2Extended({
       page: this.toNumber(body.page) || 1,
       limit: this.toNumber(body.limit) || 20,
@@ -208,11 +228,15 @@ export class ProductsController {
       retailPriceTo: this.toNumber(body.retail_price_to),
       wholesalePrice: this.toNumber(body.wholesale_price),
       freePrice: this.toOptionalBoolean(body.free_price),
-    });
+    }, authorization);
   }
 
   @Post('v2/product-search-stats-with-filters')
-  getProductStatsWithFilters(@Body() body: Record<string, unknown>) {
+  @HttpCode(200)
+  getProductStatsWithFilters(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
     return this.productsService.getCatalogStatistics({
       search:
         this.toOptionalString(body.search) ??
@@ -231,7 +255,7 @@ export class ProductsController {
       retailPriceTo: this.toNumber(body.retail_price_to),
       wholesalePrice: this.toNumber(body.wholesale_price),
       freePrice: this.toOptionalBoolean(body.free_price),
-    });
+    }, authorization);
   }
 
   private toStringArray(value: unknown) {

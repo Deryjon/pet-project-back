@@ -8,16 +8,22 @@ import {
   Post,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
+import { CompanyLoginDto } from './dto/company-login.dto';
 import { LoginDto } from './dto/login.dto';
-import { ShopLoginDto } from './dto/shop-login.dto';
+import { PlatformLoginDto } from './dto/platform-login.dto';
 
 @Controller()
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  @Post('auth/shop-login')
-  shopLogin(@Body() dto: ShopLoginDto) {
-    return this.authService.shopLogin(dto);
+  @Post('auth/company-login')
+  companyLogin(@Body() dto: CompanyLoginDto) {
+    return this.authService.companyLogin(dto);
+  }
+
+  @Post('auth/platform-login')
+  platformLogin(@Body() dto: PlatformLoginDto) {
+    return this.authService.platformLogin(dto);
   }
 
   @Post('auth/login')

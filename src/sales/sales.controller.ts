@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   ParseIntPipe,
   Query,
   Param,
@@ -16,23 +17,29 @@ export class SalesController {
   constructor(private readonly salesService: SalesService) {}
 
   @Get('sales')
-  findAll() {
-    return this.salesService.findAll();
+  findAll(@Headers('authorization') authorization?: string) {
+    return this.salesService.findAll(authorization);
   }
 
   @Post('new-sale')
-  createDraft() {
-    return this.salesService.createDraft();
+  createDraft(@Headers('authorization') authorization?: string) {
+    return this.salesService.createDraft(authorization);
   }
 
   @Post('v2/order')
-  createOrder(@Body() body: Record<string, unknown>) {
-    return this.salesService.createOrder(body);
+  createOrder(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.createOrder(body, authorization);
   }
 
   @Get('v2/order/:id')
-  findOrder(@Param('id') id: string) {
-    return this.salesService.findOrder(id);
+  findOrder(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.findOrder(id, authorization);
   }
 
   @Get('v2/new-sale/products')
@@ -41,18 +48,23 @@ export class SalesController {
     @Query('limit') limit?: string,
     @Query('search') search?: string,
     @Query('shop_id') shopId?: string,
+    @Headers('authorization') authorization?: string,
   ) {
     return this.salesService.findProductsForNewSale({
       page: Number(page) || 1,
       limit: Number(limit) || 10,
       search: search?.trim(),
       shopId: shopId?.trim(),
-    });
+    }, authorization);
   }
 
   @Post('v2/order-payment/:id')
-  payOrder(@Param('id') id: string, @Body() body: Record<string, unknown>) {
-    return this.salesService.payOrder(id, body);
+  payOrder(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.payOrder(id, body, authorization);
   }
 
   @Get('new-sale/:id')
@@ -64,8 +76,9 @@ export class SalesController {
   addItem(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
   ) {
-    return this.salesService.addItem(id, body);
+    return this.salesService.addItem(id, body, authorization);
   }
 
   @Put('new-sale/:id/discount')
@@ -80,8 +93,9 @@ export class SalesController {
   pay(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
   ) {
-    return this.salesService.pay(id, body);
+    return this.salesService.pay(id, body, authorization);
   }
 
   @Delete('new-sale/:id')

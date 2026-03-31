@@ -1,4 +1,6 @@
 import {
+  IsArray,
+  IsBoolean,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -25,11 +27,31 @@ export class CreateUserDto {
 
   @IsOptional()
   @IsString()
+  user_type?: string;
+
+  @IsOptional()
+  @IsString()
   role?: string;
 
   @IsOptional()
   @IsString()
+  company_id?: string;
+
+  @IsOptional()
+  @IsString()
   branch_location?: string;
+
+  @IsOptional()
+  @IsString()
+  current_shop_id?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  can_switch_shops?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  allowed_shop_ids?: string[];
 
   @IsOptional()
   @IsString()

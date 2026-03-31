@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { PrismaService } from '../prisma/prisma.service';
 
 type CurrencyConfig = {
   id: string;
@@ -387,6 +388,12 @@ const DEFAULT_CHEQUES: ChequeProfile[] = [
 
 @Injectable()
 export class CompanySettingsService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  private get db(): any {
+    return this.prisma as any;
+  }
+
   getDefaultCurrency(companyId?: string): CompanyCurrencyConfig {
     const targetCompanyId = companyId?.trim() || DEFAULT_COMPANY_ID;
     const map = this.parseJsonMap<CompanyCurrencyConfig>(
@@ -453,11 +460,28 @@ export class CompanySettingsService {
     };
   }
 
-  getCompany() {
+  async getCompany() {
+    const companyFromDb = await this.db.company.findFirst({
+      where: {
+        isActive: true,
+      },
+      orderBy: {
+        createdAt: 'asc',
+      },
+    });
+
     const custom = this.parseJsonObject(process.env.COMPANY_PROFILE_JSON);
-    const merged = {
+    const merged: Record<string, unknown> = {
       ...DEFAULT_COMPANY_PROFILE,
       ...custom,
+      ...(companyFromDb
+        ? {
+            id: companyFromDb.id,
+            name: companyFromDb.name,
+            subdomen: companyFromDb.subdomain,
+            is_active: companyFromDb.isActive,
+          }
+        : {}),
     };
 
     const zones = this.parseJsonArray<TimeZoneItem>(
@@ -482,20 +506,56 @@ export class CompanySettingsService {
     };
   }
 
-  getShops(query: {
+  async getShops(query: {
     page?: number;
     limit?: number;
     name?: string;
     companyId?: string;
   }) {
-    const shops = this.parseJsonArray<ShopProfile>(
-      process.env.SHOPS_JSON,
-      DEFAULT_SHOPS,
-    );
     const safeLimit = this.normalizeLimit(query.limit, 10);
     const safePage = Math.max(1, Number(query.page) || 1);
     const normalizedName = (query.name ?? '').trim().toLowerCase();
     const companyId = query.companyId?.trim() || DEFAULT_COMPANY_ID;
+    const dbShops = await this.db.shop.findMany({
+      where: {
+        companyId,
+        ...(normalizedName
+          ? {
+              name: {
+                contains: normalizedName,
+                mode: 'insensitive',
+              },
+            }
+          : {}),
+      },
+      orderBy: {
+        name: 'asc',
+      },
+    });
+
+    if (dbShops.length) {
+      return {
+        count: dbShops.length,
+        shops: dbShops
+          .slice((safePage - 1) * safeLimit, safePage * safeLimit)
+          .map((shop) => ({
+            id: shop.id,
+            company_id: shop.companyId,
+            name: shop.name,
+            branch_code: shop.branchCode,
+            address: '',
+            phone_numbers: [],
+            cash_boxes_count: 0,
+            cash_boxes: [],
+            is_active: shop.isActive,
+          })),
+      };
+    }
+
+    const shops = this.parseJsonArray<ShopProfile>(
+      process.env.SHOPS_JSON,
+      DEFAULT_SHOPS,
+    );
 
     const allForCompany = shops.filter(
       (shop) => this.stringOrDefault(shop.company_id, '') === companyId,

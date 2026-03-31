@@ -3,8 +3,9 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
 import { UsersService } from '../users/users.service';
+import { CompanyLoginDto } from './dto/company-login.dto';
 import { LoginDto } from './dto/login.dto';
-import { ShopLoginDto } from './dto/shop-login.dto';
+import { PlatformLoginDto } from './dto/platform-login.dto';
 
 @Injectable()
 export class AuthService {
@@ -13,20 +14,24 @@ export class AuthService {
     private readonly jwtService: JwtService,
   ) {}
 
-  shopLogin(dto: ShopLoginDto) {
-    const shop = this.usersService.findShopByIdentifier(dto.shop_login);
+  async companyLogin(dto: CompanyLoginDto) {
+    const company = await this.usersService.findCompanyByIdentifier(
+      dto.company_login,
+    );
 
-    if (!shop) {
-      throw new UnauthorizedException('Shop not found');
+    if (!company) {
+      throw new UnauthorizedException('Company not found');
     }
 
     return {
-      shop,
+      company,
     };
   }
 
-  async login(dto: LoginDto) {
-    const user = await this.usersService.findByPhoneNumber(dto.phone_number);
+  async platformLogin(dto: PlatformLoginDto) {
+    const user = await this.usersService.findPlatformUserByPhoneNumber(
+      dto.phone_number,
+    );
 
     if (!user) {
       throw new UnauthorizedException('User not found');
@@ -38,23 +43,14 @@ export class AuthService {
       throw new UnauthorizedException('Invalid password');
     }
 
-    const effectiveBranchCode =
-      this.usersService.findBranchCodeByShopIdentifier(dto.shop_login);
-
-    if (!effectiveBranchCode) {
-      throw new UnauthorizedException('Shop not found');
-    }
-
-    if (!this.usersService.userHasAccessToBranch(user, effectiveBranchCode)) {
-      throw new UnauthorizedException(
-        'This user does not have access to the requested shop',
-      );
-    }
-
+    const authProfile = await this.usersService.toAuthProfile(user);
     const payload = {
       sub: user.id,
       role: user.role,
-      branchCode: effectiveBranchCode,
+      userType: authProfile.user_type,
+      companyId: null,
+      currentShopId: null,
+      branchCode: null,
       phoneNumber: user.phoneNumber,
     };
     const accessToken = await this.jwtService.signAsync(payload);
@@ -62,18 +58,62 @@ export class AuthService {
     return {
       token: accessToken,
       access_token: accessToken,
-      user: await this.usersService.toAuthProfile({
-        ...user,
-        branchCode: effectiveBranchCode,
-      }),
+      user: authProfile,
+    };
+  }
+
+  async login(dto: LoginDto) {
+    const companyId = await this.usersService.findCompanyIdByIdentifier(
+      dto.company_login,
+    );
+
+    if (!companyId) {
+      throw new UnauthorizedException('Company not found');
+    }
+
+    const user = await this.usersService.findByPhoneNumberAndCompany(
+      dto.phone_number,
+      companyId,
+    );
+
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    const isPasswordValid = await bcrypt.compare(dto.password, user.password);
+
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Invalid password');
+    }
+
+    const preparedUser =
+      await this.usersService.prepareAuthenticatedUserForLogin(
+        user.id,
+        companyId,
+      );
+    const authProfile = await this.usersService.toAuthProfile(preparedUser);
+
+    const payload = {
+      sub: preparedUser.id,
+      role: preparedUser.role,
+      userType: authProfile.user_type,
+      companyId: authProfile.company_id,
+      currentShopId: authProfile.current_shop_id,
+      branchCode: authProfile.current_shop?.branch_code ?? null,
+      phoneNumber: preparedUser.phoneNumber,
+    };
+    const accessToken = await this.jwtService.signAsync(payload);
+
+    return {
+      token: accessToken,
+      access_token: accessToken,
+      user: authProfile,
     };
   }
 
   async me(authorization?: string) {
     const payload = await this.verifyAccessToken(authorization);
-
-    const user = await this.usersService.findByIdOrThrow(payload.sub);
-
+    const user = await this.usersService.prepareAuthenticatedUser(payload.sub);
     return this.usersService.toAuthProfile(user);
   }
 

@@ -6,6 +6,7 @@ import {
 import { randomUUID } from 'crypto';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { UsersService } from '../users/users.service';
 
 const COMPANY_ID = process.env.COMPANY_ID ?? '';
 const DEFAULT_PRODUCT_TYPE_ID =
@@ -40,10 +41,19 @@ export class SalesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly companySettingsService: CompanySettingsService,
+    private readonly usersService: UsersService,
   ) {}
 
-  async findAll() {
+  private async getRequestContext(authorization?: string) {
+    return authorization
+      ? this.usersService.getRequestContext(authorization)
+      : null;
+  }
+
+  async findAll(authorization?: string) {
+    const context = await this.getRequestContext(authorization);
     const sales = await this.prisma.sale.findMany({
+      where: this.buildSaleScope(context),
       include: {
         user: true,
         items: true,
@@ -53,31 +63,34 @@ export class SalesService {
       },
     });
 
-    return sales.map((sale) => this.toSaleListItem(sale));
+    return sales.map((sale) => this.toSaleListItem(sale, context));
   }
 
-  async createDraft() {
+  async createDraft(authorization?: string) {
+    const context = await this.getRequestContext(authorization);
     const sale = await this.prisma.sale.create({
       data: {
         number: this.generateSaleNumber(),
+        branchCode: context?.currentBranchCode ?? undefined,
+        userId: context?.userId ?? undefined,
       },
     });
 
     return this.toDraftSummary(sale);
   }
 
-  async createOrder(body: Record<string, unknown>) {
+  async createOrder(body: Record<string, unknown>, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
     const shopId = this.optionalString(body.shop_id) ?? '';
-    const branchCode = shopId
-      ? this.resolveBranchCodeByShopId(shopId)
-      : undefined;
+    const branchCode = this.resolveScopedBranchCode(shopId, context);
 
     const sale = await this.prisma.sale.create({
       data: {
         number: this.generateOrderNumber(),
         status: 'draft',
         isDraft: true,
-        branchCode,
+        branchCode: branchCode ?? context?.currentBranchCode ?? undefined,
+        userId: context?.userId ?? undefined,
       },
     });
 
@@ -99,7 +112,8 @@ export class SalesService {
     };
   }
 
-  async findOrder(id: string) {
+  async findOrder(id: string, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
     const saleId = this.parseEntityId(id, 'order id');
     const sale = await this.prisma.sale.findUnique({
       where: { id: saleId },
@@ -123,7 +137,8 @@ export class SalesService {
       throw new NotFoundException('Order not found');
     }
 
-    return this.toV2OrderResponse(sale);
+    this.assertSaleAccess(sale, context);
+    return this.toV2OrderResponse(sale, context);
   }
 
   async findProductsForNewSale(args: {
@@ -131,14 +146,13 @@ export class SalesService {
     limit: number;
     search?: string;
     shopId?: string;
-  }) {
+  }, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
     const safePage = Math.max(1, args.page);
     const safeLimit = Math.min(Math.max(1, args.limit), 100);
-    const branchCode = args.shopId
-      ? this.resolveBranchCodeByShopId(args.shopId)
-      : undefined;
+    const branchCode = this.resolveScopedBranchCode(args.shopId, context);
 
-    const where = args.search
+    const where: any = args.search
       ? {
           OR: [
             { name: { contains: args.search, mode: 'insensitive' as const } },
@@ -148,7 +162,17 @@ export class SalesService {
             },
           ],
         }
-      : undefined;
+      : {};
+
+    if (context?.allowedBranchCodes?.length) {
+      where.stocks = {
+        some: {
+          branchCode: {
+            in: context.allowedBranchCodes,
+          },
+        },
+      };
+    }
 
     const [count, products] = await this.prisma.$transaction([
       this.prisma.product.count({ where }),
@@ -170,7 +194,7 @@ export class SalesService {
     const currencyCode =
       this.companySettingsService.getDefaultCurrencyIsoCode();
     const normalizedProducts = products.map((product) =>
-      this.toNewSaleProductResponse(product, branchCode),
+      this.toNewSaleProductResponse(product, branchCode, context),
     );
     const totals = normalizedProducts.reduce(
       (acc, product) => {
@@ -255,7 +279,8 @@ export class SalesService {
     };
   }
 
-  async payOrder(id: string, body: Record<string, unknown>) {
+  async payOrder(id: string, body: Record<string, unknown>, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
     const saleId = this.parseEntityId(id, 'order id');
     const sale = await this.prisma.sale.findUnique({
       where: { id: saleId },
@@ -275,6 +300,8 @@ export class SalesService {
     if (!sale) {
       throw new NotFoundException('Order not found');
     }
+
+    this.assertSaleAccess(sale, context);
 
     if (!sale.isDraft) {
       return {
@@ -387,7 +414,8 @@ export class SalesService {
     return this.toDraftResponse(sale);
   }
 
-  async addItem(id: number, body: Record<string, unknown>) {
+  async addItem(id: number, body: Record<string, unknown>, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
     const productId = this.toInt(body.product_id);
     const quantity = this.toInt(body.quantity) ?? 1;
     const salePrice = this.toNumber(body.sale_price);
@@ -401,6 +429,7 @@ export class SalesService {
     }
 
     const sale = await this.findSaleOrThrow(id);
+    this.assertSaleAccess(sale, context);
     if (!sale.isDraft) {
       throw new BadRequestException('Cannot update paid sale');
     }
@@ -470,11 +499,13 @@ export class SalesService {
     return this.findDraft(id);
   }
 
-  async pay(id: number, body: Record<string, unknown>) {
+  async pay(id: number, body: Record<string, unknown>, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
     const sale = await this.findSaleOrThrow(id);
+    this.assertSaleAccess(sale, context);
 
     if (!sale.isDraft) {
-      return this.toSaleListItem(sale);
+      return this.toSaleListItem(sale, context);
     }
 
     await this.recalculateSale(id);
@@ -495,7 +526,7 @@ export class SalesService {
       },
     });
 
-    return this.toSaleListItem(updatedSale);
+    return this.toSaleListItem(updatedSale, context);
   }
 
   async removeDraft(id: number) {
@@ -559,7 +590,7 @@ export class SalesService {
     discountPercent: number;
     discountAmount: number;
     payableTotal: number;
-  }) {
+  }, context?: any) {
     return {
       id: sale.id,
       sid: sale.number,
@@ -587,7 +618,7 @@ export class SalesService {
       sku: string | null;
       quantity: number;
     }[];
-  }) {
+  }, context?: any) {
     return {
       id: sale.id,
       sid: sale.number,
@@ -631,7 +662,7 @@ export class SalesService {
       barcode: string | null;
       sku: string | null;
     }[];
-  }) {
+  }, context?: any) {
     const sellerName = sale.user
       ? `${sale.user.firstName} ${sale.user.lastName}`.trim()
       : null;
@@ -704,13 +735,13 @@ export class SalesService {
         }[];
       } | null;
     }[];
-  }) {
+  }, context?: any) {
     const shop = this.resolveShopByBranchCode(sale.branchCode ?? '');
 
     return {
       id: String(sale.id),
       parent_id: '',
-      company_id: COMPANY_ID,
+      company_id: context?.companyId ?? COMPANY_ID,
       order_number: sale.number,
       order_status: sale.isDraft ? 'draft' : 'paid',
       order_detail: {
@@ -937,9 +968,12 @@ export class SalesService {
       }[];
     },
     branchCode?: string,
+    context?: any,
   ) {
     const currencyCode =
-      this.companySettingsService.getDefaultCurrencyIsoCode();
+      this.companySettingsService.getDefaultCurrencyIsoCode(
+        context?.companyId,
+      );
     const relevantStocks = branchCode
       ? product.stocks.filter((stock) => stock.branchCode === branchCode)
       : product.stocks;
@@ -959,7 +993,7 @@ export class SalesService {
 
     return {
       id: String(product.id),
-      company_id: COMPANY_ID,
+      company_id: context?.companyId ?? COMPANY_ID,
       name: product.name,
       sku: product.sku,
       barcode: product.barcode,
@@ -1151,6 +1185,54 @@ export class SalesService {
     )?.[0];
 
     return resolvedBranch ?? normalizedShopId;
+  }
+
+  private buildSaleScope(context: any) {
+    if (!context || context.userType !== 'company') {
+      return undefined;
+    }
+
+    return context.allowedBranchCodes?.length
+      ? {
+          branchCode: {
+            in: context.allowedBranchCodes,
+          },
+        }
+      : {
+          id: -1,
+        };
+  }
+
+  private resolveScopedBranchCode(shopId: string | undefined, context: any) {
+    const requestedBranchCode = shopId
+      ? this.resolveBranchCodeByShopId(shopId)
+      : undefined;
+
+    if (!context || context.userType !== 'company') {
+      return requestedBranchCode;
+    }
+
+    if (!requestedBranchCode) {
+      return context.currentBranchCode;
+    }
+
+    if (!context.allowedBranchCodes.includes(requestedBranchCode)) {
+      throw new BadRequestException(
+        'Requested shop is not available for this user',
+      );
+    }
+
+    return requestedBranchCode;
+  }
+
+  private assertSaleAccess(sale: { branchCode: string | null }, context: any) {
+    if (!context || context.userType !== 'company' || !sale.branchCode) {
+      return;
+    }
+
+    if (!context.allowedBranchCodes.includes(sale.branchCode)) {
+      throw new NotFoundException('Order not found');
+    }
   }
 
   private formatDateTime(value: Date) {
