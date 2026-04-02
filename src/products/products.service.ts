@@ -820,6 +820,7 @@ export class ProductsService {
         shipments: this.buildCatalogShipmentResponse(
           createdProduct.id,
           shipmentsWithBranchCodes,
+          shopLookup,
           writeContext.companyId,
         ),
         stocktaking_id: this.optionalString(body.stocktaking_id) ?? '',
@@ -1019,6 +1020,7 @@ export class ProductsService {
           ? this.buildCatalogShipmentResponse(
               updatedProduct.id,
               shipmentsWithBranchCodes,
+              shopLookup,
               writeContext.companyId,
             )
           : [],
@@ -1358,7 +1360,9 @@ export class ProductsService {
     },
   ) {
     const currencyCode =
-      this.companySettingsService.getDefaultCurrencyIsoCode(context.companyId);
+      this.companySettingsService.getDefaultCurrencyIsoCode(
+        context.companyId ?? undefined,
+      );
     const shopPrices = this.extractShopPrices(
       body,
       shipments,
@@ -2084,15 +2088,26 @@ export class ProductsService {
     productId: number,
     shipments: Array<{
       shopId: string;
+      branchCode: string;
       quantity: number;
+      supplyPrice: number;
       retailPrice: number;
       supplierId?: string;
       hasTrigger: boolean;
       smallLeftMeasurementValue: number;
     }>,
+    shopLookup: Map<string, ResolvedShop>,
     companyId?: string | null,
   ) {
-    return shipments.map((shipment) => ({
+    const currencyCode =
+      this.companySettingsService.getDefaultCurrencyIsoCode(
+        companyId ?? undefined,
+      );
+
+    return shipments.map((shipment) => {
+      const shop = this.resolveShopByBranchCode(shipment.branchCode, shopLookup);
+
+      return ({
       comment: '',
       company_id: companyId ?? COMPANY_ID,
       created_at: this.formatDateTime(new Date()),
@@ -2114,14 +2129,14 @@ export class ProductsService {
           product_id: String(productId),
           product_name: '',
           product_sku: '',
-          retail_currency: '',
+          retail_currency: currencyCode,
           retail_price: shipment.retailPrice,
           serial_number: '',
           shipment_status_id: '',
           small_left_measurement_value: shipment.smallLeftMeasurementValue,
           supplier_id: shipment.supplierId ?? '',
-          supply_currency: '',
-          supply_price: 0,
+          supply_currency: currencyCode,
+          supply_price: shipment.supplyPrice,
           user: null,
           wholesale_price: 0,
         },
@@ -2131,9 +2146,10 @@ export class ProductsService {
       process_type: 0,
       shipment_status_id: '31cd30a7-46ae-460c-9530-7c2df1356b62',
       shipment_type_id: 'a230b02b-46f8-42f4-885e-d81813c297d6',
-      shop_id: shipment.shopId,
+      shop_id: shop.shop_id,
       total_loaded_items_measurement_value: 0,
-    }));
+    });
+    });
   }
 
   private resolveProductType(value: unknown) {
