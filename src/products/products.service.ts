@@ -21,6 +21,13 @@ type CatalogProductWithRelations = Prisma.ProductGetPayload<{
   };
 }>;
 
+type ResolvedShop = {
+  id: string;
+  shop_id: string;
+  shop_name: string;
+  branch_code: string;
+};
+
 const PRODUCT_CHARACTERISTICS = [
   {
     id: '1fec31bd-c0d7-424b-a46c-00b742cd5951',
@@ -340,11 +347,16 @@ export class ProductsService {
         take: safeLimit,
       }),
     ]);
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      products.flatMap((product) => product.stocks.map((stock) => stock.branchCode)),
+    );
 
     return {
       count,
       total: 0,
-      products: products.map((product) => this.toProductResponseV2(product)),
+      products: products.map((product) =>
+        this.toProductResponseV2(product, shopLookup),
+      ),
     };
   }
 
@@ -414,11 +426,17 @@ export class ProductsService {
         take: safeLimit,
       }),
     ]);
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      products.flatMap((product) => product.stocks.map((stock) => stock.branchCode)),
+      context?.companyId,
+    );
 
     const response: Record<string, unknown> = {
       count,
       total: 0,
-      products: products.map((product) => this.toProductResponseV2(product)),
+      products: products.map((product) =>
+        this.toProductResponseV2(product, shopLookup),
+      ),
       fields: this.getCatalogFields(),
     };
 
@@ -767,12 +785,17 @@ export class ProductsService {
         stocks: true,
       },
     });
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      shipmentsWithBranchCodes.map((shipment) => shipment.branchCode),
+      writeContext.companyId,
+    );
 
     const productResponse = this.toCatalogCreateProductResponse(
       createdProduct,
       body,
       supportsStock ? shipmentsWithBranchCodes : [],
       supplierIds,
+      shopLookup,
       writeContext,
     );
 
@@ -960,12 +983,17 @@ export class ProductsService {
         stocks: true,
       },
     });
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      shipmentsWithBranchCodes.map((shipment) => shipment.branchCode),
+      writeContext.companyId,
+    );
 
     const productResponse = this.toCatalogCreateProductResponse(
       updatedProduct,
       body,
       supportsStock ? shipmentsWithBranchCodes : [],
       supplierIds,
+      shopLookup,
       writeContext,
     );
 
@@ -1135,11 +1163,11 @@ export class ProductsService {
       purchasePrice: number | null;
       salePrice: number | null;
     }[];
-  }) {
+  }, shopLookup?: Map<string, ResolvedShop>) {
     const currencyCode =
       this.companySettingsService.getDefaultCurrencyIsoCode();
     const stockSummaries = product.stocks.map((stock) => {
-      const shop = this.resolveShopByBranchCode(stock.branchCode);
+      const shop = this.resolveShopByBranchCode(stock.branchCode, shopLookup);
       const measurementValue = stock.quantity;
       const supplyPrice = stock.purchasePrice ?? product.purchasePrice ?? 0;
       const retailPrice = stock.salePrice ?? product.salePrice ?? 0;
@@ -1313,6 +1341,7 @@ export class ProductsService {
     body: Record<string, unknown>,
     shipments: Array<{
       shopId: string;
+      branchCode: string;
       quantity: number;
       supplyPrice: number;
       retailPrice: number;
@@ -1321,6 +1350,7 @@ export class ProductsService {
       smallLeftMeasurementValue: number;
     }>,
     supplierIds: string[],
+    shopLookup: Map<string, ResolvedShop>,
     context: {
       userId: number;
       fullName: string;
@@ -1328,7 +1358,7 @@ export class ProductsService {
     },
   ) {
     const currencyCode =
-      this.companySettingsService.getDefaultCurrencyIsoCode();
+      this.companySettingsService.getDefaultCurrencyIsoCode(context.companyId);
     const shopPrices = this.extractShopPrices(
       body,
       shipments,
@@ -1346,12 +1376,15 @@ export class ProductsService {
     const measurementType = this.optionalString(body.measurement_type);
     const supportsStock = !this.isServiceProductType(productType);
     const stockSummaries = shipments.map((shipment) => {
+      const shop = this.resolveShopByBranchCode(shipment.branchCode, shopLookup);
       const supplySum = shipment.quantity * shipment.supplyPrice;
       const retailSum = shipment.quantity * shipment.retailPrice;
       const supplierId = shipment.supplierId ?? DEFAULT_EMPTY_SUPPLIER_ID;
 
       return {
-        shopId: shipment.shopId,
+        sourceShopId: shipment.shopId,
+        shopId: shop.shop_id,
+        shopName: shop.shop_name,
         measurementValue: shipment.quantity,
         supplyPrice: shipment.supplyPrice,
         retailPrice: shipment.retailPrice,
@@ -1374,6 +1407,37 @@ export class ProductsService {
       (sum, item) => sum + item.retailSum,
       0,
     );
+    const resolvedShopIdsBySourceId = new Map(
+      stockSummaries.map((item) => [item.sourceShopId, item.shopId]),
+    );
+    const normalizedShopPrices = shopPrices.map((item) => {
+      const retailPrice = item.retail_price;
+      const supplyPrice = item.supply_price;
+
+      return {
+        ...item,
+        shop_id: resolvedShopIdsBySourceId.get(item.shop_id) ?? item.shop_id,
+        retail_currency: item.retail_currency || currencyCode,
+        supply_currency: item.supply_currency || currencyCode,
+        currency_prices: item.currency_prices ?? [
+          {
+            currency: currencyCode,
+            retail_price: retailPrice,
+            min_supply_price: item.min_supply_price,
+            max_supply_price: item.max_supply_price,
+            supply_price: supplyPrice,
+            wholesale_price: item.wholesale_price,
+            min_price: item.min_price,
+            max_price: item.max_price,
+            prices_list: item.prices_list,
+          },
+        ],
+      };
+    });
+    const normalizedShopFreePrices = shopFreePrices.map((item) => ({
+      ...item,
+      shop_id: resolvedShopIdsBySourceId.get(item.shop_id) ?? item.shop_id,
+    }));
 
     return {
       additional_barcodes: null,
@@ -1437,7 +1501,7 @@ export class ProductsService {
       product_supply_stock: supportsStock
         ? stockSummaries.map((item) => ({
             shop_id: item.shopId,
-            shop_name: '',
+            shop_name: item.shopName,
             measurement_value: item.measurementValue,
             active_measurement_value: item.measurementValue,
             inactive_measurement_value: 0,
@@ -1452,7 +1516,7 @@ export class ProductsService {
       scale_code: 0,
       scale_plu: 0,
       set_products: [],
-      shop_free_prices: supportsStock ? shopFreePrices : [],
+      shop_free_prices: supportsStock ? normalizedShopFreePrices : [],
       shop_measurement_values: supportsStock
         ? stockSummaries.map((item) => ({
             small_left_measurement_value: item.smallLeftMeasurementValue,
@@ -1486,7 +1550,7 @@ export class ProductsService {
             total_inactive_retail_sum: 0,
           }))
         : [],
-      shop_prices: supportsStock ? shopPrices : [],
+      shop_prices: supportsStock ? normalizedShopPrices : [],
       sku: product.sku,
       sku_lower: '',
       sku_upper: '',
@@ -2533,8 +2597,15 @@ export class ProductsService {
     return this.toPrismaInputJsonValue(value);
   }
 
-  private resolveShopByBranchCode(branchCode: string) {
+  private resolveShopByBranchCode(
+    branchCode: string,
+    shopLookup?: Map<string, ResolvedShop>,
+  ) {
     const normalizedBranchCode = branchCode.trim();
+    const resolvedShopFromLookup = shopLookup?.get(normalizedBranchCode);
+    if (resolvedShopFromLookup) {
+      return resolvedShopFromLookup;
+    }
     const loweredBranchCode = normalizedBranchCode.toLowerCase();
     const resolvedShop = Object.entries(SHOP_BY_BRANCH_CODE).find(
       ([canonicalBranchCode, shop]) =>
@@ -2551,6 +2622,45 @@ export class ProductsService {
         shop_name: normalizedBranchCode,
       }
     );
+  }
+
+  private async buildShopLookupByBranchCodes(
+    branchCodes: string[],
+    companyId?: string | null,
+  ) {
+    const normalizedBranchCodes = [...new Set(
+      branchCodes.map((branchCode) => branchCode.trim()).filter(Boolean),
+    )];
+    const shopLookup = new Map<string, ResolvedShop>();
+
+    if (!normalizedBranchCodes.length) {
+      return shopLookup;
+    }
+
+    const shops = await this.prisma.shop.findMany({
+      where: {
+        branchCode: {
+          in: normalizedBranchCodes,
+        },
+        ...(companyId ? { companyId } : {}),
+      },
+      select: {
+        id: true,
+        name: true,
+        branchCode: true,
+      },
+    });
+
+    for (const shop of shops) {
+      shopLookup.set(shop.branchCode, {
+        id: shop.id,
+        shop_id: shop.id,
+        shop_name: shop.name,
+        branch_code: shop.branchCode,
+      });
+    }
+
+    return shopLookup;
   }
 
   private resolveBranchCodeByShopId(shopId: string) {
