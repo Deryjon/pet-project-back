@@ -1,7 +1,32 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
+import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { UsersService } from '../users/users.service';
+
+type CatalogProductWithRelations = Prisma.ProductGetPayload<{
+  include: {
+    brand: true;
+    suppliers: {
+      include: {
+        supplier: true;
+      };
+    };
+  };
+}>;
+
+type ResolvedShop = {
+  id: string;
+  shop_id: string;
+  shop_name: string;
+  branch_code: string;
+};
 
 const PRODUCT_CHARACTERISTICS = [
   {
@@ -65,10 +90,22 @@ const PRODUCT_CHARACTERISTICS = [
     deleted_at: 0,
   },
   {
+    id: 'de0efc87-089d-4f2c-8d9e-9e22a23d3c81',
+    company_id: '',
+    name: 'Поставщики',
+    system_name: 'supplier_name',
+    type: 'text',
+    is_deletable: false,
+    is_dynamic: false,
+    is_editable: false,
+    visible_when_deleted: false,
+    deleted_at: 0,
+  },
+  {
     id: '2bce31e3-c27e-4f6e-a45e-5801b50bdb0d',
     company_id: '',
     name: 'Оптовая цена',
-    system_name: 'wholesale_price',
+    system_name: 'discount_price',
     type: 'text',
     is_deletable: false,
     is_dynamic: false,
@@ -141,6 +178,19 @@ const PRODUCT_CHARACTERISTICS = [
 const COMPANY_ID = process.env.COMPANY_ID ?? '';
 const DEFAULT_PRODUCT_TYPE_ID =
   process.env.DEFAULT_PRODUCT_TYPE_ID ?? '69e939aa-9b8f-46a9-b605-8b2675475b7b';
+const PRODUCT_TYPE_IDS = {
+  goods:
+    process.env.PRODUCT_TYPE_GOODS_ID ?? '69e939aa-9b8f-46a9-b605-8b2675475b7b',
+  service:
+    process.env.PRODUCT_TYPE_SERVICE_ID ??
+    'f3e4d8de-5d2c-4ff0-b1c2-5ed0f7a27401',
+  kit:
+    process.env.PRODUCT_TYPE_KIT_ID ?? '85a7f6a9-0737-4f7e-a1a5-9d5f8f27d2f4',
+} as const;
+const SKU_PREFIX_LENGTH = 3;
+const SKU_NUMBER_LENGTH = 5;
+const BARCODE_BASE = 2000000000000;
+const BARCODE_MAX = 2999999999999;
 const DEFAULT_MEASUREMENT_UNIT = {
   id: '12a69bc0-c575-4586-9f0f-76e8295d4139',
   name: 'Штука',
@@ -171,9 +221,19 @@ type FindProductsArgs = {
   page: number;
   limit: number;
   search?: string;
+  sku?: string;
   statistics?: boolean;
   status?: string;
   archivedList?: boolean;
+  shopIds?: string[];
+  categoryIds?: string[];
+  measurementType?: string;
+  supplyPriceFrom?: number;
+  supplyPriceTo?: number;
+  retailPriceFrom?: number;
+  retailPriceTo?: number;
+  wholesalePrice?: number;
+  freePrice?: boolean;
   brandIds?: string[];
   supplierIds?: string[];
   order?: string[];
@@ -181,7 +241,17 @@ type FindProductsArgs = {
 
 @Injectable()
 export class ProductsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly companySettingsService: CompanySettingsService,
+    private readonly usersService: UsersService,
+  ) {}
+
+  private async getRequestContext(authorization?: string) {
+    return authorization
+      ? this.usersService.getRequestContext(authorization)
+      : null;
+  }
 
   getProductCharacteristics(limit?: string) {
     const parsedLimit = limit ? Number(limit) : PRODUCT_CHARACTERISTICS.length;
@@ -189,7 +259,10 @@ export class ProductsService {
       throw new BadRequestException('limit must be a positive number');
     }
 
-    const safeLimit = Math.min(Math.trunc(parsedLimit), PRODUCT_CHARACTERISTICS.length);
+    const safeLimit = Math.min(
+      Math.trunc(parsedLimit),
+      PRODUCT_CHARACTERISTICS.length,
+    );
 
     return {
       active_count: PRODUCT_CHARACTERISTICS.length,
@@ -198,19 +271,22 @@ export class ProductsService {
     };
   }
 
-  async findAll({ page, limit, search }: FindProductsArgs) {
+  async findAll({ page, limit, search }: FindProductsArgs, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
     const safePage = Math.max(1, page);
     const safeLimit = Math.min(Math.max(1, limit), 100);
-
-    const where: Prisma.ProductWhereInput | undefined = search
-      ? {
-          OR: [
-            { name: { contains: search, mode: 'insensitive' } },
-            { sku: { contains: search, mode: 'insensitive' } },
-            { barcode: { contains: search, mode: 'insensitive' } },
-          ],
-        }
-      : undefined;
+    const where = this.applyProductScope(
+      search
+        ? {
+            OR: [
+              { name: { contains: search, mode: 'insensitive' } },
+              { sku: { contains: search, mode: 'insensitive' } },
+              { barcode: { contains: search, mode: 'insensitive' } },
+            ],
+          }
+        : undefined,
+      context,
+    );
 
     const [total, products] = await this.prisma.$transaction([
       this.prisma.product.count({ where }),
@@ -271,11 +347,16 @@ export class ProductsService {
         take: safeLimit,
       }),
     ]);
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      products.flatMap((product) => product.stocks.map((stock) => stock.branchCode)),
+    );
 
     return {
       count,
       total: 0,
-      products: products.map((product) => this.toProductResponseV2(product)),
+      products: products.map((product) =>
+        this.toProductResponseV2(product, shopLookup),
+      ),
     };
   }
 
@@ -284,13 +365,46 @@ export class ProductsService {
     limit,
     search,
     statistics,
+    status,
+    archivedList,
+    shopIds,
+    categoryIds,
+    sku,
+    measurementType,
+    supplyPriceFrom,
+    supplyPriceTo,
+    retailPriceFrom,
+    retailPriceTo,
+    wholesalePrice,
+    freePrice,
     brandIds,
     supplierIds,
     order,
-  }: FindProductsArgs) {
+  }: FindProductsArgs, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
     const safePage = Math.max(1, page);
     const safeLimit = Math.min(Math.max(1, limit), 1000);
-    const where = this.buildProductWhere(search, brandIds, supplierIds);
+    const resolvedShopBranchCodes = await this.resolveBranchCodesForFilter(
+      shopIds,
+      context,
+    );
+    const where = this.applyProductScope(this.buildProductWhere(
+      search,
+      brandIds,
+      supplierIds,
+      status,
+      archivedList,
+      resolvedShopBranchCodes,
+      categoryIds,
+      sku,
+      measurementType,
+      supplyPriceFrom,
+      supplyPriceTo,
+      retailPriceFrom,
+      retailPriceTo,
+      wholesalePrice,
+      freePrice,
+    ), context);
     const orderBy = this.buildProductOrderBy(order);
 
     const [count, products] = await this.prisma.$transaction([
@@ -312,15 +426,28 @@ export class ProductsService {
         take: safeLimit,
       }),
     ]);
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      products.flatMap((product) => product.stocks.map((stock) => stock.branchCode)),
+      context?.companyId,
+    );
+
+    const visibleBranchCodes = resolvedShopBranchCodes?.length
+      ? resolvedShopBranchCodes
+      : context?.allowedBranchCodes;
 
     const response: Record<string, unknown> = {
       count,
       total: 0,
-      products: products.map((product) => this.toProductResponseV2(product)),
+      products: products.map((product) =>
+        this.toProductResponseV2(product, shopLookup, visibleBranchCodes),
+      ),
       fields: this.getCatalogFields(),
     };
 
     if (statistics) {
+      const visibleBranchCodes = resolvedShopBranchCodes?.length
+        ? resolvedShopBranchCodes
+        : context?.allowedBranchCodes;
       const productsForStatistics = await this.prisma.product.findMany({
         where,
         select: {
@@ -329,6 +456,15 @@ export class ProductsService {
           purchasePrice: true,
           salePrice: true,
           stocks: {
+            ...(visibleBranchCodes?.length
+              ? {
+                  where: {
+                    branchCode: {
+                      in: visibleBranchCodes,
+                    },
+                  },
+                }
+              : {}),
             select: {
               quantity: true,
               purchasePrice: true,
@@ -338,13 +474,94 @@ export class ProductsService {
         },
       });
 
-      Object.assign(response, this.buildProductsStatistics(productsForStatistics));
+      Object.assign(
+        response,
+        this.buildProductsStatistics(productsForStatistics),
+      );
     }
 
     return response;
   }
 
-  async create(body: Record<string, unknown>) {
+  async getCatalogStatistics({
+    search,
+    brandIds,
+    supplierIds,
+    status,
+    archivedList,
+    shopIds,
+    categoryIds,
+    sku,
+    measurementType,
+    supplyPriceFrom,
+    supplyPriceTo,
+    retailPriceFrom,
+    retailPriceTo,
+    wholesalePrice,
+    freePrice,
+  }: Omit<FindProductsArgs, 'page' | 'limit' | 'statistics' | 'order'>, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
+    const resolvedShopBranchCodes = await this.resolveBranchCodesForFilter(
+      shopIds,
+      context,
+    );
+    const where = this.applyProductScope(this.buildProductWhere(
+      search,
+      brandIds,
+      supplierIds,
+      status,
+      archivedList,
+      resolvedShopBranchCodes,
+      categoryIds,
+      sku,
+      measurementType,
+      supplyPriceFrom,
+      supplyPriceTo,
+      retailPriceFrom,
+      retailPriceTo,
+      wholesalePrice,
+      freePrice,
+    ), context);
+
+    const productsForStatistics = await this.prisma.product.findMany({
+      where,
+      select: {
+        id: true,
+        quantity: true,
+        purchasePrice: true,
+        salePrice: true,
+        stocks: {
+          ...(resolvedShopBranchCodes?.length
+            ? {
+                where: {
+                  branchCode: {
+                    in: resolvedShopBranchCodes,
+                  },
+                },
+              }
+            : context?.allowedBranchCodes?.length
+              ? {
+                  where: {
+                    branchCode: {
+                      in: context.allowedBranchCodes,
+                    },
+                  },
+                }
+              : {}),
+          select: {
+            quantity: true,
+            purchasePrice: true,
+            salePrice: true,
+          },
+        },
+      },
+    });
+
+    return this.buildProductsStatistics(productsForStatistics);
+  }
+
+  async create(body: Record<string, unknown>, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
     const name = this.requireString(body.name, 'name');
     const sku = this.optionalString(body.sku);
     const barcode = this.optionalString(body.barcode);
@@ -356,18 +573,23 @@ export class ProductsService {
     const markupPercent = this.toNumber(body.markup_percent);
     const salePrice = this.toNumber(body.sale_price);
     const quantity = this.toInt(body.quantity) ?? 0;
-    const metadata = this.toJsonValue(body.metadata);
-    const stocks = Array.isArray(body.stocks) ? body.stocks : [];
-    const supplierIds = Array.isArray(body.supplier_ids) ? body.supplier_ids : [];
+    const metadataInput = this.toJsonFieldValue(body.metadata);
+    const stocks = Array.isArray(body.stocks)
+      ? this.filterStockPayloadByContext(body.stocks, context)
+      : [];
+    const supplierIds = Array.isArray(body.supplier_ids)
+      ? body.supplier_ids
+      : [];
 
     const metadataObject =
-      metadata && typeof metadata === 'object' && !Array.isArray(metadata)
-        ? (metadata as Record<string, unknown>)
+      body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
+        ? (body.metadata as Record<string, unknown>)
         : undefined;
 
     const categoryName = this.optionalString(metadataObject?.category);
     const brandName = this.optionalString(
-      (metadataObject?.attributes as Record<string, unknown> | undefined)?.brand,
+      (metadataObject?.attributes as Record<string, unknown> | undefined)
+        ?.brand,
     );
     const supplierNames = new Set<string>();
 
@@ -379,18 +601,21 @@ export class ProductsService {
     }
 
     const metadataSupplier = this.optionalString(
-      (metadataObject?.attributes as Record<string, unknown> | undefined)?.supplier,
+      (metadataObject?.attributes as Record<string, unknown> | undefined)
+        ?.supplier,
     );
     if (metadataSupplier) {
       supplierNames.add(metadataSupplier);
     }
 
-    const totalQuantityFromStocks = stocks.reduce((sum, stock) => {
+    const totalQuantityFromStocks = stocks.reduce<number>((sum, stock) => {
       if (!stock || typeof stock !== 'object') {
         return sum;
       }
 
-      return sum + (this.toInt((stock as Record<string, unknown>).quantity) ?? 0);
+      return (
+        sum + (this.toInt((stock as Record<string, unknown>).quantity) ?? 0)
+      );
     }, 0);
 
     const createdProduct = await this.prisma.product.create({
@@ -406,7 +631,7 @@ export class ProductsService {
         markupPercent,
         salePrice,
         quantity: totalQuantityFromStocks || quantity,
-        metadata: metadata as Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput | undefined,
+        metadata: metadataInput,
         category: categoryName
           ? {
               connectOrCreate: {
@@ -472,13 +697,26 @@ export class ProductsService {
     return this.toProductResponse(product);
   }
 
-  async createCatalogProduct(body: Record<string, unknown>) {
+  async createCatalogProduct(
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const writeContext = this.requireCatalogWriteContext(context);
+    if (Array.isArray(body.shop_ids)) {
+      body.shop_ids = this.filterRequestedShopIds(
+        body.shop_ids as string[],
+        writeContext,
+      );
+    }
     const name = this.requireString(body.name, 'name');
     const sku = this.optionalString(body.sku);
     const barcode = this.optionalString(body.barcode);
-    const productType = this.optionalString(body.product_type_id);
-    const variantType = this.optionalString(body.variant_type);
+    const productType = this.resolveProductType(body.product_type_id);
+    const isVariative = this.toBooleanValue(body.is_variative);
+    const variantType = isVariative ? 'variative' : 'simple';
     const unit = this.optionalString(body.measurement_type);
+    const measurementUnitId = this.optionalString(body.measurement_unit_id);
     const purchasePrice = this.toNumber(body.supply_price) ?? 0;
     const salePrice = this.toNumber(body.retail_price) ?? 0;
     const markupPercent = this.toNumber(body.profit_margin);
@@ -486,8 +724,39 @@ export class ProductsService {
     const brandName = this.optionalString(body.brand_name);
     const imageUrl = this.extractFirstImage(body.images);
     const supplierIds = this.toStringArrayValue(body.supplier_ids);
+    const supplierIdNumbers = supplierIds
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value));
     const shipments = this.extractStockPayload(body);
-    const totalQuantity = shipments.reduce((sum, shipment) => sum + shipment.quantity, 0);
+    const shipmentsWithBranchCodes = await this.attachBranchCodesToShipments(
+      shipments,
+      writeContext,
+    );
+    const selectedAttributes = this.extractSelectedAttributes(
+      body.selected_attributes,
+    );
+    const variants = this.extractVariants(body.variants);
+    const isServiceProduct = this.isServiceProductType(productType);
+    const supportsStock = !isServiceProduct;
+    const totalQuantity = supportsStock
+      ? shipmentsWithBranchCodes.reduce(
+          (sum, shipment) => sum + shipment.quantity,
+          0,
+        )
+      : 0;
+
+    if (isVariative && !this.isGoodsProductType(productType)) {
+      throw new BadRequestException(
+        'Variative products are supported only for product type "товар"',
+      );
+    }
+
+    if (
+      (this.isGoodsProductType(productType) || isServiceProduct) &&
+      !measurementUnitId
+    ) {
+      throw new BadRequestException('measurement_unit_id is required');
+    }
 
     const createdProduct = await this.prisma.product.create({
       data: {
@@ -502,7 +771,11 @@ export class ProductsService {
         markupPercent,
         salePrice,
         quantity: totalQuantity,
-        metadata: this.buildCatalogMetadata(body, description),
+        metadata: this.buildCatalogMetadata(body, description, {
+          isVariative,
+          selectedAttributes,
+          variants,
+        }, writeContext),
         brand: brandName
           ? {
               connectOrCreate: {
@@ -511,16 +784,28 @@ export class ProductsService {
               },
             }
           : undefined,
-        stocks: shipments.length
+        suppliers: supplierIdNumbers.length
           ? {
-              create: shipments.map((shipment) => ({
-                branchCode: this.resolveBranchCodeByShopId(shipment.shopId),
-                quantity: shipment.quantity,
-                purchasePrice: shipment.supplyPrice,
-                salePrice: shipment.retailPrice,
+              create: supplierIdNumbers.map((supplierId) => ({
+                supplier: {
+                  connect: {
+                    id: supplierId,
+                  },
+                },
               })),
             }
           : undefined,
+        stocks:
+          supportsStock && shipmentsWithBranchCodes.length
+            ? {
+                create: shipmentsWithBranchCodes.map((shipment) => ({
+                  branchCode: shipment.branchCode,
+                  quantity: shipment.quantity,
+                  purchasePrice: shipment.supplyPrice,
+                  salePrice: shipment.retailPrice,
+                })),
+              }
+            : undefined,
       },
       include: {
         category: true,
@@ -533,12 +818,18 @@ export class ProductsService {
         stocks: true,
       },
     });
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      shipmentsWithBranchCodes.map((shipment) => shipment.branchCode),
+      writeContext.companyId,
+    );
 
     const productResponse = this.toCatalogCreateProductResponse(
       createdProduct,
       body,
-      shipments,
+      supportsStock ? shipmentsWithBranchCodes : [],
       supplierIds,
+      shopLookup,
+      writeContext,
     );
 
     return {
@@ -553,17 +844,290 @@ export class ProductsService {
         brand_id: this.optionalString(body.brand_id) ?? '',
         category_ids: this.toStringArrayValue(body.category_ids),
         created_by: {
-          id: '',
-          name: '',
+          id: String(writeContext.userId),
+          name: writeContext.fullName,
         },
         product_ids: null,
         products: [productResponse],
         props_updated: false,
-        shipments: this.buildCatalogShipmentResponse(createdProduct.id, shipments),
+        shipments: this.buildCatalogShipmentResponse(
+          createdProduct.id,
+          shipmentsWithBranchCodes,
+          shopLookup,
+          writeContext.companyId,
+        ),
         stocktaking_id: this.optionalString(body.stocktaking_id) ?? '',
       },
       correlation_id: randomUUID(),
       topic: 'v2.catalog_service.product.created',
+    };
+  }
+
+  async updateCatalogProduct(
+    id: string,
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const writeContext = this.requireCatalogWriteContext(context);
+    if (Array.isArray(body.shop_ids)) {
+      body.shop_ids = this.filterRequestedShopIds(
+        body.shop_ids as string[],
+        writeContext,
+      );
+    }
+    const productId = this.parseProductId(id);
+    const existingProduct = await this.prisma.product.findUnique({
+      where: { id: productId },
+      include: {
+        stocks: true,
+      },
+    });
+
+    if (!existingProduct) {
+      throw new NotFoundException('Product not found');
+    }
+
+    const productType = this.resolveProductType(
+      body.product_type_id ?? existingProduct.productType,
+    );
+    const isVariative = this.toBooleanValue(
+      body.is_variative ??
+        (existingProduct.metadata as Record<string, unknown> | null)
+          ?.is_variative ??
+        false,
+    );
+    const measurementUnitId = this.optionalString(body.measurement_unit_id);
+    const supportsStock = !this.isServiceProductType(productType);
+
+    if (isVariative && !this.isGoodsProductType(productType)) {
+      throw new BadRequestException(
+        'Variative products are supported only for product type "товар"',
+      );
+    }
+
+    if (
+      (this.isGoodsProductType(productType) ||
+        this.isServiceProductType(productType)) &&
+      !measurementUnitId &&
+      this.optionalString(
+        (existingProduct.metadata as Record<string, unknown> | null)
+          ?.measurement_unit_id,
+      ) === undefined
+    ) {
+      throw new BadRequestException('measurement_unit_id is required');
+    }
+
+    const shipments = this.extractStockPayload(body);
+    const shipmentsWithBranchCodes = await this.attachBranchCodesToShipments(
+      shipments,
+      writeContext,
+    );
+    const selectedAttributes = this.extractSelectedAttributes(
+      body.selected_attributes,
+    );
+    const variants = this.extractVariants(body.variants);
+    const supplierIds = this.toStringArrayValue(body.supplier_ids);
+    const supplierIdNumbers = supplierIds
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value));
+    const description = this.optionalString(body.description);
+
+    const updatedProduct = await this.prisma.product.update({
+      where: { id: productId },
+      data: {
+        name: this.optionalString(body.name) ?? existingProduct.name,
+        sku: this.optionalString(body.sku) ?? existingProduct.sku,
+        barcode: this.optionalString(body.barcode) ?? existingProduct.barcode,
+        photo: this.extractFirstImage(body.images) ?? existingProduct.photo,
+        productType,
+        variantType: isVariative ? 'variative' : 'simple',
+        unit:
+          this.optionalString(body.measurement_type) ?? existingProduct.unit,
+        purchasePrice:
+          this.toNumber(body.supply_price) ??
+          existingProduct.purchasePrice ??
+          0,
+        salePrice:
+          this.toNumber(body.retail_price) ?? existingProduct.salePrice ?? 0,
+        markupPercent:
+          this.toNumber(body.profit_margin) ??
+          existingProduct.markupPercent ??
+          0,
+        quantity: supportsStock
+          ? shipmentsWithBranchCodes.length
+            ? shipmentsWithBranchCodes.reduce(
+                (sum, shipment) => sum + shipment.quantity,
+                0,
+              )
+            : existingProduct.quantity
+          : 0,
+        metadata: this.buildCatalogMetadata(body, description, {
+          isVariative,
+          selectedAttributes,
+          variants,
+        }, writeContext),
+        suppliers:
+          body.supplier_ids !== undefined
+            ? {
+                deleteMany: {},
+                ...(supplierIdNumbers.length
+                  ? {
+                      create: supplierIdNumbers.map((supplierId) => ({
+                        supplier: {
+                          connect: {
+                            id: supplierId,
+                          },
+                        },
+                      })),
+                    }
+                  : {}),
+              }
+            : undefined,
+        stocks:
+          body.shipments !== undefined ||
+          body.shop_measurement_values !== undefined
+            ? supportsStock
+              ? {
+                  deleteMany: {},
+                  ...(shipmentsWithBranchCodes.length
+                    ? {
+                        create: shipmentsWithBranchCodes.map((shipment) => ({
+                          branchCode: shipment.branchCode,
+                          quantity: shipment.quantity,
+                          purchasePrice: shipment.supplyPrice,
+                          salePrice: shipment.retailPrice,
+                        })),
+                      }
+                    : {}),
+                }
+              : {
+                  deleteMany: {},
+                }
+            : undefined,
+      },
+      include: {
+        category: true,
+        brand: true,
+        suppliers: {
+          include: {
+            supplier: true,
+          },
+        },
+        stocks: true,
+      },
+    });
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      shipmentsWithBranchCodes.map((shipment) => shipment.branchCode),
+      writeContext.companyId,
+    );
+
+    const productResponse = this.toCatalogCreateProductResponse(
+      updatedProduct,
+      body,
+      supportsStock ? shipmentsWithBranchCodes : [],
+      supplierIds,
+      shopLookup,
+      writeContext,
+    );
+
+    return {
+      session_id: randomUUID(),
+      status_code: 200,
+      id: String(updatedProduct.id),
+      error: {
+        code: '',
+        message: '',
+      },
+      data: {
+        brand_id: this.optionalString(body.brand_id) ?? '',
+        category_ids: this.toStringArrayValue(body.category_ids),
+        created_by: {
+          id: String(writeContext.userId),
+          name: writeContext.fullName,
+        },
+        product_ids: null,
+        products: [productResponse],
+        props_updated: false,
+        shipments: supportsStock
+          ? this.buildCatalogShipmentResponse(
+              updatedProduct.id,
+              shipmentsWithBranchCodes,
+              shopLookup,
+              writeContext.companyId,
+            )
+          : [],
+        stocktaking_id: this.optionalString(body.stocktaking_id) ?? '',
+      },
+      correlation_id: randomUUID(),
+      topic: 'v2.catalog_service.product.updated',
+    };
+  }
+
+  async generateSku(body: Record<string, unknown>) {
+    const requestedPrefix = this.optionalString(body.prefix);
+    const name = this.optionalString(body.name);
+    const prefix = (requestedPrefix ?? this.buildSkuPrefix(name) ?? 'SKU')
+      .replace(/[^A-Za-z0-9]/g, '')
+      .toUpperCase()
+      .slice(0, SKU_PREFIX_LENGTH)
+      .padEnd(SKU_PREFIX_LENGTH, 'X');
+
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const randomNumber = Math.floor(Math.random() * 10 ** SKU_NUMBER_LENGTH);
+      const candidate = `${prefix}-${String(randomNumber).padStart(SKU_NUMBER_LENGTH, '0')}`;
+      const existing = await this.prisma.product.findUnique({
+        where: { sku: candidate },
+        select: { id: true },
+      });
+
+      if (!existing) {
+        return {
+          sku: candidate,
+        };
+      }
+    }
+
+    throw new BadRequestException('Could not generate unique sku');
+  }
+
+  async generateBarcode() {
+    const latestBarcodeRecord = await this.prisma.product.findFirst({
+      where: {
+        barcode: {
+          startsWith: '2',
+        },
+      },
+      orderBy: {
+        barcode: 'desc',
+      },
+      select: {
+        barcode: true,
+      },
+    });
+
+    const latestValue = Number(latestBarcodeRecord?.barcode);
+    const nextValue =
+      Number.isFinite(latestValue) && latestValue >= BARCODE_BASE
+        ? latestValue + 1
+        : BARCODE_BASE;
+
+    if (nextValue > BARCODE_MAX) {
+      throw new BadRequestException('Barcode range exceeded');
+    }
+
+    const barcode = String(nextValue);
+    const existing = await this.prisma.product.findUnique({
+      where: { barcode },
+      select: { id: true },
+    });
+
+    if (existing) {
+      return this.generateBarcode();
+    }
+
+    return {
+      barcode,
     };
   }
 
@@ -634,9 +1198,15 @@ export class ProductsService {
       purchasePrice: number | null;
       salePrice: number | null;
     }[];
-  }) {
-    const stockSummaries = product.stocks.map((stock) => {
-      const shop = this.resolveShopByBranchCode(stock.branchCode);
+  }, shopLookup?: Map<string, ResolvedShop>, visibleBranchCodes?: string[]) {
+    const currencyCode =
+      this.companySettingsService.getDefaultCurrencyIsoCode();
+    const filteredStocks = this.filterStocksByBranchCodes(
+      product.stocks,
+      visibleBranchCodes,
+    );
+    const stockSummaries = filteredStocks.map((stock) => {
+      const shop = this.resolveShopByBranchCode(stock.branchCode, shopLookup);
       const measurementValue = stock.quantity;
       const supplyPrice = stock.purchasePrice ?? product.purchasePrice ?? 0;
       const retailPrice = stock.salePrice ?? product.salePrice ?? 0;
@@ -718,8 +1288,8 @@ export class ProductsService {
       shop_prices: stockSummaries.map((stock) => ({
         shop_id: stock.shop.shop_id,
         retail_price: stock.retailPrice,
-        retail_currency: 'UZS',
-        supply_currency: 'UZS',
+        retail_currency: currencyCode,
+        supply_currency: currencyCode,
         min_supply_price: stock.supplyPrice,
         max_supply_price: stock.supplyPrice,
         supply_price: stock.supplyPrice,
@@ -730,7 +1300,7 @@ export class ProductsService {
         from_supply_price: 0,
         currency_prices: [
           {
-            currency: 'UZS',
+            currency: currencyCode,
             retail_price: stock.retailPrice,
             min_supply_price: stock.supplyPrice,
             max_supply_price: stock.supplyPrice,
@@ -774,7 +1344,9 @@ export class ProductsService {
           }))
         : undefined,
       product_supplier_stock: stockSummaries.map((stock) => ({
-        supplier_id: primarySupplier ? String(primarySupplier.id) : DEFAULT_EMPTY_SUPPLIER_ID,
+        supplier_id: primarySupplier
+          ? String(primarySupplier.id)
+          : DEFAULT_EMPTY_SUPPLIER_ID,
         supplier_name: primarySupplier?.name ?? '',
         shop_id: stock.shop.shop_id,
         measurement_value: stock.measurementValue,
@@ -803,24 +1375,28 @@ export class ProductsService {
     };
   }
 
-  private toCatalogCreateProductResponse(
-    product: {
-      id: number;
-      name: string;
-      sku: string | null;
-      barcode: string | null;
-      photo: string | null;
-      purchasePrice: number | null;
-      salePrice: number | null;
-      productType: string | null;
-      createdAt: Date;
-      updatedAt: Date;
-      brand: { id: number; name: string } | null;
-      suppliers: { supplier: { id: number; name: string } }[];
+  private filterStocksByBranchCodes<
+    T extends {
+      branchCode: string;
     },
+  >(stocks: T[], visibleBranchCodes?: string[]) {
+    if (!visibleBranchCodes?.length) {
+      return stocks;
+    }
+
+    const visibleBranchCodeSet = new Set(
+      visibleBranchCodes.map((branchCode) => branchCode.trim()).filter(Boolean),
+    );
+
+    return stocks.filter((stock) => visibleBranchCodeSet.has(stock.branchCode));
+  }
+
+  private toCatalogCreateProductResponse(
+    product: CatalogProductWithRelations,
     body: Record<string, unknown>,
     shipments: Array<{
       shopId: string;
+      branchCode: string;
       quantity: number;
       supplyPrice: number;
       retailPrice: number;
@@ -829,14 +1405,96 @@ export class ProductsService {
       smallLeftMeasurementValue: number;
     }>,
     supplierIds: string[],
+    shopLookup: Map<string, ResolvedShop>,
+    context: {
+      userId: number;
+      fullName: string;
+      companyId?: string | null;
+    },
   ) {
-    const shopPrices = this.extractShopPrices(body, shipments, product.purchasePrice ?? 0, product.salePrice ?? 0);
+    const currencyCode =
+      this.companySettingsService.getDefaultCurrencyIsoCode(
+        context.companyId ?? undefined,
+      );
+    const shopPrices = this.extractShopPrices(
+      body,
+      shipments,
+      product.purchasePrice ?? 0,
+      product.salePrice ?? 0,
+    );
     const shopFreePrices = this.extractShopFreePrices(body, shipments);
     const measurementUnit = {
       ...DEFAULT_MEASUREMENT_UNIT,
       company_id: COMPANY_ID,
       is_default: true,
     };
+    const productType = this.resolveProductType(body.product_type_id);
+    const isVariative = this.toBooleanValue(body.is_variative);
+    const measurementType = this.optionalString(body.measurement_type);
+    const supportsStock = !this.isServiceProductType(productType);
+    const stockSummaries = shipments.map((shipment) => {
+      const shop = this.resolveShopByBranchCode(shipment.branchCode, shopLookup);
+      const supplySum = shipment.quantity * shipment.supplyPrice;
+      const retailSum = shipment.quantity * shipment.retailPrice;
+      const supplierId = shipment.supplierId ?? DEFAULT_EMPTY_SUPPLIER_ID;
+
+      return {
+        sourceShopId: shipment.shopId,
+        shopId: shop.shop_id,
+        shopName: shop.shop_name,
+        measurementValue: shipment.quantity,
+        supplyPrice: shipment.supplyPrice,
+        retailPrice: shipment.retailPrice,
+        supplySum,
+        retailSum,
+        supplierId,
+        smallLeftMeasurementValue: shipment.smallLeftMeasurementValue,
+        hasTrigger: shipment.hasTrigger,
+      };
+    });
+    const totalMeasurementValue = stockSummaries.reduce(
+      (sum, item) => sum + item.measurementValue,
+      0,
+    );
+    const totalSupplyPrice = stockSummaries.reduce(
+      (sum, item) => sum + item.supplySum,
+      0,
+    );
+    const totalRetailPrice = stockSummaries.reduce(
+      (sum, item) => sum + item.retailSum,
+      0,
+    );
+    const resolvedShopIdsBySourceId = new Map(
+      stockSummaries.map((item) => [item.sourceShopId, item.shopId]),
+    );
+    const normalizedShopPrices = shopPrices.map((item) => {
+      const retailPrice = item.retail_price;
+      const supplyPrice = item.supply_price;
+
+      return {
+        ...item,
+        shop_id: resolvedShopIdsBySourceId.get(item.shop_id) ?? item.shop_id,
+        retail_currency: item.retail_currency || currencyCode,
+        supply_currency: item.supply_currency || currencyCode,
+        currency_prices: item.currency_prices ?? [
+          {
+            currency: currencyCode,
+            retail_price: retailPrice,
+            min_supply_price: item.min_supply_price,
+            max_supply_price: item.max_supply_price,
+            supply_price: supplyPrice,
+            wholesale_price: item.wholesale_price,
+            min_price: item.min_price,
+            max_price: item.max_price,
+            prices_list: item.prices_list,
+          },
+        ],
+      };
+    });
+    const normalizedShopFreePrices = shopFreePrices.map((item) => ({
+      ...item,
+      shop_id: resolvedShopIdsBySourceId.get(item.shop_id) ?? item.shop_id,
+    }));
 
     return {
       additional_barcodes: null,
@@ -852,7 +1510,7 @@ export class ProductsService {
       brand_id: this.optionalString(body.brand_id) ?? '',
       brand_name: product.brand?.name ?? '',
       categories: null,
-      company_id: COMPANY_ID,
+      company_id: context.companyId ?? COMPANY_ID,
       created_at: this.formatDateTime(product.createdAt),
       custom_fields: [],
       deleted: false,
@@ -862,14 +1520,14 @@ export class ProductsService {
       is_archived: false,
       is_marked: this.toBooleanValue(body.is_marked),
       is_scalable: false,
-      is_variative: this.toBooleanValue(body.is_variative),
+      is_variative: isVariative,
       main_image: product.photo ?? '',
-      measurement_type: this.optionalString(body.measurement_type) ?? '',
+      measurement_type: measurementType ?? '',
       measurement_unit: measurementUnit,
       measurement_values: {
-        total_active_measurement_value: 0,
+        total_active_measurement_value: totalMeasurementValue,
         total_inactive_measurement_value: 0,
-        total_measurement_value: 0,
+        total_measurement_value: totalMeasurementValue,
       },
       name: product.name,
       name_lower: '',
@@ -877,25 +1535,79 @@ export class ProductsService {
       parent_id: '',
       photos: null,
       prices: {
-        total_active_retail_price: 0,
-        total_active_supply_price: 0,
+        total_active_retail_price: totalRetailPrice,
+        total_active_supply_price: totalSupplyPrice,
         total_inactive_retail_price: 0,
         total_inactive_supply_price: 0,
-        total_retail_price: 0,
-        total_supply_price: 0,
+        total_retail_price: totalRetailPrice,
+        total_supply_price: totalSupplyPrice,
       },
       product_attributes: [],
-      product_supplier_stock: null,
-      product_supply_stock: null,
-      product_type_id: product.productType ?? DEFAULT_PRODUCT_TYPE_ID,
-      retail_currency: 'UZS',
+      product_supplier_stock: supportsStock
+        ? stockSummaries.map((item) => ({
+            supplier_id: item.supplierId,
+            supplier_name: '',
+            shop_id: item.shopId,
+            measurement_value: item.measurementValue,
+            min_supply_price: item.supplyPrice,
+            max_supply_price: item.supplyPrice,
+            retail_price: item.retailPrice,
+            wholesale_price: 0,
+          }))
+        : [],
+      product_supply_stock: supportsStock
+        ? stockSummaries.map((item) => ({
+            shop_id: item.shopId,
+            shop_name: item.shopName,
+            measurement_value: item.measurementValue,
+            active_measurement_value: item.measurementValue,
+            inactive_measurement_value: 0,
+            supply_price: item.supplyPrice,
+            supplier_ids: [item.supplierId],
+          }))
+        : [],
+      product_type_id:
+        productType ?? product.productType ?? DEFAULT_PRODUCT_TYPE_ID,
+      retail_currency: currencyCode,
       retail_price: product.salePrice ?? 0,
       scale_code: 0,
       scale_plu: 0,
       set_products: [],
-      shop_free_prices: shopFreePrices,
-      shop_measurement_values: null,
-      shop_prices: shopPrices,
+      shop_free_prices: supportsStock ? normalizedShopFreePrices : [],
+      shop_measurement_values: supportsStock
+        ? stockSummaries.map((item) => ({
+            small_left_measurement_value: item.smallLeftMeasurementValue,
+            has_trigger: item.hasTrigger,
+            shop_id: item.shopId,
+            total_measurement_value: item.measurementValue,
+            total_min_supply_price: item.supplyPrice,
+            total_max_supply_price: item.supplyPrice,
+            total_supply_sum: item.supplySum,
+            total_active_measurement_value: item.measurementValue,
+            total_active_min_supply_price: item.supplyPrice,
+            total_active_max_supply_price: item.supplyPrice,
+            total_active_supply_sum: item.supplySum,
+            total_inactive_measurement_value: 0,
+            total_inactive_min_supply_price: null,
+            total_inactive_max_supply_price: null,
+            total_inactive_supply_sum: 0,
+            total_sold_measurement_value: 0,
+            total_imported_measurement_value: 0,
+            total_transfer_arrived_measurement_value: 0,
+            total_transfered_measurement_value: 0,
+            total_in_transfer_measurement_value: 0,
+            total_in_transfer_min_supply_price: null,
+            total_in_transfer_max_supply_price: null,
+            total_in_transfer_supply_sum: 0,
+            total_written_off_measurement_value: 0,
+            import_started_measurement_value: 0,
+            is_small_left: false,
+            total_retail_sum: item.retailSum,
+            total_active_retail_sum: item.retailSum,
+            total_inactive_retail_sum: 0,
+          }))
+        : [],
+      shop_prices: supportsStock ? normalizedShopPrices : [],
       sku: product.sku,
       sku_lower: '',
       sku_upper: '',
@@ -903,7 +1615,7 @@ export class ProductsService {
       supplier_id: supplierIds[0] ?? '',
       supplier_ids: supplierIds,
       suppliers: null,
-      supply_currency: 'UZS',
+      supply_currency: currencyCode,
       supply_price: product.purchasePrice ?? 0,
       updated_at: '',
       variation_id: '',
@@ -916,6 +1628,18 @@ export class ProductsService {
     search?: string,
     brandIds?: string[],
     supplierIds?: string[],
+    status?: string,
+    archivedList?: boolean,
+    shopIds?: string[],
+    categoryIds?: string[],
+    sku?: string,
+    measurementType?: string,
+    supplyPriceFrom?: number,
+    supplyPriceTo?: number,
+    retailPriceFrom?: number,
+    retailPriceTo?: number,
+    wholesalePrice?: number,
+    freePrice?: boolean,
   ): Prisma.ProductWhereInput | undefined {
     const and: Prisma.ProductWhereInput[] = [];
 
@@ -926,6 +1650,24 @@ export class ProductsService {
           { sku: { contains: search, mode: 'insensitive' } },
           { barcode: { contains: search, mode: 'insensitive' } },
         ],
+      });
+    }
+
+    if (sku) {
+      and.push({
+        sku: {
+          contains: sku,
+          mode: 'insensitive',
+        },
+      });
+    }
+
+    if (measurementType) {
+      and.push({
+        unit: {
+          equals: measurementType,
+          mode: 'insensitive',
+        },
       });
     }
 
@@ -951,6 +1693,113 @@ export class ProductsService {
       });
     }
 
+    if (status === 'active') {
+      and.push({
+        quantity: {
+          gt: 0,
+        },
+      });
+    }
+
+    if (status === 'inactive') {
+      and.push({
+        quantity: {
+          lte: 0,
+        },
+      });
+    }
+
+    if (archivedList) {
+      and.push({
+        quantity: {
+          lte: 0,
+        },
+      });
+    }
+
+    const resolvedShopIds = this.toBranchCodes(shopIds);
+    if (resolvedShopIds.length) {
+      and.push({
+        stocks: {
+          some: {
+            branchCode: {
+              in: resolvedShopIds,
+            },
+          },
+        },
+      });
+    }
+
+    if (categoryIds?.length) {
+      const numericCategoryIds = this.normalizeNumericStringArray(categoryIds);
+      const namedCategoryIds = categoryIds
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0 && !/^\d+$/.test(item));
+      const categoryFilters: Prisma.ProductWhereInput[] = [];
+
+      if (numericCategoryIds.length) {
+        categoryFilters.push({
+          categoryId: {
+            in: numericCategoryIds,
+          },
+        });
+      }
+
+      if (namedCategoryIds.length) {
+        categoryFilters.push({
+          category: {
+            name: {
+              in: namedCategoryIds,
+            },
+          },
+        });
+      }
+
+      if (categoryFilters.length) {
+        and.push(
+          categoryFilters.length === 1
+            ? categoryFilters[0]
+            : { OR: categoryFilters },
+        );
+      }
+    }
+
+    if (supplyPriceFrom !== undefined || supplyPriceTo !== undefined) {
+      and.push({
+        purchasePrice: {
+          gte: supplyPriceFrom,
+          lte: supplyPriceTo,
+        },
+      });
+    }
+
+    if (retailPriceFrom !== undefined || retailPriceTo !== undefined) {
+      and.push({
+        salePrice: {
+          gte: retailPriceFrom,
+          lte: retailPriceTo,
+        },
+      });
+    }
+
+    if (wholesalePrice !== undefined) {
+      and.push({
+        metadata: {
+          path: ['wholesale_price'],
+          equals: wholesalePrice,
+        },
+      });
+    }
+
+    if (freePrice !== undefined) {
+      and.push({
+        metadata: {
+          path: ['free_price'],
+          equals: freePrice,
+        },
+      });
+    }
+
     if (!and.length) {
       return undefined;
     }
@@ -958,7 +1807,9 @@ export class ProductsService {
     return and.length === 1 ? and[0] : { AND: and };
   }
 
-  private buildProductOrderBy(order?: string[]): Prisma.ProductOrderByWithRelationInput {
+  private buildProductOrderBy(
+    order?: string[],
+  ): Prisma.ProductOrderByWithRelationInput {
     const normalizedOrder = order
       ?.map((item) => item.trim())
       .filter((item) => item.length > 0);
@@ -974,9 +1825,13 @@ export class ProductsService {
 
     switch (field) {
       case 'id':
+        return { id: direction };
       case 'name':
+        return { name: direction };
       case 'sku':
+        return { sku: direction };
       case 'barcode':
+        return { barcode: direction };
       case 'created_at':
         return { createdAt: direction };
       case 'updated_at':
@@ -1004,6 +1859,8 @@ export class ProductsService {
       }[];
     }[],
   ) {
+    const currencyCode =
+      this.companySettingsService.getDefaultCurrencyIsoCode();
     const totals = products.reduce(
       (acc, product) => {
         const measurementValue = product.stocks.length
@@ -1013,14 +1870,18 @@ export class ProductsService {
         const supplySum = product.stocks.length
           ? product.stocks.reduce(
               (sum, stock) =>
-                sum + stock.quantity * (stock.purchasePrice ?? product.purchasePrice ?? 0),
+                sum +
+                stock.quantity *
+                  (stock.purchasePrice ?? product.purchasePrice ?? 0),
               0,
             )
           : measurementValue * (product.purchasePrice ?? 0);
 
         const retailSum = product.stocks.length
           ? product.stocks.reduce(
-              (sum, stock) => sum + stock.quantity * (stock.salePrice ?? product.salePrice ?? 0),
+              (sum, stock) =>
+                sum +
+                stock.quantity * (stock.salePrice ?? product.salePrice ?? 0),
               0,
             )
           : measurementValue * (product.salePrice ?? 0);
@@ -1029,7 +1890,8 @@ export class ProductsService {
         acc.totalSupplyPrice += supplySum;
         acc.totalRetailPrice += retailSum;
         acc.zeroLeftCount += measurementValue <= 0 ? 1 : 0;
-        acc.smallLeftCount += measurementValue > 0 && measurementValue <= 5 ? 1 : 0;
+        acc.smallLeftCount +=
+          measurementValue > 0 && measurementValue <= 5 ? 1 : 0;
         return acc;
       },
       {
@@ -1049,7 +1911,7 @@ export class ProductsService {
         total_supply_price: totals.totalSupplyPrice,
         total_prices_by_currency: [
           {
-            currency: 'UZS',
+            currency: currencyCode,
             total_retail_price: totals.totalRetailPrice,
             total_supply_price: totals.totalSupplyPrice,
           },
@@ -1096,21 +1958,37 @@ export class ProductsService {
 
   private getCatalogFields() {
     const fieldNamesBySystemName: Record<string, string> = {
-      variation_id: 'variation_id',
+      name: 'Наименование',
       quantity: 'Кол-во',
       photo: 'Фото',
       brand_name: 'Бренд',
       category_name: 'Категория',
-      wholesale_price: 'Оптовая цена',
+      discount_price: 'Скидочная цена',
       supply_price: 'Цена поставки',
       retail_price: 'Цена продажи',
       sku: 'Артикул',
       barcode: 'Баркод',
-      name: 'Наименование',
     };
 
-    return PRODUCT_CHARACTERISTICS.filter((field) => field.system_name !== 'name')
-      .slice(0, 10)
+    const orderedSystemNames = [
+      'photo',
+      'name',
+      'sku',
+      'barcode',
+      'category_name',
+      'supplier_name',  
+      'quantity',
+      'supply_price',
+      'retail_price',
+      'discount_price',
+      'brand_name',
+    ];
+
+    return orderedSystemNames
+      .map((systemName) =>
+        PRODUCT_CHARACTERISTICS.find((field) => field.system_name === systemName),
+      )
+      .filter((field): field is (typeof PRODUCT_CHARACTERISTICS)[number] => !!field)
       .map((field, index) => ({
         id: '',
         name: fieldNamesBySystemName[field.system_name] ?? field.name,
@@ -1129,9 +2007,12 @@ export class ProductsService {
         : [];
 
     return rawShipments
-      .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+      .filter(
+        (item): item is Record<string, unknown> =>
+          !!item && typeof item === 'object',
+      )
       .map((item) => {
-        const shopId = this.optionalString(item.shop_id) ?? '';
+        const shopId = this.extractShopIdentifier(item);
         const quantity =
           this.toInt(item.measurement_value) ??
           this.toInt(item.total_measurement_value) ??
@@ -1144,7 +2025,8 @@ export class ProductsService {
           retailPrice: this.resolvePriceForShop(body, shopId, 'retail_price'),
           supplierId: this.optionalString(item.supplier_id),
           hasTrigger: this.toBooleanValue(item.has_trigger),
-          smallLeftMeasurementValue: this.toInt(item.small_left_measurement_value) ?? 0,
+          smallLeftMeasurementValue:
+            this.toInt(item.small_left_measurement_value) ?? 0,
         };
       })
       .filter((item) => item.shopId.length > 0);
@@ -1160,34 +2042,43 @@ export class ProductsService {
       (item) =>
         !!item &&
         typeof item === 'object' &&
-        this.optionalString((item as Record<string, unknown>).shop_id) === shopId,
+        this.extractShopIdentifier(item as Record<string, unknown>) === shopId,
     ) as Record<string, unknown> | undefined;
 
     return (
-      this.toNumber(matchedShopPrice?.[key]) ??
-      this.toNumber(body[key]) ??
-      0
+      this.toNumber(matchedShopPrice?.[key]) ?? this.toNumber(body[key]) ?? 0
     );
   }
 
   private extractShopPrices(
     body: Record<string, unknown>,
-    shipments: Array<{ shopId: string; supplyPrice: number; retailPrice: number }>,
+    shipments: Array<{
+      shopId: string;
+      supplyPrice: number;
+      retailPrice: number;
+    }>,
     defaultSupplyPrice: number,
     defaultRetailPrice: number,
   ) {
-    const rawShopPrices = Array.isArray(body.shop_prices) ? body.shop_prices : [];
+    const rawShopPrices = Array.isArray(body.shop_prices)
+      ? body.shop_prices
+      : [];
 
     if (rawShopPrices.length) {
       return rawShopPrices
-        .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+        .filter(
+          (item): item is Record<string, unknown> =>
+            !!item && typeof item === 'object',
+        )
         .map((item) => ({
           currency_prices: null,
           from_supply_price: 0,
           max_price: this.toNumber(item.max_price) ?? 0,
-          max_supply_price: this.toNumber(item.supply_price) ?? defaultSupplyPrice,
+          max_supply_price:
+            this.toNumber(item.supply_price) ?? defaultSupplyPrice,
           min_price: this.toNumber(item.min_price) ?? 0,
-          min_supply_price: this.toNumber(item.supply_price) ?? defaultSupplyPrice,
+          min_supply_price:
+            this.toNumber(item.supply_price) ?? defaultSupplyPrice,
           prices_list: [],
           promo_price: 0,
           promos: null,
@@ -1223,11 +2114,16 @@ export class ProductsService {
     body: Record<string, unknown>,
     shipments: Array<{ shopId: string }>,
   ) {
-    const rawFreePrices = Array.isArray(body.shop_free_prices) ? body.shop_free_prices : [];
+    const rawFreePrices = Array.isArray(body.shop_free_prices)
+      ? body.shop_free_prices
+      : [];
 
     if (rawFreePrices.length) {
       return rawFreePrices
-        .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+        .filter(
+          (item): item is Record<string, unknown> =>
+            !!item && typeof item === 'object',
+        )
         .map((item) => ({
           sell_with_free_price: false,
           shop_id: this.optionalString(item.shop_id) ?? '',
@@ -1244,16 +2140,28 @@ export class ProductsService {
     productId: number,
     shipments: Array<{
       shopId: string;
+      branchCode: string;
       quantity: number;
+      supplyPrice: number;
       retailPrice: number;
       supplierId?: string;
       hasTrigger: boolean;
       smallLeftMeasurementValue: number;
     }>,
+    shopLookup: Map<string, ResolvedShop>,
+    companyId?: string | null,
   ) {
-    return shipments.map((shipment) => ({
+    const currencyCode =
+      this.companySettingsService.getDefaultCurrencyIsoCode(
+        companyId ?? undefined,
+      );
+
+    return shipments.map((shipment) => {
+      const shop = this.resolveShopByBranchCode(shipment.branchCode, shopLookup);
+
+      return ({
       comment: '',
-      company_id: COMPANY_ID,
+      company_id: companyId ?? COMPANY_ID,
       created_at: this.formatDateTime(new Date()),
       id: randomUUID(),
       items: [
@@ -1273,14 +2181,14 @@ export class ProductsService {
           product_id: String(productId),
           product_name: '',
           product_sku: '',
-          retail_currency: '',
+          retail_currency: currencyCode,
           retail_price: shipment.retailPrice,
           serial_number: '',
           shipment_status_id: '',
           small_left_measurement_value: shipment.smallLeftMeasurementValue,
           supplier_id: shipment.supplierId ?? '',
-          supply_currency: '',
-          supply_price: 0,
+          supply_currency: currencyCode,
+          supply_price: shipment.supplyPrice,
           user: null,
           wholesale_price: 0,
         },
@@ -1290,19 +2198,439 @@ export class ProductsService {
       process_type: 0,
       shipment_status_id: '31cd30a7-46ae-460c-9530-7c2df1356b62',
       shipment_type_id: 'a230b02b-46f8-42f4-885e-d81813c297d6',
-      shop_id: shipment.shopId,
+      shop_id: shop.shop_id,
       total_loaded_items_measurement_value: 0,
-    }));
+    });
+    });
   }
 
-  private buildCatalogMetadata(body: Record<string, unknown>, description?: string) {
+  private resolveProductType(value: unknown) {
+    const normalized = this.optionalString(value)?.toLowerCase();
+    if (!normalized) {
+      return DEFAULT_PRODUCT_TYPE_ID;
+    }
+
+    if (normalized === PRODUCT_TYPE_IDS.goods || normalized === 'товар') {
+      return PRODUCT_TYPE_IDS.goods;
+    }
+
+    if (normalized === PRODUCT_TYPE_IDS.service || normalized === 'услуга') {
+      return PRODUCT_TYPE_IDS.service;
+    }
+
+    if (normalized === PRODUCT_TYPE_IDS.kit || normalized === 'комплект') {
+      return PRODUCT_TYPE_IDS.kit;
+    }
+
+    return normalized;
+  }
+
+  private isGoodsProductType(productType: string) {
+    return productType === PRODUCT_TYPE_IDS.goods;
+  }
+
+  private isServiceProductType(productType: string) {
+    return productType === PRODUCT_TYPE_IDS.service;
+  }
+
+  private extractSelectedAttributes(value: unknown) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.flatMap((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        return [];
+      }
+
+      return [this.toPrismaInputJsonObject(item)];
+    });
+  }
+
+  private applyProductScope(where: Prisma.ProductWhereInput | undefined, context: any) {
+    if (!context || context.userType !== 'company') {
+      return where;
+    }
+
+    const branchScope =
+      context.allowedBranchCodes.length > 0
+        ? {
+            stocks: {
+              some: {
+                branchCode: {
+                  in: context.allowedBranchCodes,
+                },
+              },
+            },
+          }
+        : undefined;
+
+    if (!branchScope) {
+      return where;
+    }
+
+    if (!where) {
+      return branchScope;
+    }
+
+    return {
+      AND: [where, branchScope],
+    } satisfies Prisma.ProductWhereInput;
+  }
+
+  private filterRequestedShopIds(shopIds: string[] | undefined, context: any) {
+    if (!context || context.userType !== 'company') {
+      return shopIds;
+    }
+
+    if (!shopIds?.length) {
+      return context.allowedShopIds;
+    }
+
+    return shopIds.filter((shopId) => context.allowedShopIds.includes(shopId));
+  }
+
+  private requireCatalogWriteContext(context: any): {
+    userId: number;
+    fullName: string;
+    userType: string;
+    companyId?: string | null;
+    allowedShopIds: string[];
+    allowedBranchCodes: string[];
+  } {
+    if (!context) {
+      throw new UnauthorizedException('Authorization is required');
+    }
+
+    if (context.userType !== 'company' && context.userType !== 'platform') {
+      throw new UnauthorizedException('Unsupported user type');
+    }
+
+    return context;
+  }
+
+  private async resolveBranchCodesForFilter(
+    shopIds: string[] | undefined,
+    context: any,
+  ) {
+    if (!shopIds?.length) {
+      return undefined;
+    }
+
+    const resolvedBranchCodes = new Set<string>();
+    const normalizedIdentifiers = shopIds
+      .map((shopId) => shopId.trim())
+      .filter((shopId) => shopId.length > 0);
+
+    if (!normalizedIdentifiers.length) {
+      return undefined;
+    }
+
+    for (const identifier of normalizedIdentifiers) {
+      if (context?.allowedBranchCodes?.includes(identifier)) {
+        resolvedBranchCodes.add(identifier);
+      }
+    }
+
+    const dbResolvedShops = await this.prisma.shop.findMany({
+      where: {
+        ...(context?.userType === 'company' && context.companyId
+          ? {
+              companyId: context.companyId,
+            }
+          : {}),
+        OR: [
+          {
+            id: {
+              in: normalizedIdentifiers,
+            },
+          },
+          {
+            branchCode: {
+              in: normalizedIdentifiers,
+            },
+          },
+        ],
+      },
+      select: {
+        id: true,
+        branchCode: true,
+      },
+    });
+
+    for (const shop of dbResolvedShops) {
+      if (
+        !context?.userType ||
+        context.userType !== 'company' ||
+        context.allowedShopIds.includes(shop.id) ||
+        context.allowedBranchCodes.includes(shop.branchCode)
+      ) {
+        resolvedBranchCodes.add(shop.branchCode);
+      }
+    }
+
+    for (const identifier of normalizedIdentifiers) {
+      const legacyBranchCode = this.resolveBranchCodeByShopId(identifier);
+
+      if (
+        legacyBranchCode &&
+        (!context?.userType ||
+          context.userType !== 'company' ||
+          context.allowedBranchCodes.includes(legacyBranchCode))
+      ) {
+        resolvedBranchCodes.add(legacyBranchCode);
+      }
+    }
+
+    return [...resolvedBranchCodes];
+  }
+
+  private filterStockPayloadByContext(stocks: unknown[], context: any) {
+    if (!context || context.userType !== 'company') {
+      return stocks;
+    }
+
+    return stocks.filter((stock) => {
+      if (!stock || typeof stock !== 'object') {
+        return false;
+      }
+
+      const shopIdentifier = this.extractShopIdentifier(
+        stock as Record<string, unknown>,
+      );
+      if (!shopIdentifier) {
+        return false;
+      }
+
+      return (
+        context.allowedShopIds.includes(shopIdentifier) ||
+        context.allowedBranchCodes.includes(shopIdentifier)
+      );
+    });
+  }
+
+  private async attachBranchCodesToShipments(
+    shipments: Array<{
+      shopId: string;
+      quantity: number;
+      supplyPrice: number;
+      retailPrice: number;
+      supplierId?: string;
+      hasTrigger: boolean;
+      smallLeftMeasurementValue: number;
+    }>,
+    context: any,
+  ) {
+    const normalizedIdentifiers = [...new Set(
+      shipments
+        .map((shipment) => shipment.shopId.trim())
+        .filter((identifier) => identifier.length > 0),
+    )];
+
+    const resolvedBranchCodes = new Map<string, string>();
+
+    if (context?.userType === 'company') {
+      const matchingShops = normalizedIdentifiers.length
+        ? await this.prisma.shop.findMany({
+            where: {
+              companyId: context.companyId,
+              OR: [
+                {
+                  id: {
+                    in: normalizedIdentifiers,
+                  },
+                },
+                {
+                  branchCode: {
+                    in: normalizedIdentifiers,
+                  },
+                },
+              ],
+            },
+            select: {
+              id: true,
+              branchCode: true,
+            },
+          })
+        : [];
+
+      for (const shop of matchingShops) {
+        if (
+          context.allowedShopIds.includes(shop.id) ||
+          context.allowedBranchCodes.includes(shop.branchCode)
+        ) {
+          resolvedBranchCodes.set(shop.id, shop.branchCode);
+          resolvedBranchCodes.set(shop.branchCode, shop.branchCode);
+        }
+      }
+    }
+
+    for (const identifier of normalizedIdentifiers) {
+      if (resolvedBranchCodes.has(identifier)) {
+        continue;
+      }
+
+      const legacyBranchCode = this.resolveBranchCodeByShopId(identifier);
+      if (legacyBranchCode) {
+        resolvedBranchCodes.set(identifier, legacyBranchCode);
+      }
+    }
+
+    return shipments.map((shipment) => {
+      const normalizedIdentifier = shipment.shopId.trim();
+      const branchCode = resolvedBranchCodes.get(normalizedIdentifier);
+
+      if (!branchCode) {
+        throw new BadRequestException(
+          `Unable to resolve branch for shop identifier "${normalizedIdentifier}"`,
+        );
+      }
+
+      if (
+        context?.userType === 'company' &&
+        !context.allowedBranchCodes.includes(branchCode)
+      ) {
+        throw new BadRequestException(
+          'This user does not have access to the requested shop',
+        );
+      }
+
+      return {
+        ...shipment,
+        branchCode,
+      };
+    });
+  }
+
+  private extractShopIdentifier(item: Record<string, unknown>) {
+    return (
+      this.optionalString(item.shop_id) ??
+      this.optionalString(item.shopId) ??
+      this.optionalString(item.branch_code) ??
+      this.optionalString(item.branchCode) ??
+      ''
+    ).trim();
+  }
+
+  private async resolveBranchCodeForWrite(shopIdentifier: string, context: any) {
+    const normalizedIdentifier = shopIdentifier.trim();
+
+    if (!normalizedIdentifier) {
+      throw new BadRequestException('shop_id must be a non-empty string');
+    }
+
+    if (context?.userType === 'company') {
+      if (context.allowedBranchCodes.includes(normalizedIdentifier)) {
+        return normalizedIdentifier;
+      }
+
+      const shop = await this.prisma.shop.findFirst({
+        where: {
+          companyId: context.companyId,
+          OR: [
+            { id: normalizedIdentifier },
+            { branchCode: normalizedIdentifier },
+          ],
+        },
+        select: {
+          id: true,
+          branchCode: true,
+        },
+      });
+
+      if (shop) {
+        if (!context.allowedShopIds.includes(shop.id)) {
+          throw new BadRequestException(
+            'This user does not have access to the requested shop',
+          );
+        }
+
+        return shop.branchCode;
+      }
+    }
+
+    const legacyBranchCode = this.resolveBranchCodeByShopId(normalizedIdentifier);
+    if (legacyBranchCode) {
+      return legacyBranchCode;
+    }
+
+    return normalizedIdentifier;
+  }
+
+  private extractVariants(value: unknown) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.flatMap((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        return [];
+      }
+
+      return [this.toPrismaInputJsonObject(item)];
+    });
+  }
+
+  private buildSkuPrefix(name?: string) {
+    if (!name) {
+      return undefined;
+    }
+
+    const cleaned = name.replace(/[^A-Za-zА-Яа-я0-9]/g, '').toUpperCase();
+    if (!cleaned.length) {
+      return undefined;
+    }
+
+    return cleaned.slice(0, SKU_PREFIX_LENGTH);
+  }
+
+  private parseProductId(id: string) {
+    const parsed = Number(id);
+    if (!Number.isInteger(parsed)) {
+      throw new BadRequestException('product id must be a number');
+    }
+
+    return parsed;
+  }
+
+  private buildCatalogMetadata(
+    body: Record<string, unknown>,
+    description: string | undefined,
+    options: {
+      isVariative: boolean;
+      selectedAttributes: Prisma.InputJsonObject[];
+      variants: Prisma.InputJsonObject[];
+    },
+    context?: {
+      companyId?: string | null;
+    },
+  ): Prisma.InputJsonObject {
+    const firstShopPrice = Array.isArray(body.shop_prices)
+      ? body.shop_prices.find(
+          (item): item is Record<string, unknown> =>
+            !!item && typeof item === 'object',
+        )
+      : undefined;
     return {
       brand_id: this.optionalString(body.brand_id) ?? null,
       brand_name: this.optionalString(body.brand_name) ?? null,
       description: description ?? null,
-      measurement_unit_id: this.optionalString(body.measurement_unit_id) ?? null,
-      company_id: this.optionalString(body.company_id) ?? COMPANY_ID,
-    } satisfies Prisma.JsonObject;
+      measurement_unit_id:
+        this.optionalString(body.measurement_unit_id) ?? null,
+      company_id:
+        context?.companyId ??
+        this.optionalString(body.company_id) ??
+        COMPANY_ID,
+      product_type_id: this.resolveProductType(body.product_type_id) ?? null,
+      is_variative: options.isVariative,
+      selected_attributes: options.selectedAttributes,
+      variants: options.variants,
+      discount_price:
+        this.toNumber(body.wholesale_price) ??
+        this.toNumber(firstShopPrice?.wholesale_price) ??
+        null,
+      free_price: this.toBooleanValue(body.free_price),
+    } satisfies Prisma.InputJsonObject;
   }
 
   private normalizeNumericStringArray(values?: string[]) {
@@ -1313,6 +2641,16 @@ export class ProductsService {
     return values
       .map((value) => Number(value))
       .filter((value) => Number.isInteger(value));
+  }
+
+  private toBranchCodes(values?: string[]) {
+    if (!values?.length) {
+      return [];
+    }
+
+    return values
+      .map((value) => this.resolveBranchCodeByShopId(value))
+      .filter((value) => value.trim().length > 0);
   }
 
   private requireString(value: unknown, field: string) {
@@ -1354,27 +2692,76 @@ export class ProductsService {
     return Math.trunc(parsed);
   }
 
-  private toJsonValue(value: unknown) {
+  private toJsonFieldValue(
+    value: unknown,
+  ): Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput | undefined {
     if (value === undefined) {
       return undefined;
     }
 
+    if (value === null) {
+      return Prisma.JsonNull;
+    }
+
+    return this.toPrismaInputJsonValue(value);
+  }
+
+  private toPrismaInputJsonObject(value: unknown): Prisma.InputJsonObject {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new BadRequestException('metadata must be a valid JSON object');
+    }
+
+    const result: Record<string, Prisma.InputJsonValue | null> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      result[key] = this.toPrismaNestedJsonValue(entry);
+    }
+
+    return result as Prisma.InputJsonObject;
+  }
+
+  private toPrismaInputJsonValue(value: unknown): Prisma.InputJsonValue {
+    if (value === null) {
+      throw new BadRequestException('Top-level JSON value cannot be null');
+    }
+
     if (
-      value === null ||
       typeof value === 'string' ||
       typeof value === 'number' ||
-      typeof value === 'boolean' ||
-      Array.isArray(value) ||
-      typeof value === 'object'
+      typeof value === 'boolean'
     ) {
-      return value as Prisma.JsonValue;
+      return value;
+    }
+
+    if (Array.isArray(value)) {
+      return value.map((item) => this.toPrismaNestedJsonValue(item));
+    }
+
+    if (typeof value === 'object') {
+      return this.toPrismaInputJsonObject(value);
     }
 
     throw new BadRequestException('metadata must be a valid JSON value');
   }
 
-  private resolveShopByBranchCode(branchCode: string) {
+  private toPrismaNestedJsonValue(
+    value: unknown,
+  ): Prisma.InputJsonValue | null {
+    if (value === null) {
+      return null;
+    }
+
+    return this.toPrismaInputJsonValue(value);
+  }
+
+  private resolveShopByBranchCode(
+    branchCode: string,
+    shopLookup?: Map<string, ResolvedShop>,
+  ) {
     const normalizedBranchCode = branchCode.trim();
+    const resolvedShopFromLookup = shopLookup?.get(normalizedBranchCode);
+    if (resolvedShopFromLookup) {
+      return resolvedShopFromLookup;
+    }
     const loweredBranchCode = normalizedBranchCode.toLowerCase();
     const resolvedShop = Object.entries(SHOP_BY_BRANCH_CODE).find(
       ([canonicalBranchCode, shop]) =>
@@ -1391,6 +2778,45 @@ export class ProductsService {
         shop_name: normalizedBranchCode,
       }
     );
+  }
+
+  private async buildShopLookupByBranchCodes(
+    branchCodes: string[],
+    companyId?: string | null,
+  ) {
+    const normalizedBranchCodes = [...new Set(
+      branchCodes.map((branchCode) => branchCode.trim()).filter(Boolean),
+    )];
+    const shopLookup = new Map<string, ResolvedShop>();
+
+    if (!normalizedBranchCodes.length) {
+      return shopLookup;
+    }
+
+    const shops = await this.prisma.shop.findMany({
+      where: {
+        branchCode: {
+          in: normalizedBranchCodes,
+        },
+        ...(companyId ? { companyId } : {}),
+      },
+      select: {
+        id: true,
+        name: true,
+        branchCode: true,
+      },
+    });
+
+    for (const shop of shops) {
+      shopLookup.set(shop.branchCode, {
+        id: shop.id,
+        shop_id: shop.id,
+        shop_name: shop.name,
+        branch_code: shop.branchCode,
+      });
+    }
+
+    return shopLookup;
   }
 
   private resolveBranchCodeByShopId(shopId: string) {
