@@ -1,4 +1,4 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
 import { CompanySettingsService } from './company-settings.service';
 
 @Controller()
@@ -72,6 +72,24 @@ export class CompanySettingsController {
       Number(limit),
       companyId,
     );
+  }
+
+  @Post('company-payment-type')
+  createCompanyPaymentType(@Body() body: Record<string, unknown>) {
+    return this.companySettingsService.createCompanyPaymentType(body);
+  }
+
+  @Put('company-payment-type/:id')
+  updateCompanyPaymentType(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.companySettingsService.updateCompanyPaymentType(id, body);
+  }
+
+  @Delete('company-payment-type/:id')
+  deleteCompanyPaymentType(@Param('id') id: string) {
+    return this.companySettingsService.deleteCompanyPaymentType(id);
   }
 
   @Get('cash-box')

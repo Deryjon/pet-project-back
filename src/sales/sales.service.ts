@@ -62,8 +62,15 @@ export class SalesService {
         createdAt: 'desc',
       },
     });
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      sales.map((sale) => sale.branchCode).filter((value): value is string => !!value),
+      context?.companyId,
+    );
+    const paymentTypeLookup = this.buildPaymentTypeLookup(context?.companyId);
 
-    return sales.map((sale) => this.toSaleListItem(sale, context));
+    return sales.map((sale) =>
+      this.toSaleListItem(sale, context, shopLookup, paymentTypeLookup),
+    );
   }
 
   async createDraft(authorization?: string) {
@@ -82,7 +89,7 @@ export class SalesService {
   async createOrder(body: Record<string, unknown>, authorization?: string) {
     const context = await this.getRequestContext(authorization);
     const shopId = this.optionalString(body.shop_id) ?? '';
-    const branchCode = this.resolveScopedBranchCode(shopId, context);
+    const branchCode = await this.resolveScopedBranchCode(shopId, context);
 
     const sale = await this.prisma.sale.create({
       data: {
@@ -138,7 +145,11 @@ export class SalesService {
     }
 
     this.assertSaleAccess(sale, context);
-    return this.toV2OrderResponse(sale, context);
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      sale.branchCode ? [sale.branchCode] : [],
+      context?.companyId,
+    );
+    return this.toV2OrderResponse(sale, context, shopLookup);
   }
 
   async findProductsForNewSale(args: {
@@ -150,7 +161,7 @@ export class SalesService {
     const context = await this.getRequestContext(authorization);
     const safePage = Math.max(1, args.page);
     const safeLimit = Math.min(Math.max(1, args.limit), 100);
-    const branchCode = this.resolveScopedBranchCode(args.shopId, context);
+    const branchCode = await this.resolveScopedBranchCode(args.shopId, context);
 
     const where: any = args.search
       ? {
@@ -662,10 +673,28 @@ export class SalesService {
       barcode: string | null;
       sku: string | null;
     }[];
-  }, context?: any) {
+  },
+  context?: any,
+  shopLookup?: Map<string, { shop_id: string; shop_name: string }>,
+  paymentTypeLookup?: Map<
+    string,
+    {
+      id: string;
+      name: string;
+      payment_type_id: string;
+      payment_type_name: string;
+    }
+  >,
+  ) {
     const sellerName = sale.user
       ? `${sale.user.firstName} ${sale.user.lastName}`.trim()
       : null;
+    const shop = sale.branchCode
+      ? this.resolveShopByBranchCode(sale.branchCode, shopLookup)
+      : null;
+    const payment = sale.paymentMethod
+      ? paymentTypeLookup?.get(sale.paymentMethod)
+      : undefined;
 
     return {
       id: sale.id,
@@ -680,10 +709,32 @@ export class SalesService {
       discount_amount: sale.discountAmount,
       discount: sale.discountAmount,
       seller_name: sellerName,
-      branch_title: sale.branchCode,
-      branch_name: sale.branchCode,
+      shop_id: shop?.shop_id ?? sale.branchCode,
+      branch_title: shop?.shop_name ?? sale.branchCode,
+      branch_name: shop?.shop_name ?? sale.branchCode,
+      shop: shop
+        ? {
+            id: shop.shop_id,
+            name: shop.shop_name,
+          }
+        : null,
       payment_method: sale.paymentMethod,
       payment_type: sale.paymentMethod,
+      payment: payment
+        ? {
+            id: payment.id,
+            name: payment.name,
+            payment_type_id: payment.payment_type_id,
+            payment_type_name: payment.payment_type_name,
+          }
+        : sale.paymentMethod
+          ? {
+              id: sale.paymentMethod,
+              name: sale.paymentMethod,
+              payment_type_id: '',
+              payment_type_name: '',
+            }
+          : null,
       client_name: sale.clientName,
       items: sale.items.map((item) => ({
         id: item.id,
@@ -735,8 +786,8 @@ export class SalesService {
         }[];
       } | null;
     }[];
-  }, context?: any) {
-    const shop = this.resolveShopByBranchCode(sale.branchCode ?? '');
+  }, context?: any, shopLookup?: Map<string, { shop_id: string; shop_name: string }>) {
+    const shop = this.resolveShopByBranchCode(sale.branchCode ?? '', shopLookup);
 
     return {
       id: String(sale.id),
@@ -1155,8 +1206,15 @@ export class SalesService {
     return parsed;
   }
 
-  private resolveShopByBranchCode(branchCode: string) {
+  private resolveShopByBranchCode(
+    branchCode: string,
+    shopLookup?: Map<string, { shop_id: string; shop_name: string }>,
+  ) {
     const normalizedBranchCode = branchCode.trim();
+    const resolvedShopFromLookup = shopLookup?.get(normalizedBranchCode);
+    if (resolvedShopFromLookup) {
+      return resolvedShopFromLookup;
+    }
     const loweredBranchCode = normalizedBranchCode.toLowerCase();
     const resolvedShop = Object.entries(SHOP_BY_BRANCH_CODE).find(
       ([canonicalBranchCode, shop]) =>
@@ -1173,6 +1231,85 @@ export class SalesService {
         shop_name: normalizedBranchCode,
       }
     );
+  }
+
+  private async buildShopLookupByBranchCodes(
+    branchCodes: string[],
+    companyId?: string | null,
+  ) {
+    const normalizedBranchCodes = [...new Set(
+      branchCodes.map((branchCode) => branchCode.trim()).filter(Boolean),
+    )];
+    const shopLookup = new Map<string, { shop_id: string; shop_name: string }>();
+
+    if (!normalizedBranchCodes.length) {
+      return shopLookup;
+    }
+
+    const shops = await this.prisma.shop.findMany({
+      where: {
+        branchCode: {
+          in: normalizedBranchCodes,
+        },
+        ...(companyId ? { companyId } : {}),
+      },
+      select: {
+        id: true,
+        name: true,
+        branchCode: true,
+      },
+    });
+
+    for (const shop of shops) {
+      shopLookup.set(shop.branchCode, {
+        shop_id: shop.id,
+        shop_name: shop.name,
+      });
+    }
+
+    return shopLookup;
+  }
+
+  private buildPaymentTypeLookup(companyId?: string | null) {
+    const companyPaymentTypes =
+      this.companySettingsService.getCompanyPaymentTypes(undefined, companyId ?? undefined);
+    const lookup = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        payment_type_id: string;
+        payment_type_name: string;
+      }
+    >();
+
+    for (const paymentType of companyPaymentTypes.company_payment_types as Array<
+      Record<string, unknown>
+    >) {
+      const paymentTypeMeta =
+        paymentType.payment_type &&
+        typeof paymentType.payment_type === 'object' &&
+        !Array.isArray(paymentType.payment_type)
+          ? (paymentType.payment_type as Record<string, unknown>)
+          : undefined;
+      const paymentTypeId =
+        typeof paymentType.id === 'string' ? paymentType.id : '';
+
+      if (!paymentTypeId) {
+        continue;
+      }
+
+      lookup.set(paymentTypeId, {
+        id: paymentTypeId,
+        name: typeof paymentType.name === 'string' ? paymentType.name : '',
+        payment_type_id:
+          typeof paymentTypeMeta?.id === 'string' ? paymentTypeMeta.id : '',
+        payment_type_name:
+          typeof paymentTypeMeta?.name === 'string' ? paymentTypeMeta.name : '',
+      });
+    }
+
+    return lookup;
   }
 
   private resolveBranchCodeByShopId(shopId: string) {
@@ -1203,9 +1340,12 @@ export class SalesService {
         };
   }
 
-  private resolveScopedBranchCode(shopId: string | undefined, context: any) {
+  private async resolveScopedBranchCode(
+    shopId: string | undefined,
+    context: any,
+  ) {
     const requestedBranchCode = shopId
-      ? this.resolveBranchCodeByShopId(shopId)
+      ? await this.resolveBranchCodeForScopedSale(shopId, context)
       : undefined;
 
     if (!context || context.userType !== 'company') {
@@ -1223,6 +1363,49 @@ export class SalesService {
     }
 
     return requestedBranchCode;
+  }
+
+  private async resolveBranchCodeForScopedSale(
+    shopIdentifier: string,
+    context: any,
+  ) {
+    const normalizedIdentifier = shopIdentifier.trim();
+
+    if (!normalizedIdentifier) {
+      return undefined;
+    }
+
+    if (context?.userType === 'company') {
+      if (context.allowedBranchCodes.includes(normalizedIdentifier)) {
+        return normalizedIdentifier;
+      }
+
+      const shop = await this.prisma.shop.findFirst({
+        where: {
+          companyId: context.companyId,
+          OR: [
+            { id: normalizedIdentifier },
+            { branchCode: normalizedIdentifier },
+          ],
+        },
+        select: {
+          id: true,
+          branchCode: true,
+        },
+      });
+
+      if (shop) {
+        if (!context.allowedShopIds.includes(shop.id)) {
+          throw new BadRequestException(
+            'Requested shop is not available for this user',
+          );
+        }
+
+        return shop.branchCode;
+      }
+    }
+
+    return this.resolveBranchCodeByShopId(normalizedIdentifier);
   }
 
   private assertSaleAccess(sale: { branchCode: string | null }, context: any) {

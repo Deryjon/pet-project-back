@@ -431,16 +431,23 @@ export class ProductsService {
       context?.companyId,
     );
 
+    const visibleBranchCodes = resolvedShopBranchCodes?.length
+      ? resolvedShopBranchCodes
+      : context?.allowedBranchCodes;
+
     const response: Record<string, unknown> = {
       count,
       total: 0,
       products: products.map((product) =>
-        this.toProductResponseV2(product, shopLookup),
+        this.toProductResponseV2(product, shopLookup, visibleBranchCodes),
       ),
       fields: this.getCatalogFields(),
     };
 
     if (statistics) {
+      const visibleBranchCodes = resolvedShopBranchCodes?.length
+        ? resolvedShopBranchCodes
+        : context?.allowedBranchCodes;
       const productsForStatistics = await this.prisma.product.findMany({
         where,
         select: {
@@ -449,6 +456,15 @@ export class ProductsService {
           purchasePrice: true,
           salePrice: true,
           stocks: {
+            ...(visibleBranchCodes?.length
+              ? {
+                  where: {
+                    branchCode: {
+                      in: visibleBranchCodes,
+                    },
+                  },
+                }
+              : {}),
             select: {
               quantity: true,
               purchasePrice: true,
@@ -515,6 +531,23 @@ export class ProductsService {
         purchasePrice: true,
         salePrice: true,
         stocks: {
+          ...(resolvedShopBranchCodes?.length
+            ? {
+                where: {
+                  branchCode: {
+                    in: resolvedShopBranchCodes,
+                  },
+                },
+              }
+            : context?.allowedBranchCodes?.length
+              ? {
+                  where: {
+                    branchCode: {
+                      in: context.allowedBranchCodes,
+                    },
+                  },
+                }
+              : {}),
           select: {
             quantity: true,
             purchasePrice: true,
@@ -1165,10 +1198,14 @@ export class ProductsService {
       purchasePrice: number | null;
       salePrice: number | null;
     }[];
-  }, shopLookup?: Map<string, ResolvedShop>) {
+  }, shopLookup?: Map<string, ResolvedShop>, visibleBranchCodes?: string[]) {
     const currencyCode =
       this.companySettingsService.getDefaultCurrencyIsoCode();
-    const stockSummaries = product.stocks.map((stock) => {
+    const filteredStocks = this.filterStocksByBranchCodes(
+      product.stocks,
+      visibleBranchCodes,
+    );
+    const stockSummaries = filteredStocks.map((stock) => {
       const shop = this.resolveShopByBranchCode(stock.branchCode, shopLookup);
       const measurementValue = stock.quantity;
       const supplyPrice = stock.purchasePrice ?? product.purchasePrice ?? 0;
@@ -1336,6 +1373,22 @@ export class ProductsService {
       category_name: product.category?.name ?? null,
       photo: product.photo,
     };
+  }
+
+  private filterStocksByBranchCodes<
+    T extends {
+      branchCode: string;
+    },
+  >(stocks: T[], visibleBranchCodes?: string[]) {
+    if (!visibleBranchCodes?.length) {
+      return stocks;
+    }
+
+    const visibleBranchCodeSet = new Set(
+      visibleBranchCodes.map((branchCode) => branchCode.trim()).filter(Boolean),
+    );
+
+    return stocks.filter((stock) => visibleBranchCodeSet.has(stock.branchCode));
   }
 
   private toCatalogCreateProductResponse(
@@ -1959,7 +2012,7 @@ export class ProductsService {
           !!item && typeof item === 'object',
       )
       .map((item) => {
-        const shopId = this.optionalString(item.shop_id) ?? '';
+        const shopId = this.extractShopIdentifier(item);
         const quantity =
           this.toInt(item.measurement_value) ??
           this.toInt(item.total_measurement_value) ??
@@ -1989,8 +2042,7 @@ export class ProductsService {
       (item) =>
         !!item &&
         typeof item === 'object' &&
-        this.optionalString((item as Record<string, unknown>).shop_id) ===
-          shopId,
+        this.extractShopIdentifier(item as Record<string, unknown>) === shopId,
     ) as Record<string, unknown> | undefined;
 
     return (
@@ -2343,12 +2395,17 @@ export class ProductsService {
         return false;
       }
 
-      const shopId = this.optionalString((stock as Record<string, unknown>).shop_id);
-      if (!shopId) {
+      const shopIdentifier = this.extractShopIdentifier(
+        stock as Record<string, unknown>,
+      );
+      if (!shopIdentifier) {
         return false;
       }
 
-      return context.allowedShopIds.includes(shopId);
+      return (
+        context.allowedShopIds.includes(shopIdentifier) ||
+        context.allowedBranchCodes.includes(shopIdentifier)
+      );
     });
   }
 
@@ -2364,12 +2421,95 @@ export class ProductsService {
     }>,
     context: any,
   ) {
-    return Promise.all(
-      shipments.map(async (shipment) => ({
+    const normalizedIdentifiers = [...new Set(
+      shipments
+        .map((shipment) => shipment.shopId.trim())
+        .filter((identifier) => identifier.length > 0),
+    )];
+
+    const resolvedBranchCodes = new Map<string, string>();
+
+    if (context?.userType === 'company') {
+      const matchingShops = normalizedIdentifiers.length
+        ? await this.prisma.shop.findMany({
+            where: {
+              companyId: context.companyId,
+              OR: [
+                {
+                  id: {
+                    in: normalizedIdentifiers,
+                  },
+                },
+                {
+                  branchCode: {
+                    in: normalizedIdentifiers,
+                  },
+                },
+              ],
+            },
+            select: {
+              id: true,
+              branchCode: true,
+            },
+          })
+        : [];
+
+      for (const shop of matchingShops) {
+        if (
+          context.allowedShopIds.includes(shop.id) ||
+          context.allowedBranchCodes.includes(shop.branchCode)
+        ) {
+          resolvedBranchCodes.set(shop.id, shop.branchCode);
+          resolvedBranchCodes.set(shop.branchCode, shop.branchCode);
+        }
+      }
+    }
+
+    for (const identifier of normalizedIdentifiers) {
+      if (resolvedBranchCodes.has(identifier)) {
+        continue;
+      }
+
+      const legacyBranchCode = this.resolveBranchCodeByShopId(identifier);
+      if (legacyBranchCode) {
+        resolvedBranchCodes.set(identifier, legacyBranchCode);
+      }
+    }
+
+    return shipments.map((shipment) => {
+      const normalizedIdentifier = shipment.shopId.trim();
+      const branchCode = resolvedBranchCodes.get(normalizedIdentifier);
+
+      if (!branchCode) {
+        throw new BadRequestException(
+          `Unable to resolve branch for shop identifier "${normalizedIdentifier}"`,
+        );
+      }
+
+      if (
+        context?.userType === 'company' &&
+        !context.allowedBranchCodes.includes(branchCode)
+      ) {
+        throw new BadRequestException(
+          'This user does not have access to the requested shop',
+        );
+      }
+
+      return {
         ...shipment,
-        branchCode: await this.resolveBranchCodeForWrite(shipment.shopId, context),
-      })),
-    );
+        branchCode,
+      };
+    });
+  }
+
+  private extractShopIdentifier(item: Record<string, unknown>) {
+    return (
+      this.optionalString(item.shop_id) ??
+      this.optionalString(item.shopId) ??
+      this.optionalString(item.branch_code) ??
+      this.optionalString(item.branchCode) ??
+      ''
+    ).trim();
   }
 
   private async resolveBranchCodeForWrite(shopIdentifier: string, context: any) {

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -388,6 +388,8 @@ const DEFAULT_CHEQUES: ChequeProfile[] = [
 
 @Injectable()
 export class CompanySettingsService {
+  private companyPaymentTypesStore?: CompanyPaymentType[];
+
   constructor(private readonly prisma: PrismaService) {}
 
   private get db(): any {
@@ -587,10 +589,7 @@ export class CompanySettingsService {
   }
 
   getCompanyPaymentTypes(limit?: number, companyId?: string) {
-    const companyPaymentTypes = this.parseJsonArray<CompanyPaymentType>(
-      process.env.COMPANY_PAYMENT_TYPES_JSON,
-      DEFAULT_COMPANY_PAYMENT_TYPES,
-    );
+    const companyPaymentTypes = this.getStoredCompanyPaymentTypes();
     const targetCompanyId = companyId?.trim() || DEFAULT_COMPANY_ID;
     const filtered = companyPaymentTypes.filter(
       (item) => this.stringOrDefault(item.company_id, '') === targetCompanyId,
@@ -602,6 +601,136 @@ export class CompanySettingsService {
         0,
         this.normalizeLimit(limit, 1000),
       ),
+    };
+  }
+
+  createCompanyPaymentType(body: Record<string, unknown>) {
+    const companyPaymentTypes = this.getStoredCompanyPaymentTypes();
+    const companyId =
+      this.optionalString(body.company_id) ?? DEFAULT_COMPANY_ID;
+    const name = this.requireString(body.name, 'name');
+    const paymentTypeId =
+      this.optionalString(body.payment_type_id) ??
+      this.optionalNestedString(body.payment_type, 'id') ??
+      '00ed9cff-9576-432f-849b-7bbcc2fed640';
+    const paymentTypeName =
+      this.optionalString(body.payment_type_name) ??
+      this.optionalNestedString(body.payment_type, 'name') ??
+      'Кастомный';
+
+    const created: CompanyPaymentType = {
+      id: randomUUID(),
+      company_id: companyId,
+      name,
+      token: this.optionalString(body.token) ?? '',
+      is_editable: this.optionalBoolean(body.is_editable) ?? true,
+      dont_show_in_make_payment:
+        this.optionalBoolean(body.dont_show_in_make_payment) ?? false,
+      dont_show_in_settings:
+        this.optionalBoolean(body.dont_show_in_settings) ?? false,
+      is_cash_payment_type:
+        this.optionalBoolean(body.is_cash_payment_type) ?? false,
+      payment_type: {
+        id: paymentTypeId,
+        name: paymentTypeName,
+      },
+    };
+
+    companyPaymentTypes.unshift(created);
+    return created;
+  }
+
+  updateCompanyPaymentType(id: string, body: Record<string, unknown>) {
+    const companyPaymentTypes = this.getStoredCompanyPaymentTypes();
+    const paymentType = companyPaymentTypes.find(
+      (item) => this.stringOrDefault(item.id, '') === id,
+    );
+
+    if (!paymentType) {
+      throw new NotFoundException('Company payment type not found');
+    }
+
+    if (body.name !== undefined) {
+      paymentType.name = this.requireString(body.name, 'name');
+    }
+
+    if (body.company_id !== undefined) {
+      paymentType.company_id = this.requireString(body.company_id, 'company_id');
+    }
+
+    if (body.token !== undefined) {
+      paymentType.token = this.optionalString(body.token) ?? '';
+    }
+
+    if (body.is_editable !== undefined) {
+      paymentType.is_editable = this.optionalBoolean(body.is_editable) ?? false;
+    }
+
+    if (body.dont_show_in_make_payment !== undefined) {
+      paymentType.dont_show_in_make_payment =
+        this.optionalBoolean(body.dont_show_in_make_payment) ?? false;
+    }
+
+    if (body.dont_show_in_settings !== undefined) {
+      paymentType.dont_show_in_settings =
+        this.optionalBoolean(body.dont_show_in_settings) ?? false;
+    }
+
+    if (body.is_cash_payment_type !== undefined) {
+      paymentType.is_cash_payment_type =
+        this.optionalBoolean(body.is_cash_payment_type) ?? false;
+    }
+
+    const paymentTypeMeta =
+      paymentType.payment_type &&
+      typeof paymentType.payment_type === 'object' &&
+      !Array.isArray(paymentType.payment_type)
+        ? (paymentType.payment_type as Record<string, unknown>)
+        : {};
+
+    if (body.payment_type_id !== undefined) {
+      paymentTypeMeta.id = this.requireString(body.payment_type_id, 'payment_type_id');
+    }
+
+    if (body.payment_type_name !== undefined) {
+      paymentTypeMeta.name = this.requireString(
+        body.payment_type_name,
+        'payment_type_name',
+      );
+    }
+
+    if (body.payment_type !== undefined) {
+      const nestedId = this.optionalNestedString(body.payment_type, 'id');
+      const nestedName = this.optionalNestedString(body.payment_type, 'name');
+
+      if (nestedId) {
+        paymentTypeMeta.id = nestedId;
+      }
+
+      if (nestedName) {
+        paymentTypeMeta.name = nestedName;
+      }
+    }
+
+    paymentType.payment_type = paymentTypeMeta;
+
+    return paymentType;
+  }
+
+  deleteCompanyPaymentType(id: string) {
+    const companyPaymentTypes = this.getStoredCompanyPaymentTypes();
+    const index = companyPaymentTypes.findIndex(
+      (item) => this.stringOrDefault(item.id, '') === id,
+    );
+
+    if (index === -1) {
+      throw new NotFoundException('Company payment type not found');
+    }
+
+    const [deleted] = companyPaymentTypes.splice(index, 1);
+    return {
+      success: true,
+      company_payment_type: deleted,
     };
   }
 
@@ -713,6 +842,17 @@ export class CompanySettingsService {
     return parsed as T[];
   }
 
+  private getStoredCompanyPaymentTypes() {
+    if (!this.companyPaymentTypesStore) {
+      this.companyPaymentTypesStore = this.parseJsonArray<CompanyPaymentType>(
+        process.env.COMPANY_PAYMENT_TYPES_JSON,
+        DEFAULT_COMPANY_PAYMENT_TYPES,
+      ).map((item) => ({ ...item }));
+    }
+
+    return this.companyPaymentTypesStore;
+  }
+
   private parseJsonObject(raw?: string): Record<string, unknown> {
     const parsed = this.parseJsonValue(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -736,5 +876,49 @@ export class CompanySettingsService {
 
   private stringOrDefault(value: unknown, fallback: string): string {
     return typeof value === 'string' ? value : fallback;
+  }
+
+  private optionalString(value: unknown) {
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  private requireString(value: unknown, fieldName: string) {
+    const normalized = this.optionalString(value);
+    if (!normalized) {
+      throw new BadRequestException(`${fieldName} is required`);
+    }
+
+    return normalized;
+  }
+
+  private optionalBoolean(value: unknown) {
+    if (typeof value === 'boolean') {
+      return value;
+    }
+
+    if (typeof value === 'string') {
+      if (value === 'true') {
+        return true;
+      }
+
+      if (value === 'false') {
+        return false;
+      }
+    }
+
+    return undefined;
+  }
+
+  private optionalNestedString(value: unknown, key: string) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return undefined;
+    }
+
+    return this.optionalString((value as Record<string, unknown>)[key]);
   }
 }
