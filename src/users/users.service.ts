@@ -117,6 +117,27 @@ export class UsersService {
     return users.map((user) => this.toListItem(user));
   }
 
+  async findCompanyUsersForPlatform(
+    companyId: string,
+    authorization?: string,
+  ) {
+    await this.assertPlatformAdminAccess(authorization);
+    await this.ensureCompanyExists(companyId);
+
+    const users = await this.db.user.findMany({
+      where: {
+        companyId,
+        userType: 'company',
+      },
+      include: this.userRelationsInclude(),
+      orderBy: {
+        id: 'asc',
+      },
+    });
+
+    return users.map((user) => this.toListItem(user));
+  }
+
   async findPlatformUserByPhoneNumber(phoneNumber: string) {
     const phoneNumberVariants = this.buildPhoneNumberLookupVariants(phoneNumber);
 
@@ -210,6 +231,12 @@ export class UsersService {
       can_switch_shops: Boolean(user.canSwitchShops),
       is_active: user.isActive,
     };
+  }
+
+  async findPlatformManagedUser(id: number, authorization?: string) {
+    await this.assertPlatformAdminAccess(authorization);
+
+    return this.findOneResponse(id, authorization);
   }
 
   async create(body: Record<string, unknown>, actor?: UserWithRelations) {
@@ -359,6 +386,10 @@ export class UsersService {
             body.company_id ?? targetUser.companyId,
             actor,
           );
+    const companyChanged =
+      targetUser.userType === 'company' &&
+      companyId !== null &&
+      targetUser.companyId !== companyId;
     const data: Prisma.UserUpdateInput = {};
 
     if (body.first_name !== undefined) {
@@ -403,26 +434,32 @@ export class UsersService {
       };
 
       const allowedShops =
-        body.allowed_shop_ids !== undefined || body.current_shop_id !== undefined
+        body.allowed_shop_ids !== undefined ||
+        body.current_shop_id !== undefined ||
+        body.branch_location !== undefined ||
+        companyChanged
           ? await this.resolveAllowedShopsForWrite(
               companyId,
               body.allowed_shop_ids ??
-                targetUser.shopAccesses.map((access) => access.shopId),
+                (companyChanged
+                  ? undefined
+                  : targetUser.shopAccesses.map((access) => access.shopId)),
               this.optionalString(body.current_shop_id) ??
                 this.optionalString(body.branch_location) ??
-                targetUser.currentShopId,
+                (companyChanged ? undefined : targetUser.currentShopId),
             )
           : targetUser.shopAccesses.map((access) => access.shop);
 
       const currentShop =
         body.allowed_shop_ids !== undefined ||
         body.current_shop_id !== undefined ||
-        body.branch_location !== undefined
+        body.branch_location !== undefined ||
+        companyChanged
           ? await this.resolveCurrentShopForWrite(
               companyId,
               this.optionalString(body.current_shop_id) ??
                 this.optionalString(body.branch_location) ??
-                targetUser.currentShopId,
+                (companyChanged ? undefined : targetUser.currentShopId),
               allowedShops,
             )
           : targetUser.currentShop;
@@ -477,6 +514,34 @@ export class UsersService {
     });
 
     return this.findOneResponse(id);
+  }
+
+  async remove(id: number, actor?: UserWithRelations) {
+    const targetUser = await this.findByIdOrThrow(id);
+
+    if (actor && !this.canManageUser(actor, targetUser)) {
+      throw new ForbiddenException('You cannot manage this user');
+    }
+
+    await this.db.$transaction(async (tx: any) => {
+      await tx.sale.updateMany({
+        where: {
+          userId: id,
+        },
+        data: {
+          userId: null,
+        },
+      });
+
+      await tx.user.delete({
+        where: { id },
+      });
+    });
+
+    return {
+      message: 'User deleted',
+      user_id: id,
+    };
   }
 
   async getProfile(authorization?: string) {
@@ -803,6 +868,9 @@ export class UsersService {
       phone_number: user.phoneNumber,
       role: user.role,
       company_id: user.companyId,
+      company: user.company ? this.toCompanyItem(user.company) : null,
+      current_shop: user.currentShop ? this.toShopItem(user.currentShop) : null,
+      allowed_shop_ids: user.shopAccesses.map((access) => access.shopId),
       current_shop_id: user.currentShopId,
       can_switch_shops: Boolean(user.canSwitchShops),
       is_active: user.isActive,
@@ -1085,6 +1153,18 @@ export class UsersService {
     }
 
     return company.id;
+  }
+
+  private async ensureCompanyExists(companyId: string) {
+    const company = await this.db.company.findUnique({
+      where: { id: companyId },
+    });
+
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    return company;
   }
 
   private async resolveAllowedShopsForWrite(

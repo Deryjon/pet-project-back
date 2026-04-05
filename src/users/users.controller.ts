@@ -64,6 +64,16 @@ export class UsersController {
     );
   }
 
+  @Delete('users/:id')
+  async remove(
+    @Param('id', ParseIntPipe) id: number,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const actor = await this.usersService.assertAdminAccess(authorization);
+
+    return this.usersService.remove(id, actor);
+  }
+
   @Get('user/profile')
   profile(@Headers('authorization') authorization?: string) {
     return this.usersService.getProfile(authorization);
