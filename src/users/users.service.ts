@@ -101,6 +101,22 @@ export class UsersService {
     return users.map((user) => this.toListItem(user));
   }
 
+  async findPlatformUsers(authorization?: string) {
+    await this.assertPlatformAdminAccess(authorization);
+
+    const users = await this.db.user.findMany({
+      where: {
+        userType: 'platform',
+      },
+      include: this.userRelationsInclude(),
+      orderBy: {
+        id: 'asc',
+      },
+    });
+
+    return users.map((user) => this.toListItem(user));
+  }
+
   async findPlatformUserByPhoneNumber(phoneNumber: string) {
     const phoneNumberVariants = this.buildPhoneNumberLookupVariants(phoneNumber);
 

@@ -40,6 +40,81 @@ export class PlatformService {
     });
   }
 
+  async findCompanies() {
+    const companies = await this.db.company.findMany({
+      include: {
+        shops: {
+          where: {
+            isActive: true,
+          },
+          orderBy: {
+            name: 'asc',
+          },
+        },
+        _count: {
+          select: {
+            shops: true,
+            users: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+
+    return companies.map((company) => ({
+      id: company.id,
+      company_id: company.id,
+      login: company.login,
+      name: company.name,
+      subdomain: company.subdomain,
+      is_active: company.isActive,
+      shops_count: company._count.shops,
+      users_count: company._count.users,
+      shops: company.shops.map((shop) => this.toShopItem(shop)),
+      created_at: company.createdAt,
+      updated_at: company.updatedAt,
+    }));
+  }
+
+  async findCompany(companyId: string) {
+    const company = await this.db.company.findUnique({
+      where: { id: companyId },
+      include: {
+        shops: {
+          orderBy: {
+            name: 'asc',
+          },
+        },
+        _count: {
+          select: {
+            shops: true,
+            users: true,
+          },
+        },
+      },
+    });
+
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    return {
+      id: company.id,
+      company_id: company.id,
+      login: company.login,
+      name: company.name,
+      subdomain: company.subdomain,
+      is_active: company.isActive,
+      shops_count: company._count.shops,
+      users_count: company._count.users,
+      shops: company.shops.map((shop) => this.toShopItem(shop)),
+      created_at: company.createdAt,
+      updated_at: company.updatedAt,
+    };
+  }
+
   async createShop(companyId: string, body: Record<string, unknown>) {
     const company = await this.db.company.findUnique({
       where: { id: companyId },
@@ -74,6 +149,21 @@ export class PlatformService {
     });
   }
 
+  async findCompanyShops(companyId: string) {
+    await this.findCompany(companyId);
+
+    const shops = await this.db.shop.findMany({
+      where: {
+        companyId,
+      },
+      orderBy: {
+        name: 'asc',
+      },
+    });
+
+    return shops.map((shop) => this.toShopItem(shop));
+  }
+
   private requireString(value: unknown, field: string) {
     if (typeof value !== 'string' || value.trim().length === 0) {
       throw new BadRequestException(`${field} must be a non-empty string`);
@@ -92,5 +182,28 @@ export class PlatformService {
     }
 
     return normalized;
+  }
+
+  private toShopItem(shop: {
+    id: string;
+    companyId: string;
+    name: string;
+    branchCode: string;
+    isActive: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+  }) {
+    return {
+      id: shop.id,
+      shop_id: shop.id,
+      company_id: shop.companyId,
+      branch_code: shop.branchCode,
+      is_active: shop.isActive,
+      shop: {
+        name: shop.name,
+      },
+      created_at: shop.createdAt,
+      updated_at: shop.updatedAt,
+    };
   }
 }
