@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ForbiddenException,
+  InternalServerErrorException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -94,6 +95,24 @@ export class UsersService {
 
   private get db(): any {
     return this.prisma as any;
+  }
+
+  private getCompanyRoleDelegate(db: any = this.db) {
+    return db?.companyRole;
+  }
+
+  private hasCompanyRoleStorage(db: any = this.db) {
+    return Boolean(this.getCompanyRoleDelegate(db));
+  }
+
+  private assertCompanyRoleStorageAvailable() {
+    if (this.hasCompanyRoleStorage()) {
+      return;
+    }
+
+    throw new InternalServerErrorException(
+      'Company roles storage is unavailable. Run prisma generate and redeploy the service.',
+    );
   }
 
   async findAll(authorization?: string) {
@@ -216,6 +235,21 @@ export class UsersService {
     const actor = await this.assertCompanyAdminAccess(authorization);
     await this.ensureDefaultCompanyRoles(actor.companyId);
 
+    if (!this.hasCompanyRoleStorage()) {
+      return DEFAULT_COMPANY_ROLES.map((role) =>
+        this.toCompanyRoleItem({
+          id: role.code,
+          companyId: actor.companyId,
+          code: role.code,
+          name: role.name,
+          isSystem: role.isSystem,
+          isActive: true,
+          createdAt: new Date(0),
+          updatedAt: new Date(0),
+        }),
+      );
+    }
+
     const roles = await this.db.companyRole.findMany({
       where: {
         companyId: actor.companyId,
@@ -231,6 +265,7 @@ export class UsersService {
     authorization?: string,
   ) {
     const actor = await this.assertCompanyAdminAccess(authorization);
+    this.assertCompanyRoleStorageAvailable();
     await this.ensureDefaultCompanyRoles(actor.companyId);
 
     const name = this.requireString(body.name, 'name');
@@ -269,6 +304,7 @@ export class UsersService {
     authorization?: string,
   ) {
     const actor = await this.assertCompanyAdminAccess(authorization);
+    this.assertCompanyRoleStorageAvailable();
     await this.ensureDefaultCompanyRoles(actor.companyId);
 
     const role = await this.findCompanyRoleByIdOrThrow(roleId, actor.companyId);
@@ -357,6 +393,7 @@ export class UsersService {
 
   async removeCompanyRole(roleId: string, authorization?: string) {
     const actor = await this.assertCompanyAdminAccess(authorization);
+    this.assertCompanyRoleStorageAvailable();
     await this.ensureDefaultCompanyRoles(actor.companyId);
 
     const role = await this.findCompanyRoleByIdOrThrow(roleId, actor.companyId);
@@ -1332,8 +1369,13 @@ export class UsersService {
 
   private async ensureDefaultCompanyRoles(companyId: string, tx?: any) {
     const db = tx ?? this.db;
+    const companyRole = this.getCompanyRoleDelegate(db);
 
-    await db.companyRole.createMany({
+    if (!companyRole) {
+      return;
+    }
+
+    await companyRole.createMany({
       data: DEFAULT_COMPANY_ROLES.map((role) => ({
         companyId,
         code: role.code,
@@ -1387,6 +1429,8 @@ export class UsersService {
   }
 
   private async generateUniqueCompanyRoleCode(companyId: string, name: string) {
+    this.assertCompanyRoleStorageAvailable();
+
     const baseCode = this.normalizeCompanyRoleCode(
       name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'role',
       'code',
@@ -1422,6 +1466,12 @@ export class UsersService {
   private async findCompanyRoleByCode(companyId: string, code: string) {
     await this.ensureDefaultCompanyRoles(companyId);
 
+    if (!this.hasCompanyRoleStorage()) {
+      return DEFAULT_COMPANY_ROLES.some((role) => role.code === code.trim().toLowerCase())
+        ? this.toFallbackCompanyRole(companyId, code.trim().toLowerCase())
+        : null;
+    }
+
     return this.db.companyRole.findFirst({
       where: {
         companyId,
@@ -1431,6 +1481,8 @@ export class UsersService {
   }
 
   private async findCompanyRoleByIdOrThrow(roleId: string, companyId: string) {
+    this.assertCompanyRoleStorageAvailable();
+
     const role = await this.db.companyRole.findFirst({
       where: {
         id: roleId,
@@ -1503,13 +1555,24 @@ export class UsersService {
     }
 
     await this.ensureDefaultCompanyRoles(companyId);
-    const companyRoles = await this.db.companyRole.findMany({
-      where: {
-        companyId,
-        isActive: true,
-      },
-      orderBy: [{ isSystem: 'desc' }, { createdAt: 'asc' }],
-    });
+    const companyRoles = this.hasCompanyRoleStorage()
+      ? await this.db.companyRole.findMany({
+          where: {
+            companyId,
+            isActive: true,
+          },
+          orderBy: [{ isSystem: 'desc' }, { createdAt: 'asc' }],
+        })
+      : DEFAULT_COMPANY_ROLES.map((role) => ({
+          id: role.code,
+          companyId,
+          code: role.code,
+          name: role.name,
+          isSystem: role.isSystem,
+          isActive: true,
+          createdAt: new Date(0),
+          updatedAt: new Date(0),
+        }));
     const companyRoleLookup = new Map<string, CompanyRoleRecord>(
       companyRoles.map((companyRole: CompanyRoleRecord) => [
         companyRole.code,
