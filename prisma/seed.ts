@@ -13,6 +13,14 @@ const prisma = new PrismaClient({
   adapter: new PrismaPg({ connectionString }),
 });
 
+const DEFAULT_COMPANY_ROLES = [
+  { code: 'owner', name: 'Owner', isSystem: true },
+  { code: 'admin', name: 'Admin', isSystem: true },
+  { code: 'store_manager', name: 'Store manager', isSystem: true },
+  { code: 'cashier', name: 'Cashier', isSystem: true },
+  { code: 'employee', name: 'Employee', isSystem: true },
+] as const;
+
 function normalizePhoneNumber(value: string) {
   const normalized = value.replace(/\D/g, '');
 
@@ -77,6 +85,29 @@ async function main() {
         companyId: company.id,
         branchCode: shop.branchCode,
         name: shop.name,
+        isActive: true,
+      },
+    });
+  }
+
+  for (const role of DEFAULT_COMPANY_ROLES) {
+    await prisma.companyRole.upsert({
+      where: {
+        companyId_code: {
+          companyId: company.id,
+          code: role.code,
+        },
+      },
+      update: {
+        name: role.name,
+        isSystem: role.isSystem,
+        isActive: true,
+      },
+      create: {
+        companyId: company.id,
+        code: role.code,
+        name: role.name,
+        isSystem: role.isSystem,
         isActive: true,
       },
     });

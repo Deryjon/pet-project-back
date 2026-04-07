@@ -18,9 +18,25 @@ model Company {
   subdomain String   @unique
   isActive  Boolean  @default(true)
   shops     Shop[]
+  roles     CompanyRole[]
   users     User[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model CompanyRole {
+  id        String   @id @default(uuid())
+  companyId String
+  code      String
+  name      String
+  isSystem  Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, code])
+  @@index([companyId, isActive])
 }
 
 model Shop {
