@@ -37,6 +37,8 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
+    this.usersService.assertUserCanAuthenticate(user);
+
     const isPasswordValid = await bcrypt.compare(dto.password, user.password);
 
     if (!isPasswordValid) {
@@ -79,6 +81,8 @@ export class AuthService {
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
+
+    this.usersService.assertUserCanAuthenticate(user);
 
     const isPasswordValid = await bcrypt.compare(dto.password, user.password);
 

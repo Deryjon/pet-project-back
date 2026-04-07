@@ -195,6 +195,14 @@ export class UsersService {
     return company?.company_id ?? null;
   }
 
+  assertUserCanAuthenticate(user: UserWithRelations) {
+    this.assertUserIsActive(user);
+
+    if (user.userType === 'company') {
+      this.assertCompanyMembershipIsActive(user);
+    }
+  }
+
   async findByIdOrThrow(id: number) {
     const user = await this.db.user.findUnique({
       where: { id },
@@ -693,11 +701,15 @@ export class UsersService {
       throw new UnauthorizedException('User does not belong to this company');
     }
 
+    this.assertUserCanAuthenticate(user);
+
     return this.prepareAuthenticatedUser(userId);
   }
 
   async prepareAuthenticatedUser(userId: number) {
     const user = await this.findByIdOrThrow(userId);
+
+    this.assertUserCanAuthenticate(user);
 
     if (user.userType === 'platform') {
       return user;
@@ -1152,6 +1164,10 @@ export class UsersService {
       throw new NotFoundException('Company not found');
     }
 
+    if (!company.isActive) {
+      throw new BadRequestException('Company is inactive');
+    }
+
     return company.id;
   }
 
@@ -1240,7 +1256,11 @@ export class UsersService {
     return allowedShops[0] ?? null;
   }
 
-  private async findShopByIdentifierOrThrow(shopIdentifier: string, companyId: string) {
+  private async findShopByIdentifierOrThrow(
+    shopIdentifier: string,
+    companyId: string,
+    options?: { allowInactive?: boolean },
+  ) {
     const identifier = shopIdentifier.trim();
     const shop = await this.db.shop.findFirst({
       where: {
@@ -1251,6 +1271,10 @@ export class UsersService {
 
     if (!shop) {
       throw new NotFoundException('Shop not found');
+    }
+
+    if (!options?.allowInactive && !shop.isActive) {
+      throw new BadRequestException('Shop is inactive');
     }
 
     return shop;
@@ -1290,10 +1314,10 @@ export class UsersService {
     if (user.shopAccesses.length) {
       return user.shopAccesses
         .map((access) => access.shop)
-        .filter((shop) => shop.isActive);
+        .filter((shop) => shop && shop.isActive);
     }
 
-    if (user.currentShop) {
+    if (user.currentShop?.isActive) {
       await this.db.userShopAccess.createMany({
         data: [
           {
@@ -1379,8 +1403,10 @@ export class UsersService {
       const payload = await this.jwtService.verifyAsync<{
         sub: number;
       }>(token);
+      const user = await this.findByIdOrThrow(payload.sub);
+      this.assertUserCanAuthenticate(user);
 
-      return this.findByIdOrThrow(payload.sub);
+      return user;
     } catch (error) {
       if (error instanceof TokenExpiredError) {
         throw new UnauthorizedException('Token expired');
@@ -1452,6 +1478,26 @@ export class UsersService {
       }
 
       throw error;
+    }
+  }
+
+  private assertUserIsActive(user: UserWithRelations) {
+    if (!user.isActive) {
+      throw new UnauthorizedException('User is inactive');
+    }
+  }
+
+  private assertCompanyMembershipIsActive(user: UserWithRelations) {
+    if (user.userType !== 'company') {
+      return;
+    }
+
+    if (!user.companyId || !user.company) {
+      throw new UnauthorizedException('Company user is missing company');
+    }
+
+    if (!user.company.isActive) {
+      throw new UnauthorizedException('Company is inactive');
     }
   }
 }

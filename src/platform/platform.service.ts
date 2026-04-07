@@ -53,9 +53,6 @@ export class PlatformService {
     const companies = await this.db.company.findMany({
       include: {
         shops: {
-          where: {
-            isActive: true,
-          },
           orderBy: {
             name: 'asc',
           },
@@ -170,6 +167,16 @@ export class PlatformService {
     await this.db.company.update({
       where: { id: companyId },
       data,
+    });
+
+    return this.findCompany(companyId);
+  }
+
+  async updateCompanyStatus(companyId: string, body: Record<string, unknown>) {
+    const isActive = this.requireBoolean(body.is_active, 'is_active');
+
+    await this.updateCompany(companyId, {
+      is_active: isActive,
     });
 
     return this.findCompany(companyId);
@@ -332,6 +339,18 @@ export class PlatformService {
     });
 
     return this.toShopItem(updatedShop);
+  }
+
+  async updateShopStatus(
+    companyId: string,
+    shopId: string,
+    body: Record<string, unknown>,
+  ) {
+    const isActive = this.requireBoolean(body.is_active, 'is_active');
+
+    return this.updateShop(companyId, shopId, {
+      is_active: isActive,
+    });
   }
 
   async removeShop(companyId: string, shopId: string) {
