@@ -295,9 +295,26 @@ export class UsersService {
   async findCompanyRoles(authorization?: string) {
     const actor = await this.getAuthenticatedUser(authorization);
 
+    if (this.isPlatformAdmin(actor)) {
+      return this.toCompanyRolesListResponse(
+        DEFAULT_COMPANY_ROLES.map((role) =>
+          this.toCompanyRoleItem({
+            id: role.code,
+            companyId: '',
+            code: role.code,
+            name: role.name,
+            isSystem: role.isSystem,
+            isActive: true,
+            createdAt: new Date(0),
+            updatedAt: new Date(0),
+          }),
+        ),
+      );
+    }
+
     if (actor.userType !== 'company' || !actor.companyId) {
       throw new ForbiddenException(
-        'Only company users can view company roles',
+        'Only company users or platform admins can view company roles',
       );
     }
 
