@@ -250,7 +250,14 @@ export class UsersService {
   }
 
   async findCompanyRoles(authorization?: string) {
-    const actor = await this.assertCompanyAdminAccess(authorization);
+    const actor = await this.getAuthenticatedUser(authorization);
+
+    if (actor.userType !== 'company' || !actor.companyId) {
+      throw new ForbiddenException(
+        'Only company users can view company roles',
+      );
+    }
+
     await this.ensureDefaultCompanyRoles(actor.companyId);
 
     const roles = !this.hasCompanyRoleStorage()
