@@ -197,6 +197,11 @@ export class PlatformController {
     return this.usersService.findPlatformUsers(authorization);
   }
 
+  @Get('platform/roles')
+  findPlatformRoles(@Headers('authorization') authorization?: string) {
+    return this.usersService.findPlatformRoles(authorization);
+  }
+
   @Post('platform/users')
   async createPlatformUser(
     @Body() body: CreateUserDto,

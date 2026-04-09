@@ -14,11 +14,17 @@ const prisma = new PrismaClient({
 });
 
 const DEFAULT_COMPANY_ROLES = [
-  { code: 'owner', name: 'Owner', isSystem: true },
-  { code: 'admin', name: 'Admin', isSystem: true },
-  { code: 'store_manager', name: 'Store manager', isSystem: true },
-  { code: 'cashier', name: 'Cashier', isSystem: true },
-  { code: 'employee', name: 'Employee', isSystem: true },
+  { code: 'owner', name: 'Управляющий компании', isSystem: true },
+  { code: 'admin', name: 'Админ', isSystem: true },
+  { code: 'store_manager', name: 'Управляющий магазина', isSystem: true },
+  { code: 'cashier', name: 'Кассир', isSystem: true },
+  { code: 'employee', name: 'Сотрудник', isSystem: true },
+] as const;
+
+const DEFAULT_PLATFORM_ROLES = [
+  { code: 'platform_admin', name: 'Админ платформы', isSystem: true },
+  { code: 'support', name: 'Поддержка', isSystem: true },
+  { code: 'superadmin', name: 'Суперадмин', isSystem: true },
 ] as const;
 
 function normalizePhoneNumber(value: string) {
@@ -40,6 +46,7 @@ async function main() {
     process.env.PLATFORM_ADMIN_PHONE ?? '+998900000001',
   );
   const adminPassword = process.env.PLATFORM_ADMIN_PASSWORD ?? 'admin123';
+  const primaryPlatformRole = DEFAULT_PLATFORM_ROLES[0]?.code ?? 'platform_admin';
 
   const company = await prisma.company.upsert({
     where: {
@@ -138,7 +145,7 @@ async function main() {
         lastName: 'Admin',
         phoneNumber: adminPhone,
         password: await bcrypt.hash(adminPassword, 10),
-        role: 'platform_admin',
+        role: primaryPlatformRole,
         isActive: true,
       },
     });
@@ -164,7 +171,7 @@ async function main() {
         phoneNumber: adminPhone,
         password: await bcrypt.hash(adminPassword, 10),
         userType: 'platform',
-        role: 'platform_admin',
+        role: primaryPlatformRole,
         isActive: true,
       },
     });
