@@ -6,95 +6,196 @@ datasource db {
   provider = "postgresql"
 }
 
+enum UserType {
+  platform
+  company
+}
+
+model Company {
+  id        String   @id @default(uuid())
+  login     String   @unique
+  name      String
+  subdomain String   @unique
+  isActive  Boolean  @default(true)
+  shops     Shop[]
+  roles     CompanyRole[]
+  users     User[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CompanyRole {
+  id        String   @id @default(uuid())
+  companyId String
+  code      String
+  name      String
+  isSystem  Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, code])
+  @@index([companyId, isActive])
+}
+
+model Shop {
+  id          String           @id @default(uuid())
+  companyId   String
+  name        String
+  branchCode  String
+  isActive    Boolean          @default(true)
+  company     Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  currentUsers User[]          @relation("CurrentShop")
+  userAccesses UserShopAccess[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@unique([companyId, branchCode])
+}
+
 model User {
-  id       Int     @id @default(autoincrement())
-  fullName String
-  phone    String? @unique
-  password String
-  isActive Boolean @default(true)
+  id          Int      @id @default(autoincrement())
+  firstName   String
+  lastName    String
+  birthDate   DateTime?
+  phoneNumber String
+  password    String
+  userType    UserType @default(company)
+  role        String
+  companyId   String?
+  branchCode  String?
+  currentShopId String?
+  canSwitchShops Boolean @default(false)
+  avatarUrl   String?
+  language    String   @default("ru")
+  theme       String   @default("auto")
+  isActive    Boolean  @default(true)
+  company     Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  currentShop Shop?    @relation("CurrentShop", fields: [currentShopId], references: [id], onDelete: SetNull)
+  shopAccesses UserShopAccess[]
+  sales       Sale[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  roleId     Int
-  locationId Int?
-
-  role     Role      @relation(fields: [roleId], references: [id])
-  location Location? @relation(fields: [locationId], references: [id])
-  sales    Sale[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  @@unique([companyId, phoneNumber])
 }
 
-model Role {
-  id    Int    @id @default(autoincrement())
-  name  String @unique
-  users User[]
-
+model UserShopAccess {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  shopId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
 
-model Location {
-  id      Int     @id @default(autoincrement())
-  name    String
-  address String?
-
-  users    User[]
-  products Product[]
-  sales    Sale[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  @@unique([userId, shopId])
 }
 
 model Category {
-  id       Int       @id @default(autoincrement())
-  name     String
-  products Product[]
+  id        Int       @id @default(autoincrement())
+  name      String    @unique
+  products  Product[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
 
-  createdAt DateTime @default(now())
+model Brand {
+  id        Int       @id @default(autoincrement())
+  name      String    @unique
+  products  Product[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model Supplier {
+  id        Int               @id @default(autoincrement())
+  name      String            @unique
+  products  ProductSupplier[]
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
 }
 
 model Product {
-  id       Int    @id @default(autoincrement())
-  name     String
-  price    Float
-  quantity Int    @default(0)
+  id             Int               @id @default(autoincrement())
+  photo          String?
+  name           String
+  sku            String?           @unique
+  barcode        String?           @unique
+  productType    String?
+  variantType    String?
+  unit           String?
+  purchasePrice  Float?
+  markupPercent  Float?
+  salePrice      Float?
+  discountPrice  Float?
+  quantity       Int               @default(0)
+  metadata       Json?
+  categoryId     Int?
+  brandId        Int?
+  category       Category?         @relation(fields: [categoryId], references: [id])
+  brand          Brand?            @relation(fields: [brandId], references: [id])
+  suppliers      ProductSupplier[]
+  stocks         ProductStock[]
+  saleItems      SaleItem[]
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+}
 
-  categoryId Int?
-  locationId Int
+model ProductSupplier {
+  productId   Int
+  supplierId  Int
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  supplier    Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
 
-  category Category? @relation(fields: [categoryId], references: [id])
-  location Location  @relation(fields: [locationId], references: [id])
+  @@id([productId, supplierId])
+}
 
-  saleItems SaleItem[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+model ProductStock {
+  id            Int      @id @default(autoincrement())
+  productId     Int
+  branchCode    String
+  quantity      Int      @default(0)
+  purchasePrice Float?
+  salePrice     Float?
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
 model Sale {
-  id    Int   @id @default(autoincrement())
-  total Float
-
-  userId     Int
-  locationId Int
-
-  user     User     @relation(fields: [userId], references: [id])
-  location Location @relation(fields: [locationId], references: [id])
-
-  items SaleItem[]
-
-  createdAt DateTime @default(now())
+  id              Int        @id @default(autoincrement())
+  number          String     @unique
+  status          String     @default("draft")
+  discountPercent Float      @default(0)
+  discountAmount  Float      @default(0)
+  payableTotal    Float      @default(0)
+  total           Float      @default(0)
+  paymentMethod   String?
+  clientName      String?
+  branchCode      String?
+  isDraft         Boolean    @default(true)
+  userId          Int?
+  user            User?      @relation(fields: [userId], references: [id])
+  items           SaleItem[]
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  paidAt          DateTime?
 }
 
 model SaleItem {
-  id       Int   @id @default(autoincrement())
-  quantity Int
-  price    Float
-
-  productId Int
-  saleId    Int
-
-  product Product @relation(fields: [productId], references: [id])
-  sale    Sale    @relation(fields: [saleId], references: [id])
+  id         Int      @id @default(autoincrement())
+  saleId      Int
+  productId   Int?
+  name        String
+  barcode     String?
+  sku         String?
+  quantity    Int
+  salePrice   Float
+  lineTotal   Float
+  sale        Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product     Product? @relation(fields: [productId], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
