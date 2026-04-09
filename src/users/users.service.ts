@@ -159,7 +159,13 @@ export class UsersService {
   }
 
   async findPlatformRoles(authorization?: string) {
-    await this.assertPlatformAdminAccess(authorization);
+    const actor = await this.getAuthenticatedUser(authorization);
+
+    if (actor.userType !== 'platform') {
+      throw new ForbiddenException(
+        'Only platform users can view platform roles',
+      );
+    }
 
     return this.toPlatformRolesListResponse(
       DEFAULT_PLATFORM_ROLES.map((role) => ({
