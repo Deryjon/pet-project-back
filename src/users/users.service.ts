@@ -143,7 +143,13 @@ export class UsersService {
   }
 
   async findPlatformUsers(authorization?: string) {
-    await this.assertPlatformAdminAccess(authorization);
+    const actor = await this.getAuthenticatedUser(authorization);
+
+    if (actor.userType !== 'platform') {
+      throw new ForbiddenException(
+        'Only platform users can view platform users',
+      );
+    }
 
     const users = await this.db.user.findMany({
       where: {
@@ -181,7 +187,14 @@ export class UsersService {
     companyId: string,
     authorization?: string,
   ) {
-    await this.assertPlatformAdminAccess(authorization);
+    const actor = await this.getAuthenticatedUser(authorization);
+
+    if (actor.userType !== 'platform') {
+      throw new ForbiddenException(
+        'Only platform users can view company users',
+      );
+    }
+
     await this.ensureCompanyExists(companyId);
 
     const users = await this.db.user.findMany({
@@ -196,6 +209,30 @@ export class UsersService {
     });
 
     return Promise.all(users.map((user) => this.toListItem(user)));
+  }
+
+  async findCompanyManagedUserForPlatform(
+    companyId: string,
+    id: number,
+    authorization?: string,
+  ) {
+    const actor = await this.getAuthenticatedUser(authorization);
+
+    if (actor.userType !== 'platform') {
+      throw new ForbiddenException(
+        'Only platform users can view company users',
+      );
+    }
+
+    await this.ensureCompanyExists(companyId);
+
+    const user = await this.findByIdOrThrow(id);
+
+    if (user.userType !== 'company' || user.companyId !== companyId) {
+      throw new NotFoundException('User not found');
+    }
+
+    return this.findOneResponse(id, authorization);
   }
 
   async findPlatformUserByPhoneNumber(phoneNumber: string) {
@@ -510,7 +547,13 @@ export class UsersService {
   }
 
   async findPlatformManagedUser(id: number, authorization?: string) {
-    await this.assertPlatformAdminAccess(authorization);
+    const actor = await this.getAuthenticatedUser(authorization);
+
+    if (actor.userType !== 'platform') {
+      throw new ForbiddenException(
+        'Only platform users can view platform users',
+      );
+    }
 
     return this.findOneResponse(id, authorization);
   }

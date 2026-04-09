@@ -172,6 +172,19 @@ export class PlatformController {
     );
   }
 
+  @Get('platform/companies/:companyId/users/:id')
+  async findCompanyUser(
+    @Param('companyId') companyId: string,
+    @Param('id', ParseIntPipe) id: number,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.usersService.findCompanyManagedUserForPlatform(
+      companyId,
+      id,
+      authorization,
+    );
+  }
+
   @Post('platform/companies/:companyId/users')
   async createCompanyUser(
     @Param('companyId') companyId: string,
