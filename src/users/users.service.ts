@@ -514,7 +514,7 @@ export class UsersService {
     const normalizedRoleInput = this.optionalString(body.role);
 
     if (userType === 'platform') {
-      const role = this.normalizePlatformRole(
+      const role = this.resolvePlatformRoleCode(
         normalizedRoleInput ?? 'support',
         'role',
       );
@@ -703,7 +703,7 @@ export class UsersService {
     if (body.role !== undefined) {
       data.role =
         targetUser.userType === 'platform'
-          ? this.normalizePlatformRole(body.role, 'role')
+          ? this.resolvePlatformRoleCode(body.role, 'role')
           : await this.resolveCompanyUserRoleCode(
               companyId ?? targetUser.companyId,
               body.role,
@@ -1418,14 +1418,30 @@ export class UsersService {
     }
 
     await this.ensureDefaultCompanyRoles(companyId);
-    const roleCode = this.normalizeCompanyRoleCode(value, 'role');
-    const role = await this.findCompanyRoleByCode(companyId, roleCode);
+    const roleLookupValue = this.requireString(value, 'role').trim();
+    const normalizedRoleCode = roleLookupValue.toLowerCase();
+    const role =
+      (await this.findCompanyRoleByPublicId(companyId, roleLookupValue)) ??
+      (await this.findCompanyRoleByCode(companyId, normalizedRoleCode));
 
     if (!role || !role.isActive) {
       throw new BadRequestException('Company role not found or inactive');
     }
 
     return role.code;
+  }
+
+  private resolvePlatformRoleCode(value: unknown, field: string) {
+    const normalizedValue = this.requireString(value, field).trim().toLowerCase();
+    const roleById = DEFAULT_PLATFORM_ROLES.find(
+      (role) => role.code === normalizedValue,
+    );
+
+    if (roleById) {
+      return roleById.code;
+    }
+
+    return this.normalizePlatformRole(normalizedValue, field);
   }
 
   private normalizePlatformRole(value: unknown, field: string) {
@@ -1500,6 +1516,39 @@ export class UsersService {
         code: code.trim().toLowerCase(),
       },
     });
+  }
+
+  private async findCompanyRoleByPublicId(companyId: string, roleId: string) {
+    await this.ensureDefaultCompanyRoles(companyId);
+
+    const normalizedRoleId = roleId.trim();
+
+    if (!normalizedRoleId) {
+      return null;
+    }
+
+    if (!this.hasCompanyRoleStorage()) {
+      const defaultRole = DEFAULT_COMPANY_ROLES.find(
+        (role) => this.getFallbackCompanyRolePublicId(role.code) === normalizedRoleId,
+      );
+
+      return defaultRole
+        ? this.toFallbackCompanyRole(companyId, defaultRole.code)
+        : null;
+    }
+
+    const roles = await this.db.companyRole.findMany({
+      where: {
+        companyId,
+      },
+    });
+
+    return (
+      roles.find(
+        (role: CompanyRoleRecord) =>
+          this.getCompanyRolePublicId(role) === normalizedRoleId,
+      ) ?? null
+    );
   }
 
   private async findCompanyRoleByIdOrThrow(roleId: string, companyId: string) {
@@ -1662,6 +1711,17 @@ export class UsersService {
     }
 
     return role.id;
+  }
+
+  private getFallbackCompanyRolePublicId(roleCode: string) {
+    const normalizedRoleCode = roleCode.trim().toLowerCase();
+    const roleDefinition = ROLE_DEFINITIONS[normalizedRoleCode];
+
+    if (roleDefinition?.role_id && roleDefinition.role_id !== 'owner') {
+      return roleDefinition.role_id;
+    }
+
+    return normalizedRoleCode;
   }
 
   private toLegacyExternalId(value: string) {
