@@ -128,11 +128,19 @@ export class AuthService {
   }
 
   private extractToken(authorization?: string) {
-    if (!authorization?.startsWith('Bearer ')) {
+    const match = authorization?.match(/^Bearer\s+(.+)$/i);
+
+    if (!match) {
       throw new UnauthorizedException('Missing bearer token');
     }
 
-    return authorization.slice('Bearer '.length).trim();
+    const token = match[1]?.trim();
+
+    if (!token) {
+      throw new UnauthorizedException('Missing bearer token');
+    }
+
+    return token;
   }
 
   private async verifyAccessToken(authorization?: string) {

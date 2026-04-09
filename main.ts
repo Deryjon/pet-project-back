@@ -1,14 +1,28 @@
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import type { Request, Response } from 'express';
 import { AppModule } from './src/app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  
+
+  app.use((req: Request, _res: Response, next: () => void) => {
+    if (!req.headers.authorization && Array.isArray(req.rawHeaders)) {
+      for (let index = 0; index < req.rawHeaders.length; index += 2) {
+        if (req.rawHeaders[index]?.toLowerCase() === 'authorization') {
+          req.headers.authorization = req.rawHeaders[index + 1];
+          break;
+        }
+      }
+    }
+
+    next();
+  });
+
   app.enableCors({
-  origin: true,
-  credentials: true,
-})
+    origin: true,
+    credentials: true,
+  });
 
   app.setGlobalPrefix('api');
 
