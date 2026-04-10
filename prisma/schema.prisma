@@ -19,6 +19,7 @@ model Company {
   isActive  Boolean  @default(true)
   shops     Shop[]
   users     User[]
+  roles     Role[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -48,6 +49,7 @@ model User {
   userType    UserType @default(company)
   role        String
   companyId   String?
+  crmRoleId   String?
   branchCode  String?
   currentShopId String?
   canSwitchShops Boolean @default(false)
@@ -56,6 +58,7 @@ model User {
   theme       String   @default("auto")
   isActive    Boolean  @default(true)
   company     Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  crmRole     Role?    @relation(fields: [crmRoleId], references: [id], onDelete: SetNull)
   currentShop Shop?    @relation("CurrentShop", fields: [currentShopId], references: [id], onDelete: SetNull)
   shopAccesses UserShopAccess[]
   sales       Sale[]
@@ -182,4 +185,36 @@ model SaleItem {
   product     Product? @relation(fields: [productId], references: [id])
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+model Role {
+  id           String           @id @default(uuid())
+  companyId    String
+  name         String
+  description  String           @default("")
+  externalId   Int              @unique
+  clientTypeId String           @default("")
+  sessionId    String           @default("")
+  isAdmin      Boolean          @default(false)
+  type         Int              @default(0)
+  deletedAt    Int              @default(0)
+  company      Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  users        User[]
+  permissions  RolePermission[]
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@unique([companyId, name])
+}
+
+model RolePermission {
+  id           Int      @id @default(autoincrement())
+  roleId       String
+  permissionId String
+  isActive     Boolean  @default(false)
+  role         Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([roleId, permissionId])
 }

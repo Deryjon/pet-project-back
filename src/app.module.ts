@@ -6,6 +6,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { PlatformModule } from './platform/platform.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProductsModule } from './products/products.module';
+import { RolesModule } from './roles/roles.module';
 import { SalesModule } from './sales/sales.module';
 import { UsersModule } from './users/users.module';
 import { HealthController } from './health.controller';
@@ -21,6 +22,7 @@ import { HealthController } from './health.controller';
     CompanySettingsModule,
     DashboardModule,
     ProductsModule,
+    RolesModule,
     SalesModule,
     UsersModule,
   ],

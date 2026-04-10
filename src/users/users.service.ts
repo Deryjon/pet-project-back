@@ -84,15 +84,7 @@ export class UsersService {
     const where = this.buildUserVisibilityWhere(actor);
     const users = await this.db.user.findMany({
       where,
-      include: {
-        company: true,
-        currentShop: true,
-        shopAccesses: {
-          include: {
-            shop: true,
-          },
-        },
-      },
+      include: this.userRelationsInclude(),
       orderBy: {
         id: 'asc',
       },
@@ -222,6 +214,14 @@ export class UsersService {
       birth_date: this.formatBirthDate(user.birthDate),
       phone_number: user.phoneNumber,
       role: user.role,
+      crm_role_id: user.crmRoleId,
+      crm_role: user.crmRole
+        ? {
+            id: user.crmRole.id,
+            name: user.crmRole.name,
+            is_admin: user.crmRole.isAdmin,
+          }
+        : null,
       company_id: user.companyId,
       company: user.company ? this.toCompanyItem(user.company) : null,
       branch_location: user.branchCode,
@@ -286,6 +286,10 @@ export class UsersService {
     }
 
     const companyId = await this.resolveCompanyIdForActor(body.company_id, actor);
+    const crmRole = await this.resolveCrmRoleForWrite(
+      this.optionalString(body.crm_role_id),
+      companyId,
+    );
     const allowedShops = await this.resolveAllowedShopsForWrite(
       companyId,
       body.allowed_shop_ids,
@@ -324,7 +328,8 @@ export class UsersService {
         phoneNumber,
         password: await bcrypt.hash(password, 10),
         userType: 'company',
-        role,
+        role: crmRole?.name ?? role,
+        crmRoleId: crmRole?.id ?? null,
         companyId,
         branchCode: currentShop?.branchCode ?? null,
         currentShopId: currentShop?.id ?? null,
@@ -365,6 +370,18 @@ export class UsersService {
 
     throw new ForbiddenException(
       'Only platform admin or company admin can manage employees',
+    );
+  }
+
+  async assertCompanyAdminAccess(authorization?: string) {
+    const user = await this.getAuthenticatedUser(authorization);
+
+    if (this.isCompanyAdmin(user)) {
+      return user;
+    }
+
+    throw new ForbiddenException(
+      'Only company admin can perform this action',
     );
   }
 
@@ -427,11 +444,35 @@ export class UsersService {
     }
 
     if (targetUser.userType === 'company' && companyId) {
+      const crmRole =
+        body.crm_role_id !== undefined
+          ? await this.resolveCrmRoleForWrite(
+              this.optionalString(body.crm_role_id),
+              companyId,
+            )
+          : targetUser.crmRole;
+
       data.company = {
         connect: {
           id: companyId,
         },
       };
+      data.crmRole = crmRole
+        ? {
+            connect: {
+              id: crmRole.id,
+            },
+          }
+        : body.crm_role_id !== undefined
+          ? { disconnect: true }
+          : undefined;
+      if (body.crm_role_id !== undefined) {
+        data.role =
+          crmRole?.name ??
+          this.optionalString(body.role) ??
+          targetUser.role ??
+          'employee';
+      }
 
       const allowedShops =
         body.allowed_shop_ids !== undefined ||
@@ -747,6 +788,7 @@ export class UsersService {
       fullName: `${user.firstName} ${user.lastName}`.trim(),
       userType: user.userType,
       role: user.role,
+      crmRoleId: user.crmRoleId,
       companyId: user.companyId,
       currentShopId: user.currentShopId,
       currentBranchCode: user.branchCode,
@@ -774,6 +816,8 @@ export class UsersService {
         is_active: user.isActive,
         role: roles[0]?.role ?? null,
         roles,
+        crm_role_id: null,
+        crm_role: null,
         company_id: null,
         company: null,
         can_switch_shops: false,
@@ -798,6 +842,14 @@ export class UsersService {
       is_active: user.isActive,
       role: roles[0]?.role ?? null,
       roles,
+      crm_role_id: user.crmRoleId,
+      crm_role: user.crmRole
+        ? {
+            id: user.crmRole.id,
+            name: user.crmRole.name,
+            is_admin: user.crmRole.isAdmin,
+          }
+        : null,
       company_id: user.companyId,
       company: user.company ? this.toCompanyItem(user.company) : null,
       can_switch_shops: Boolean(user.canSwitchShops) && shops.length > 1,
@@ -850,6 +902,7 @@ export class UsersService {
   private userRelationsInclude() {
     return {
       company: true,
+      crmRole: true,
       currentShop: true,
       shopAccesses: {
         include: {
@@ -867,6 +920,14 @@ export class UsersService {
       last_name: user.lastName,
       phone_number: user.phoneNumber,
       role: user.role,
+      crm_role_id: user.crmRoleId,
+      crm_role: user.crmRole
+        ? {
+            id: user.crmRole.id,
+            name: user.crmRole.name,
+            is_admin: user.crmRole.isAdmin,
+          }
+        : null,
       company_id: user.companyId,
       company: user.company ? this.toCompanyItem(user.company) : null,
       current_shop: user.currentShop ? this.toShopItem(user.currentShop) : null,
@@ -1033,7 +1094,8 @@ export class UsersService {
   private isCompanyAdmin(user: UserWithRelations) {
     return (
       user.userType === 'company' &&
-      COMPANY_ADMIN_ROLES.has(user.role.trim().toLowerCase())
+      (COMPANY_ADMIN_ROLES.has(user.role.trim().toLowerCase()) ||
+        Boolean(user.crmRole?.isAdmin))
     );
   }
 
@@ -1153,6 +1215,29 @@ export class UsersService {
     }
 
     return company.id;
+  }
+
+  private async resolveCrmRoleForWrite(
+    crmRoleId: string | undefined,
+    companyId: string,
+  ) {
+    if (!crmRoleId) {
+      return null;
+    }
+
+    const crmRole = await this.db.role.findFirst({
+      where: {
+        id: crmRoleId,
+        companyId,
+        deletedAt: 0,
+      },
+    });
+
+    if (!crmRole) {
+      throw new NotFoundException('CRM role not found');
+    }
+
+    return crmRole;
   }
 
   private async ensureCompanyExists(companyId: string) {
@@ -1403,6 +1488,15 @@ export class UsersService {
       full_name: `${user.firstName} ${user.lastName}`.trim(),
       phone_number: user.phoneNumber,
       avatar_url: user.avatarUrl,
+      role: user.role,
+      crm_role_id: user.crmRoleId,
+      crm_role: user.crmRole
+        ? {
+            id: user.crmRole.id,
+            name: user.crmRole.name,
+            is_admin: user.crmRole.isAdmin,
+          }
+        : null,
       language: user.language,
       theme: user.theme,
       company_id: user.companyId,

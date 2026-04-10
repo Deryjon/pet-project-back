@@ -36,6 +36,10 @@ export class UpdateUserDto {
 
   @IsOptional()
   @IsString()
+  crm_role_id?: string;
+
+  @IsOptional()
+  @IsString()
   company_id?: string;
 
   @IsOptional()
