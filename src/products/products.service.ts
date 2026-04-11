@@ -562,6 +562,7 @@ export class ProductsService {
 
   async create(body: Record<string, unknown>, authorization?: string) {
     const context = await this.getRequestContext(authorization);
+    const productCompanyId = this.resolveProductCompanyId(body, context);
     const name = this.requireString(body.name, 'name');
     const sku = this.optionalString(body.sku);
     const barcode = this.optionalString(body.barcode);
@@ -620,6 +621,11 @@ export class ProductsService {
 
     const createdProduct = await this.prisma.product.create({
       data: {
+        company: {
+          connect: {
+            id: productCompanyId,
+          },
+        },
         name,
         sku,
         barcode,
@@ -703,6 +709,7 @@ export class ProductsService {
   ) {
     const context = await this.getRequestContext(authorization);
     const writeContext = this.requireCatalogWriteContext(context);
+    const productCompanyId = this.resolveProductCompanyId(body, writeContext);
     if (Array.isArray(body.shop_ids)) {
       body.shop_ids = this.filterRequestedShopIds(
         body.shop_ids as string[],
@@ -760,6 +767,11 @@ export class ProductsService {
 
     const createdProduct = await this.prisma.product.create({
       data: {
+        company: {
+          connect: {
+            id: productCompanyId,
+          },
+        },
         name,
         sku,
         barcode,
@@ -877,8 +889,13 @@ export class ProductsService {
       );
     }
     const productId = this.parseProductId(id);
-    const existingProduct = await this.prisma.product.findUnique({
-      where: { id: productId },
+    const existingProduct = await this.prisma.product.findFirst({
+      where: this.applyProductScope(
+        {
+          id: productId,
+        },
+        writeContext,
+      ),
       include: {
         stocks: true,
       },
@@ -2252,30 +2269,39 @@ export class ProductsService {
       return where;
     }
 
-    const branchScope =
-      context.allowedBranchCodes.length > 0
-        ? {
-            stocks: {
-              some: {
-                branchCode: {
-                  in: context.allowedBranchCodes,
-                },
-              },
+    const scopedFilters: Prisma.ProductWhereInput[] = [];
+
+    if (where) {
+      scopedFilters.push(where);
+    }
+
+    if (context.companyId) {
+      scopedFilters.push({
+        companyId: context.companyId,
+      });
+    }
+
+    if (context.allowedBranchCodes.length > 0) {
+      scopedFilters.push({
+        stocks: {
+          some: {
+            branchCode: {
+              in: context.allowedBranchCodes,
             },
-          }
-        : undefined;
-
-    if (!branchScope) {
-      return where;
+          },
+        },
+      });
     }
 
-    if (!where) {
-      return branchScope;
+    if (!scopedFilters.length) {
+      return undefined;
     }
 
-    return {
-      AND: [where, branchScope],
-    } satisfies Prisma.ProductWhereInput;
+    if (scopedFilters.length === 1) {
+      return scopedFilters[0] as Prisma.ProductWhereInput;
+    }
+
+    return { AND: scopedFilters } satisfies Prisma.ProductWhereInput;
   }
 
   private filterRequestedShopIds(shopIds: string[] | undefined, context: any) {
@@ -2307,6 +2333,36 @@ export class ProductsService {
     }
 
     return context;
+  }
+
+  private resolveProductCompanyId(
+    body: Record<string, unknown>,
+    context?: {
+      userType?: string;
+      companyId?: string | null;
+    } | null,
+  ) {
+    if (context?.userType === 'company') {
+      if (!context.companyId) {
+        throw new UnauthorizedException('Company user is missing company');
+      }
+
+      return context.companyId;
+    }
+
+    const requestedCompanyId =
+      this.optionalString(body.company_id) ??
+      this.optionalString(
+        (body.metadata as Record<string, unknown> | undefined)?.company_id,
+      ) ??
+      context?.companyId ??
+      COMPANY_ID;
+
+    if (!requestedCompanyId) {
+      throw new BadRequestException('company_id is required');
+    }
+
+    return requestedCompanyId;
   }
 
   private async resolveBranchCodesForFilter(

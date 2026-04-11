@@ -18,9 +18,10 @@ model Company {
   subdomain String   @unique
   isActive  Boolean  @default(true)
   shops     Shop[]
+  products  Product[]
   roles     CompanyRole[]
   users     User[]
-  roles     Role[]
+  crmRoles  Role[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -121,6 +122,7 @@ model Supplier {
 
 model Product {
   id             Int               @id @default(autoincrement())
+  companyId      String?
   photo          String?
   name           String
   sku            String?           @unique
@@ -136,6 +138,7 @@ model Product {
   metadata       Json?
   categoryId     Int?
   brandId        Int?
+  company        Company?          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   category       Category?         @relation(fields: [categoryId], references: [id])
   brand          Brand?            @relation(fields: [brandId], references: [id])
   suppliers      ProductSupplier[]
@@ -143,6 +146,8 @@ model Product {
   saleItems      SaleItem[]
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
+
+  @@index([companyId])
 }
 
 model ProductSupplier {

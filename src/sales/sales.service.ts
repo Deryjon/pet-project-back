@@ -175,6 +175,10 @@ export class SalesService {
         }
       : {};
 
+    if (context?.userType === 'company' && context.companyId) {
+      where.companyId = context.companyId;
+    }
+
     if (context?.allowedBranchCodes?.length) {
       where.stocks = {
         some: {
@@ -374,8 +378,13 @@ export class SalesService {
         continue;
       }
 
-      const product = await this.prisma.product.findUnique({
-        where: { id: item.productId },
+      const product = await this.prisma.product.findFirst({
+        where: this.buildProductScope(
+          {
+            id: item.productId,
+          },
+          context,
+        ),
         include: { stocks: true },
       });
 
@@ -445,8 +454,13 @@ export class SalesService {
       throw new BadRequestException('Cannot update paid sale');
     }
 
-    const product = await this.prisma.product.findUnique({
-      where: { id: productId },
+    const product = await this.prisma.product.findFirst({
+      where: this.buildProductScope(
+        {
+          id: productId,
+        },
+        context,
+      ),
     });
 
     if (!product) {
@@ -1416,6 +1430,21 @@ export class SalesService {
     if (!context.allowedBranchCodes.includes(sale.branchCode)) {
       throw new NotFoundException('Order not found');
     }
+  }
+
+  private buildProductScope(where: Record<string, unknown>, context: any) {
+    if (!context || context.userType !== 'company' || !context.companyId) {
+      return where;
+    }
+
+    return {
+      AND: [
+        where,
+        {
+          companyId: context.companyId,
+        },
+      ],
+    };
   }
 
   private formatDateTime(value: Date) {
