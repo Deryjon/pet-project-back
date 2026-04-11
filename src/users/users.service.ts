@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ForbiddenException,
+  InternalServerErrorException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -65,8 +66,30 @@ const ALLOWED_AVATAR_MIME_TYPES = new Set([
 const MAX_AVATAR_SIZE_BYTES = 5 * 1024 * 1024;
 const PLATFORM_ADMIN_ROLES = new Set(['platform_admin', 'superadmin']);
 const COMPANY_ADMIN_ROLES = new Set(['admin', 'owner', 'superadmin']);
+const DEFAULT_PLATFORM_ROLES = [
+  { code: 'platform_admin', name: 'Админ платформы', isSystem: true },
+  { code: 'support', name: 'Поддержка', isSystem: true },
+  { code: 'superadmin', name: 'Суперадмин', isSystem: true },
+] as const;
+const DEFAULT_COMPANY_ROLES = [
+  { code: 'owner', name: 'Управляющий компании', isSystem: true },
+  { code: 'admin', name: 'Админ', isSystem: true },
+  { code: 'store_manager', name: 'Управляющий магазина', isSystem: true },
+  { code: 'cashier', name: 'Кассир', isSystem: true },
+  { code: 'employee', name: 'Сотрудник', isSystem: true },
+] as const;
 
 type UserWithRelations = any;
+type CompanyRoleRecord = {
+  id: string;
+  companyId: string;
+  code: string;
+  name: string;
+  isSystem: boolean;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+};
 
 @Injectable()
 export class UsersService {
@@ -77,6 +100,24 @@ export class UsersService {
 
   private get db(): any {
     return this.prisma as any;
+  }
+
+  private getCompanyRoleDelegate(db: any = this.db) {
+    return db?.companyRole;
+  }
+
+  private hasCompanyRoleStorage(db: any = this.db) {
+    return Boolean(this.getCompanyRoleDelegate(db));
+  }
+
+  private assertCompanyRoleStorageAvailable() {
+    if (this.hasCompanyRoleStorage()) {
+      return;
+    }
+
+    throw new InternalServerErrorException(
+      'Company roles storage is unavailable. Run prisma generate and redeploy the service.',
+    );
   }
 
   async findAll(authorization?: string) {
@@ -90,11 +131,17 @@ export class UsersService {
       },
     });
 
-    return users.map((user) => this.toListItem(user));
+    return Promise.all(users.map((user) => this.toListItem(user)));
   }
 
   async findPlatformUsers(authorization?: string) {
-    await this.assertPlatformAdminAccess(authorization);
+    const actor = await this.getAuthenticatedUser(authorization);
+
+    if (actor.userType !== 'platform') {
+      throw new ForbiddenException(
+        'Only platform users can view platform users',
+      );
+    }
 
     const users = await this.db.user.findMany({
       where: {
@@ -106,14 +153,40 @@ export class UsersService {
       },
     });
 
-    return users.map((user) => this.toListItem(user));
+    return Promise.all(users.map((user) => this.toListItem(user)));
+  }
+
+  async findPlatformRoles(authorization?: string) {
+    const actor = await this.getAuthenticatedUser(authorization);
+
+    if (actor.userType !== 'platform') {
+      throw new ForbiddenException(
+        'Only platform users can view platform roles',
+      );
+    }
+
+    return this.toPlatformRolesListResponse(
+      DEFAULT_PLATFORM_ROLES.map((role) => ({
+        id: role.code,
+        code: role.code,
+        name: role.name,
+        is_active: true,
+      })),
+    );
   }
 
   async findCompanyUsersForPlatform(
     companyId: string,
     authorization?: string,
   ) {
-    await this.assertPlatformAdminAccess(authorization);
+    const actor = await this.getAuthenticatedUser(authorization);
+
+    if (actor.userType !== 'platform') {
+      throw new ForbiddenException(
+        'Only platform users can view company users',
+      );
+    }
+
     await this.ensureCompanyExists(companyId);
 
     const users = await this.db.user.findMany({
@@ -127,7 +200,31 @@ export class UsersService {
       },
     });
 
-    return users.map((user) => this.toListItem(user));
+    return Promise.all(users.map((user) => this.toListItem(user)));
+  }
+
+  async findCompanyManagedUserForPlatform(
+    companyId: string,
+    id: number,
+    authorization?: string,
+  ) {
+    const actor = await this.getAuthenticatedUser(authorization);
+
+    if (actor.userType !== 'platform') {
+      throw new ForbiddenException(
+        'Only platform users can view company users',
+      );
+    }
+
+    await this.ensureCompanyExists(companyId);
+
+    const user = await this.findByIdOrThrow(id);
+
+    if (user.userType !== 'company' || user.companyId !== companyId) {
+      throw new NotFoundException('User not found');
+    }
+
+    return this.findOneResponse(id, authorization);
   }
 
   async findPlatformUserByPhoneNumber(phoneNumber: string) {
@@ -187,6 +284,236 @@ export class UsersService {
     return company?.company_id ?? null;
   }
 
+  async findCompanyRoles(authorization?: string) {
+    const actor = await this.getAuthenticatedUser(authorization);
+
+    if (this.isPlatformAdmin(actor)) {
+      return this.toCompanyRolesListResponse(
+        DEFAULT_COMPANY_ROLES.map((role) =>
+          this.toCompanyRoleItem({
+            id: role.code,
+            companyId: '',
+            code: role.code,
+            name: role.name,
+            isSystem: role.isSystem,
+            isActive: true,
+            createdAt: new Date(0),
+            updatedAt: new Date(0),
+          }),
+        ),
+      );
+    }
+
+    if (actor.userType !== 'company' || !actor.companyId) {
+      throw new ForbiddenException(
+        'Only company users or platform admins can view company roles',
+      );
+    }
+
+    await this.ensureDefaultCompanyRoles(actor.companyId);
+
+    const roles = !this.hasCompanyRoleStorage()
+      ? DEFAULT_COMPANY_ROLES.map((role) => ({
+          id: role.code,
+          companyId: actor.companyId,
+          code: role.code,
+          name: role.name,
+          isSystem: role.isSystem,
+          isActive: true,
+          createdAt: new Date(0),
+          updatedAt: new Date(0),
+        }))
+      : await this.db.companyRole.findMany({
+          where: {
+            companyId: actor.companyId,
+          },
+          orderBy: [{ isSystem: 'desc' }, { createdAt: 'asc' }],
+        });
+
+    const roleItems = roles.map((role: CompanyRoleRecord) =>
+      this.toCompanyRoleItem(role),
+    );
+
+    if (!this.hasCompanyRoleStorage()) {
+      return this.toCompanyRolesListResponse(roleItems);
+    }
+
+    return this.toCompanyRolesListResponse(roleItems);
+  }
+
+  async createCompanyRole(
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const actor = await this.assertCompanyAdminAccess(authorization);
+    this.assertCompanyRoleStorageAvailable();
+    await this.ensureDefaultCompanyRoles(actor.companyId);
+
+    const name = this.requireString(body.name, 'name');
+    const requestedCode = this.optionalString(body.code);
+    const code = requestedCode
+      ? this.normalizeCompanyRoleCode(requestedCode, 'code')
+      : await this.generateUniqueCompanyRoleCode(actor.companyId, name);
+
+    const existingRole = await this.db.companyRole.findFirst({
+      where: {
+        companyId: actor.companyId,
+        code,
+      },
+    });
+
+    if (existingRole) {
+      throw new BadRequestException('Role with this code already exists');
+    }
+
+    const role = await this.db.companyRole.create({
+      data: {
+        companyId: actor.companyId,
+        code,
+        name,
+        isSystem: false,
+        isActive: true,
+      },
+    });
+
+    return this.toCompanyRoleItem(role);
+  }
+
+  async updateCompanyRole(
+    roleId: string,
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const actor = await this.assertCompanyAdminAccess(authorization);
+    this.assertCompanyRoleStorageAvailable();
+    await this.ensureDefaultCompanyRoles(actor.companyId);
+
+    const role = await this.findCompanyRoleByIdOrThrow(roleId, actor.companyId);
+    const data: Record<string, unknown> = {};
+
+    if (body.name !== undefined) {
+      data.name = this.requireString(body.name, 'name');
+    }
+
+    if (body.is_active !== undefined) {
+      data.isActive = this.requireBoolean(body.is_active, 'is_active');
+    }
+
+    if (body.code !== undefined) {
+      const nextCode = this.normalizeCompanyRoleCode(body.code, 'code');
+
+      if (role.isSystem && nextCode !== role.code) {
+        throw new BadRequestException('System role code cannot be changed');
+      }
+
+      const duplicate = await this.db.companyRole.findFirst({
+        where: {
+          companyId: actor.companyId,
+          code: nextCode,
+          id: {
+            not: role.id,
+          },
+        },
+      });
+
+      if (duplicate) {
+        throw new BadRequestException('Role with this code already exists');
+      }
+
+      data.code = nextCode;
+    }
+
+    const nextCodeValue =
+      typeof data.code === 'string' ? data.code : role.code;
+    const deactivatingAdminRole =
+      body.is_active === false && COMPANY_ADMIN_ROLES.has(role.code);
+
+    const updatedRole = await this.db.$transaction(async (tx: any) => {
+      if (deactivatingAdminRole) {
+        const activeAdminRoles = await tx.companyRole.findMany({
+          where: {
+            companyId: actor.companyId,
+            isActive: true,
+            code: {
+              in: [...COMPANY_ADMIN_ROLES],
+            },
+            id: {
+              not: role.id,
+            },
+          },
+        });
+
+        if (!activeAdminRoles.length) {
+          throw new BadRequestException(
+            'Company must have at least one active admin role',
+          );
+        }
+      }
+
+      if (nextCodeValue !== role.code) {
+        await tx.user.updateMany({
+          where: {
+            companyId: actor.companyId,
+            userType: 'company',
+            role: role.code,
+          },
+          data: {
+            role: nextCodeValue,
+          },
+        });
+      }
+
+      return tx.companyRole.update({
+        where: { id: role.id },
+        data,
+      });
+    });
+
+    return this.toCompanyRoleItem(updatedRole);
+  }
+
+  async removeCompanyRole(roleId: string, authorization?: string) {
+    const actor = await this.assertCompanyAdminAccess(authorization);
+    this.assertCompanyRoleStorageAvailable();
+    await this.ensureDefaultCompanyRoles(actor.companyId);
+
+    const role = await this.findCompanyRoleByIdOrThrow(roleId, actor.companyId);
+
+    if (role.isSystem) {
+      throw new BadRequestException('System roles cannot be deleted');
+    }
+
+    const assignedUsersCount = await this.db.user.count({
+      where: {
+        companyId: actor.companyId,
+        userType: 'company',
+        role: role.code,
+      },
+    });
+
+    if (assignedUsersCount > 0) {
+      throw new BadRequestException('Role is assigned to users');
+    }
+
+    await this.db.companyRole.delete({
+      where: { id: role.id },
+    });
+
+    return {
+      message: 'Company role deleted',
+      role_id: role.id,
+    };
+  }
+
+  async assertUserCanAuthenticate(user: UserWithRelations) {
+    this.assertUserIsActive(user);
+
+    if (user.userType === 'company') {
+      this.assertCompanyMembershipIsActive(user);
+      await this.assertCompanyRoleIsActive(user);
+    }
+  }
+
   async findByIdOrThrow(id: number) {
     const user = await this.db.user.findUnique({
       where: { id },
@@ -205,6 +532,7 @@ export class UsersService {
     const user = await this.findByIdOrThrow(id);
 
     this.assertUserVisibleToActor(actor, user);
+    const rolePayload = await this.resolveUserPrimaryRolePayload(user);
 
     return {
       id: user.id,
@@ -213,7 +541,9 @@ export class UsersService {
       last_name: user.lastName,
       birth_date: this.formatBirthDate(user.birthDate),
       phone_number: user.phoneNumber,
-      role: user.role,
+      role: rolePayload.role_code,
+      role_code: rolePayload.role_code,
+      role_name: rolePayload.role_name,
       crm_role_id: user.crmRoleId,
       crm_role: user.crmRole
         ? {
@@ -234,7 +564,13 @@ export class UsersService {
   }
 
   async findPlatformManagedUser(id: number, authorization?: string) {
-    await this.assertPlatformAdminAccess(authorization);
+    const actor = await this.getAuthenticatedUser(authorization);
+
+    if (actor.userType !== 'platform') {
+      throw new ForbiddenException(
+        'Only platform users can view platform users',
+      );
+    }
 
     return this.findOneResponse(id, authorization);
   }
@@ -246,11 +582,16 @@ export class UsersService {
       this.requireString(body.phone_number, 'phone_number'),
     );
     const password = this.requireString(body.password, 'password');
-    const role = this.optionalString(body.role) ?? 'employee';
     const userType = this.parseUserType(body.user_type);
     const birthDate = this.parseBirthDate(this.optionalString(body.birth_date));
+    const normalizedRoleInput = this.optionalString(body.role);
 
     if (userType === 'platform') {
+      const role = this.resolvePlatformRoleCode(
+        normalizedRoleInput ?? 'support',
+        'role',
+      );
+
       if (actor && !this.isPlatformAdmin(actor)) {
         throw new ForbiddenException('Only platform admin can create platform users');
       }
@@ -289,6 +630,10 @@ export class UsersService {
     const crmRole = await this.resolveCrmRoleForWrite(
       this.optionalString(body.crm_role_id),
       companyId,
+    );
+    const role = await this.resolveCompanyUserRoleCode(
+      companyId,
+      normalizedRoleInput ?? 'employee',
     );
     const allowedShops = await this.resolveAllowedShopsForWrite(
       companyId,
@@ -376,13 +721,11 @@ export class UsersService {
   async assertCompanyAdminAccess(authorization?: string) {
     const user = await this.getAuthenticatedUser(authorization);
 
-    if (this.isCompanyAdmin(user)) {
-      return user;
+    if (!this.isCompanyAdmin(user) || !user.companyId) {
+      throw new ForbiddenException('Only company admin can manage company roles');
     }
 
-    throw new ForbiddenException(
-      'Only company admin can perform this action',
-    );
+    return user;
   }
 
   async update(
@@ -436,7 +779,13 @@ export class UsersService {
     }
 
     if (body.role !== undefined) {
-      data.role = this.requireString(body.role, 'role');
+      data.role =
+        targetUser.userType === 'platform'
+          ? this.resolvePlatformRoleCode(body.role, 'role')
+          : await this.resolveCompanyUserRoleCode(
+              companyId ?? targetUser.companyId,
+              body.role,
+            );
     }
 
     if (body.can_switch_shops !== undefined) {
@@ -734,11 +1083,15 @@ export class UsersService {
       throw new UnauthorizedException('User does not belong to this company');
     }
 
+    await this.assertUserCanAuthenticate(user);
+
     return this.prepareAuthenticatedUser(userId);
   }
 
   async prepareAuthenticatedUser(userId: number) {
     const user = await this.findByIdOrThrow(userId);
+
+    await this.assertUserCanAuthenticate(user);
 
     if (user.userType === 'platform') {
       return user;
@@ -800,7 +1153,7 @@ export class UsersService {
 
   async toAuthProfile(userInput: UserWithRelations) {
     const user = await this.prepareAuthenticatedUser(userInput.id);
-    const roles = this.resolveRoles(user.role, user.userType);
+    const roles = await this.resolveRoles(user.role, user.userType, user.companyId);
 
     if (user.userType === 'platform') {
       return {
@@ -912,14 +1265,18 @@ export class UsersService {
     };
   }
 
-  private toListItem(user: UserWithRelations) {
+  private async toListItem(user: UserWithRelations) {
+    const rolePayload = await this.resolveUserPrimaryRolePayload(user);
+
     return {
       id: user.id,
       user_type: user.userType,
       first_name: user.firstName,
       last_name: user.lastName,
       phone_number: user.phoneNumber,
-      role: user.role,
+      role: rolePayload.role_code,
+      role_code: rolePayload.role_code,
+      role_name: rolePayload.role_name,
       crm_role_id: user.crmRoleId,
       crm_role: user.crmRole
         ? {
@@ -1010,6 +1367,14 @@ export class UsersService {
     }
 
     return undefined;
+  }
+
+  private requireBoolean(value: unknown, field: string) {
+    if (typeof value !== 'boolean') {
+      throw new BadRequestException(`${field} must be a boolean`);
+    }
+
+    return value;
   }
 
   private normalizePhoneNumber(value: string) {
@@ -1115,22 +1480,439 @@ export class UsersService {
     );
   }
 
-  private resolveRoles(role: string, userType: 'platform' | 'company') {
+  private async resolveUserPrimaryRolePayload(user: UserWithRelations) {
+    if (user.userType === 'platform') {
+      const roleItem = this.toRoleItem(user.role);
+      return {
+        role: roleItem.role,
+        role_code: user.role,
+        role_name: roleItem.role.name,
+      };
+    }
+
+    if (!user.companyId) {
+      const roleItem = this.toRoleItem(user.role);
+      return {
+        role: roleItem.role,
+        role_code: user.role,
+        role_name: roleItem.role.name,
+      };
+    }
+
+    const companyRole = await this.findCompanyRoleByCode(user.companyId, user.role);
+    const resolvedRole =
+      companyRole ?? this.toFallbackCompanyRole(user.companyId, user.role);
+
+    return {
+      role: {
+        name: resolvedRole.name,
+      },
+      role_code: resolvedRole.code,
+      role_name: resolvedRole.name,
+    };
+  }
+
+  private async ensureDefaultCompanyRoles(companyId: string, tx?: any) {
+    const db = tx ?? this.db;
+    const companyRole = this.getCompanyRoleDelegate(db);
+
+    if (!companyRole) {
+      return;
+    }
+
+    await companyRole.createMany({
+      data: DEFAULT_COMPANY_ROLES.map((role) => ({
+        companyId,
+        code: role.code,
+        name: role.name,
+        isSystem: role.isSystem,
+        isActive: true,
+      })),
+      skipDuplicates: true,
+    });
+  }
+
+  private async resolveCompanyUserRoleCode(
+    companyId: string | null | undefined,
+    value: unknown,
+  ) {
+    if (!companyId) {
+      throw new BadRequestException('company_id is required for company user role');
+    }
+
+    await this.ensureDefaultCompanyRoles(companyId);
+    const roleLookupValue = this.requireString(value, 'role').trim();
+    const normalizedRoleCode = roleLookupValue.toLowerCase();
+    const role =
+      (await this.findCompanyRoleByPublicId(companyId, roleLookupValue)) ??
+      (await this.findCompanyRoleByCode(companyId, normalizedRoleCode));
+
+    if (!role || !role.isActive) {
+      throw new BadRequestException('Company role not found or inactive');
+    }
+
+    return role.code;
+  }
+
+  private resolvePlatformRoleCode(value: unknown, field: string) {
+    const normalizedValue = this.requireString(value, field).trim().toLowerCase();
+    const roleById = DEFAULT_PLATFORM_ROLES.find(
+      (role) => role.code === normalizedValue,
+    );
+
+    if (roleById) {
+      return roleById.code;
+    }
+
+    return this.normalizePlatformRole(normalizedValue, field);
+  }
+
+  private normalizePlatformRole(value: unknown, field: string) {
+    const role = this.requireString(value, field).trim().toLowerCase();
+
+    if (!ROLE_DEFINITIONS[role] || !['platform_admin', 'support', 'superadmin'].includes(role)) {
+      throw new BadRequestException(`${field} has an invalid platform role`);
+    }
+
+    return role;
+  }
+
+  private normalizeCompanyRoleCode(value: unknown, field: string) {
+    const normalized = this.requireString(value, field).trim().toLowerCase();
+
+    if (!/^[a-z0-9-_]+$/.test(normalized)) {
+      throw new BadRequestException(
+        `${field} must contain only lowercase latin letters, numbers, dash or underscore`,
+      );
+    }
+
+    return normalized;
+  }
+
+  private async generateUniqueCompanyRoleCode(companyId: string, name: string) {
+    this.assertCompanyRoleStorageAvailable();
+
+    const baseCode = this.normalizeCompanyRoleCode(
+      name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'role',
+      'code',
+    );
+    const existingRoles = await this.db.companyRole.findMany({
+      where: {
+        companyId,
+        code: {
+          startsWith: baseCode,
+        },
+      },
+      select: {
+        code: true,
+      },
+    });
+    const existingCodes = new Set(
+      existingRoles.map((role: { code: string }) => role.code),
+    );
+
+    if (!existingCodes.has(baseCode)) {
+      return baseCode;
+    }
+
+    let suffix = 2;
+
+    while (existingCodes.has(`${baseCode}-${suffix}`)) {
+      suffix += 1;
+    }
+
+    return `${baseCode}-${suffix}`;
+  }
+
+  private async findCompanyRoleByCode(companyId: string, code: string) {
+    await this.ensureDefaultCompanyRoles(companyId);
+
+    if (!this.hasCompanyRoleStorage()) {
+      return DEFAULT_COMPANY_ROLES.some((role) => role.code === code.trim().toLowerCase())
+        ? this.toFallbackCompanyRole(companyId, code.trim().toLowerCase())
+        : null;
+    }
+
+    return this.db.companyRole.findFirst({
+      where: {
+        companyId,
+        code: code.trim().toLowerCase(),
+      },
+    });
+  }
+
+  private async findCompanyRoleByPublicId(companyId: string, roleId: string) {
+    await this.ensureDefaultCompanyRoles(companyId);
+
+    const normalizedRoleId = roleId.trim();
+
+    if (!normalizedRoleId) {
+      return null;
+    }
+
+    if (!this.hasCompanyRoleStorage()) {
+      const defaultRole = DEFAULT_COMPANY_ROLES.find(
+        (role) => this.getFallbackCompanyRolePublicId(role.code) === normalizedRoleId,
+      );
+
+      return defaultRole
+        ? this.toFallbackCompanyRole(companyId, defaultRole.code)
+        : null;
+    }
+
+    const roles = await this.db.companyRole.findMany({
+      where: {
+        companyId,
+      },
+    });
+
+    return (
+      roles.find(
+        (role: CompanyRoleRecord) =>
+          this.getCompanyRolePublicId(role) === normalizedRoleId,
+      ) ?? null
+    );
+  }
+
+  private async findCompanyRoleByIdOrThrow(roleId: string, companyId: string) {
+    this.assertCompanyRoleStorageAvailable();
+
+    const role = await this.db.companyRole.findFirst({
+      where: {
+        id: roleId,
+        companyId,
+      },
+    });
+
+    if (!role) {
+      throw new NotFoundException('Company role not found');
+    }
+
+    return role as CompanyRoleRecord;
+  }
+
+  private toCompanyRoleItem(role: CompanyRoleRecord) {
+    const displayName = this.getCompanyRoleDisplayName(role.code, role.name);
+    const publicId = this.getCompanyRolePublicId(role);
+
+    return {
+      id: publicId,
+      role_id: role.id,
+      company_id: role.companyId,
+      code: role.code,
+      name: displayName,
+      is_system: role.isSystem,
+      is_active: role.isActive,
+      role: {
+        name: displayName,
+      },
+      created_at: role.createdAt,
+      updated_at: role.updatedAt,
+    };
+  }
+
+  private toCompanyRoleOption(role: CompanyRoleRecord) {
+    const displayName = this.getCompanyRoleDisplayName(role.code, role.name);
+
+    return {
+      id: role.id,
+      role_id: role.code,
+      role: {
+        name: displayName,
+      },
+    };
+  }
+
+  private toFallbackCompanyRole(companyId: string, roleCode: string): CompanyRoleRecord {
+    const fallbackName = this.getCompanyRoleDisplayName(roleCode, roleCode);
+
+    return {
+      id: roleCode,
+      companyId,
+      code: roleCode,
+      name: fallbackName,
+      isSystem: false,
+      isActive: true,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    };
+  }
+
+  private toCompanyRolesListResponse(
+    roles: Array<{
+      id: string;
+      role_id: string;
+      company_id: string;
+      code: string;
+      name: string;
+      is_active: boolean;
+      created_at: Date;
+      updated_at: Date;
+    }>,
+  ) {
+    const activeRolesCount = roles.filter((role) => role.is_active).length;
+    const deletedRolesCount = roles.length - activeRolesCount;
+
+    return {
+      deleted_roles_count: deletedRolesCount,
+      active_roles_count: activeRolesCount,
+      count: roles.length,
+      roles: roles.map((role) => ({
+        client_type_id: '',
+        name: role.name,
+        id: role.id,
+        external_id: this.toLegacyExternalId(role.role_id),
+        company_id: role.company_id,
+        description: role.name,
+        created_at:
+          role.created_at.getTime() === 0 ? '' : role.created_at.toISOString(),
+        updated_at:
+          role.updated_at.getTime() === 0 ? '' : role.updated_at.toISOString(),
+        deleted_at: role.is_active ? 0 : role.updated_at.getTime(),
+        session_id: '',
+        is_admin: COMPANY_ADMIN_ROLES.has(role.code),
+        type: 1,
+      })),
+    };
+  }
+
+  private toPlatformRolesListResponse(
+    roles: Array<{
+      id: string;
+      code: string;
+      name: string;
+      is_active: boolean;
+    }>,
+  ) {
+    const activeRolesCount = roles.filter((role) => role.is_active).length;
+    const deletedRolesCount = roles.length - activeRolesCount;
+
+    return {
+      deleted_roles_count: deletedRolesCount,
+      active_roles_count: activeRolesCount,
+      count: roles.length,
+      roles: roles.map((role) => ({
+        client_type_id: '',
+        name: role.name,
+        id: role.id,
+        external_id: this.toLegacyExternalId(role.id),
+        company_id: '',
+        description: role.name,
+        created_at: '',
+        updated_at: '',
+        deleted_at: role.is_active ? 0 : Date.now(),
+        session_id: '',
+        is_admin: PLATFORM_ADMIN_ROLES.has(role.code),
+        type: 2,
+      })),
+    };
+  }
+
+  private getCompanyRoleDisplayName(roleCode: string, fallbackName: string) {
+    const normalizedRoleCode = roleCode.trim().toLowerCase();
+
+    return (
+      {
+        owner: 'Управляющий компании',
+        admin: 'Админ',
+        store_manager: 'Управляющий магазина',
+        cashier: 'Кассир',
+        employee: 'Сотрудник',
+        platform_admin: 'Админ платформы',
+        support: 'Поддержка',
+        superadmin: 'Суперадмин',
+      }[normalizedRoleCode] ?? fallbackName
+    );
+  }
+
+  private getCompanyRolePublicId(role: CompanyRoleRecord) {
+    const normalizedRoleCode = role.code.trim().toLowerCase();
+    const roleDefinition = ROLE_DEFINITIONS[normalizedRoleCode];
+
+    if (roleDefinition?.role_id && roleDefinition.role_id !== 'owner') {
+      return roleDefinition.role_id;
+    }
+
+    return role.id;
+  }
+
+  private getFallbackCompanyRolePublicId(roleCode: string) {
+    const normalizedRoleCode = roleCode.trim().toLowerCase();
+    const roleDefinition = ROLE_DEFINITIONS[normalizedRoleCode];
+
+    if (roleDefinition?.role_id && roleDefinition.role_id !== 'owner') {
+      return roleDefinition.role_id;
+    }
+
+    return normalizedRoleCode;
+  }
+
+  private toLegacyExternalId(value: string) {
+    let hash = 0;
+
+    for (const char of value) {
+      hash = (hash * 31 + char.charCodeAt(0)) % 900000;
+    }
+
+    return hash + 100000;
+  }
+
+  private async resolveRoles(
+    role: string,
+    userType: 'platform' | 'company',
+    companyId?: string | null,
+  ) {
     const normalizedRole = role.trim().toLowerCase();
 
     if (userType === 'platform') {
       return [this.toRoleItem(normalizedRole)];
     }
 
+    if (!companyId) {
+      return [this.toRoleItem(normalizedRole)];
+    }
+
+    await this.ensureDefaultCompanyRoles(companyId);
+    const companyRoles = this.hasCompanyRoleStorage()
+      ? await this.db.companyRole.findMany({
+          where: {
+            companyId,
+            isActive: true,
+          },
+          orderBy: [{ isSystem: 'desc' }, { createdAt: 'asc' }],
+        })
+      : DEFAULT_COMPANY_ROLES.map((role) => ({
+          id: role.code,
+          companyId,
+          code: role.code,
+          name: role.name,
+          isSystem: role.isSystem,
+          isActive: true,
+          createdAt: new Date(0),
+          updatedAt: new Date(0),
+        }));
+    const companyRoleLookup = new Map<string, CompanyRoleRecord>(
+      companyRoles.map((companyRole: CompanyRoleRecord) => [
+        companyRole.code,
+        companyRole,
+      ]),
+    );
+    const primaryRole =
+      companyRoleLookup.get(normalizedRole) ?? this.toFallbackCompanyRole(companyId, normalizedRole);
+
     if (COMPANY_ADMIN_ROLES.has(normalizedRole)) {
+      const managementRoles = ['store_manager', 'cashier']
+        .map((roleCode) => companyRoleLookup.get(roleCode))
+        .filter(Boolean)
+        .map((companyRole: CompanyRoleRecord) => this.toCompanyRoleOption(companyRole));
+
       return [
-        this.toRoleItem(normalizedRole),
-        this.toRoleItem('store_manager'),
-        this.toRoleItem('cashier'),
+        this.toCompanyRoleOption(primaryRole),
+        ...managementRoles,
       ];
     }
 
-    return [this.toRoleItem(normalizedRole)];
+    return [this.toCompanyRoleOption(primaryRole)];
   }
 
   private toRoleItem(roleCode: string) {
@@ -1212,6 +1994,10 @@ export class UsersService {
 
     if (!company) {
       throw new NotFoundException('Company not found');
+    }
+
+    if (!company.isActive) {
+      throw new BadRequestException('Company is inactive');
     }
 
     return company.id;
@@ -1325,7 +2111,11 @@ export class UsersService {
     return allowedShops[0] ?? null;
   }
 
-  private async findShopByIdentifierOrThrow(shopIdentifier: string, companyId: string) {
+  private async findShopByIdentifierOrThrow(
+    shopIdentifier: string,
+    companyId: string,
+    options?: { allowInactive?: boolean },
+  ) {
     const identifier = shopIdentifier.trim();
     const shop = await this.db.shop.findFirst({
       where: {
@@ -1336,6 +2126,10 @@ export class UsersService {
 
     if (!shop) {
       throw new NotFoundException('Shop not found');
+    }
+
+    if (!options?.allowInactive && !shop.isActive) {
+      throw new BadRequestException('Shop is inactive');
     }
 
     return shop;
@@ -1375,10 +2169,10 @@ export class UsersService {
     if (user.shopAccesses.length) {
       return user.shopAccesses
         .map((access) => access.shop)
-        .filter((shop) => shop.isActive);
+        .filter((shop) => shop && shop.isActive);
     }
 
-    if (user.currentShop) {
+    if (user.currentShop?.isActive) {
       await this.db.userShopAccess.createMany({
         data: [
           {
@@ -1442,11 +2236,19 @@ export class UsersService {
   }
 
   private extractToken(authorization?: string) {
-    if (!authorization?.startsWith('Bearer ')) {
+    const match = authorization?.match(/^Bearer\s+(.+)$/i);
+
+    if (!match) {
       throw new UnauthorizedException('Missing bearer token');
     }
 
-    return authorization.slice('Bearer '.length).trim();
+    const token = match[1]?.trim();
+
+    if (!token) {
+      throw new UnauthorizedException('Missing bearer token');
+    }
+
+    return token;
   }
 
   private formatIsoDate(value: Date | null) {
@@ -1464,8 +2266,10 @@ export class UsersService {
       const payload = await this.jwtService.verifyAsync<{
         sub: number;
       }>(token);
+      const user = await this.findByIdOrThrow(payload.sub);
+      await this.assertUserCanAuthenticate(user);
 
-      return this.findByIdOrThrow(payload.sub);
+      return user;
     } catch (error) {
       if (error instanceof TokenExpiredError) {
         throw new UnauthorizedException('Token expired');
@@ -1546,6 +2350,38 @@ export class UsersService {
       }
 
       throw error;
+    }
+  }
+
+  private assertUserIsActive(user: UserWithRelations) {
+    if (!user.isActive) {
+      throw new UnauthorizedException('User is inactive');
+    }
+  }
+
+  private assertCompanyMembershipIsActive(user: UserWithRelations) {
+    if (user.userType !== 'company') {
+      return;
+    }
+
+    if (!user.companyId || !user.company) {
+      throw new UnauthorizedException('Company user is missing company');
+    }
+
+    if (!user.company.isActive) {
+      throw new UnauthorizedException('Company is inactive');
+    }
+  }
+
+  private async assertCompanyRoleIsActive(user: UserWithRelations) {
+    if (user.userType !== 'company' || !user.companyId) {
+      return;
+    }
+
+    const companyRole = await this.findCompanyRoleByCode(user.companyId, user.role);
+
+    if (!companyRole || !companyRole.isActive) {
+      throw new UnauthorizedException('Company role is inactive');
     }
   }
 }

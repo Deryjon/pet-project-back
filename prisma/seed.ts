@@ -13,6 +13,20 @@ const prisma = new PrismaClient({
   adapter: new PrismaPg({ connectionString }),
 });
 
+const DEFAULT_COMPANY_ROLES = [
+  { code: 'owner', name: 'Управляющий компании', isSystem: true },
+  { code: 'admin', name: 'Админ', isSystem: true },
+  { code: 'store_manager', name: 'Управляющий магазина', isSystem: true },
+  { code: 'cashier', name: 'Кассир', isSystem: true },
+  { code: 'employee', name: 'Сотрудник', isSystem: true },
+] as const;
+
+const DEFAULT_PLATFORM_ROLES = [
+  { code: 'platform_admin', name: 'Админ платформы', isSystem: true },
+  { code: 'support', name: 'Поддержка', isSystem: true },
+  { code: 'superadmin', name: 'Суперадмин', isSystem: true },
+] as const;
+
 function normalizePhoneNumber(value: string) {
   const normalized = value.replace(/\D/g, '');
 
@@ -32,6 +46,7 @@ async function main() {
     process.env.PLATFORM_ADMIN_PHONE ?? '+998900000001',
   );
   const adminPassword = process.env.PLATFORM_ADMIN_PASSWORD ?? 'admin123';
+  const primaryPlatformRole = DEFAULT_PLATFORM_ROLES[0]?.code ?? 'platform_admin';
 
   const company = await prisma.company.upsert({
     where: {
@@ -82,6 +97,29 @@ async function main() {
     });
   }
 
+  for (const role of DEFAULT_COMPANY_ROLES) {
+    await prisma.companyRole.upsert({
+      where: {
+        companyId_code: {
+          companyId: company.id,
+          code: role.code,
+        },
+      },
+      update: {
+        name: role.name,
+        isSystem: role.isSystem,
+        isActive: true,
+      },
+      create: {
+        companyId: company.id,
+        code: role.code,
+        name: role.name,
+        isSystem: role.isSystem,
+        isActive: true,
+      },
+    });
+  }
+
   const adminPhoneVariants = [adminPhone, `+${adminPhone}`];
   const existingPlatformAdmins = await prisma.user.findMany({
     where: {
@@ -107,7 +145,7 @@ async function main() {
         lastName: 'Admin',
         phoneNumber: adminPhone,
         password: await bcrypt.hash(adminPassword, 10),
-        role: 'platform_admin',
+        role: primaryPlatformRole,
         isActive: true,
       },
     });
@@ -133,7 +171,7 @@ async function main() {
         phoneNumber: adminPhone,
         password: await bcrypt.hash(adminPassword, 10),
         userType: 'platform',
-        role: 'platform_admin',
+        role: primaryPlatformRole,
         isActive: true,
       },
     });

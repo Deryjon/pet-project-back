@@ -13,7 +13,9 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { CreateCompanyRoleDto } from './dto/create-company-role.dto';
 import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateCompanyRoleDto } from './dto/update-company-role.dto';
 import { UpdatePasswordDto } from './dto/update-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -77,6 +79,56 @@ export class UsersController {
   @Get('user/profile')
   profile(@Headers('authorization') authorization?: string) {
     return this.usersService.getProfile(authorization);
+  }
+
+  @Get('company/roles')
+  findCompanyRoles(@Headers('authorization') authorization?: string) {
+    return this.usersService.findCompanyRoles(authorization);
+  }
+
+  @Post('company/roles')
+  createCompanyRole(
+    @Body() body: CreateCompanyRoleDto,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.usersService.createCompanyRole(
+      body as unknown as Record<string, unknown>,
+      authorization,
+    );
+  }
+
+  @Put('company/roles/:id')
+  updateCompanyRole(
+    @Param('id') id: string,
+    @Body() body: UpdateCompanyRoleDto,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.usersService.updateCompanyRole(
+      id,
+      body as unknown as Record<string, unknown>,
+      authorization,
+    );
+  }
+
+  @Patch('company/roles/:id/status')
+  updateCompanyRoleStatus(
+    @Param('id') id: string,
+    @Body() body: UpdateCompanyRoleDto,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.usersService.updateCompanyRole(
+      id,
+      body as unknown as Record<string, unknown>,
+      authorization,
+    );
+  }
+
+  @Delete('company/roles/:id')
+  removeCompanyRole(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.usersService.removeCompanyRole(id, authorization);
   }
 
   @Patch('user/profile')

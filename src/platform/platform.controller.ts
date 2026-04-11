@@ -5,6 +5,7 @@ import {
   Get,
   Headers,
   Param,
+  Patch,
   ParseIntPipe,
   Post,
   Put,
@@ -16,6 +17,7 @@ import { CreateShopDto } from './dto/create-shop.dto';
 import { PlatformService } from './platform.service';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { UpdateShopDto } from './dto/update-shop.dto';
+import { UpdateEntityStatusDto } from './dto/update-entity-status.dto';
 import { UsersService } from '../users/users.service';
 
 @Controller()
@@ -63,6 +65,20 @@ export class PlatformController {
     await this.usersService.assertPlatformAdminAccess(authorization);
 
     return this.platformService.updateCompany(
+      companyId,
+      body as unknown as Record<string, unknown>,
+    );
+  }
+
+  @Patch('platform/companies/:companyId/status')
+  async updateCompanyStatus(
+    @Param('companyId') companyId: string,
+    @Body() body: UpdateEntityStatusDto,
+    @Headers('authorization') authorization?: string,
+  ) {
+    await this.usersService.assertPlatformAdminAccess(authorization);
+
+    return this.platformService.updateCompanyStatus(
       companyId,
       body as unknown as Record<string, unknown>,
     );
@@ -118,6 +134,22 @@ export class PlatformController {
     );
   }
 
+  @Patch('platform/companies/:companyId/shops/:shopId/status')
+  async updateShopStatus(
+    @Param('companyId') companyId: string,
+    @Param('shopId') shopId: string,
+    @Body() body: UpdateEntityStatusDto,
+    @Headers('authorization') authorization?: string,
+  ) {
+    await this.usersService.assertPlatformAdminAccess(authorization);
+
+    return this.platformService.updateShopStatus(
+      companyId,
+      shopId,
+      body as unknown as Record<string, unknown>,
+    );
+  }
+
   @Delete('platform/companies/:companyId/shops/:shopId')
   async removeShop(
     @Param('companyId') companyId: string,
@@ -136,6 +168,19 @@ export class PlatformController {
   ) {
     return this.usersService.findCompanyUsersForPlatform(
       companyId,
+      authorization,
+    );
+  }
+
+  @Get('platform/companies/:companyId/users/:id')
+  async findCompanyUser(
+    @Param('companyId') companyId: string,
+    @Param('id', ParseIntPipe) id: number,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.usersService.findCompanyManagedUserForPlatform(
+      companyId,
+      id,
       authorization,
     );
   }
@@ -163,6 +208,11 @@ export class PlatformController {
   @Get('platform/users')
   findPlatformUsers(@Headers('authorization') authorization?: string) {
     return this.usersService.findPlatformUsers(authorization);
+  }
+
+  @Get('platform/roles')
+  findPlatformRoles(@Headers('authorization') authorization?: string) {
+    return this.usersService.findPlatformRoles(authorization);
   }
 
   @Post('platform/users')

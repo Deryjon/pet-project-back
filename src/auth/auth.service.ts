@@ -37,6 +37,8 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
+    await this.usersService.assertUserCanAuthenticate(user);
+
     const isPasswordValid = await bcrypt.compare(dto.password, user.password);
 
     if (!isPasswordValid) {
@@ -79,6 +81,8 @@ export class AuthService {
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
+
+    await this.usersService.assertUserCanAuthenticate(user);
 
     const isPasswordValid = await bcrypt.compare(dto.password, user.password);
 
@@ -124,11 +128,19 @@ export class AuthService {
   }
 
   private extractToken(authorization?: string) {
-    if (!authorization?.startsWith('Bearer ')) {
+    const match = authorization?.match(/^Bearer\s+(.+)$/i);
+
+    if (!match) {
       throw new UnauthorizedException('Missing bearer token');
     }
 
-    return authorization.slice('Bearer '.length).trim();
+    const token = match[1]?.trim();
+
+    if (!token) {
+      throw new UnauthorizedException('Missing bearer token');
+    }
+
+    return token;
   }
 
   private async verifyAccessToken(authorization?: string) {

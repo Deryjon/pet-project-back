@@ -5,6 +5,14 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
+const DEFAULT_COMPANY_ROLES = [
+  { code: 'owner', name: 'Owner', isSystem: true },
+  { code: 'admin', name: 'Admin', isSystem: true },
+  { code: 'store_manager', name: 'Store manager', isSystem: true },
+  { code: 'cashier', name: 'Cashier', isSystem: true },
+  { code: 'employee', name: 'Employee', isSystem: true },
+] as const;
+
 @Injectable()
 export class PlatformService {
   constructor(private readonly prisma: PrismaService) {}
@@ -31,12 +39,26 @@ export class PlatformService {
       throw new BadRequestException('Company with this login already exists');
     }
 
-    const company = await this.db.company.create({
-      data: {
-        login,
-        name,
-        subdomain,
-      },
+    const company = await this.db.$transaction(async (tx: any) => {
+      const createdCompany = await tx.company.create({
+        data: {
+          login,
+          name,
+          subdomain,
+        },
+      });
+
+      await tx.companyRole.createMany({
+        data: DEFAULT_COMPANY_ROLES.map((role) => ({
+          companyId: createdCompany.id,
+          code: role.code,
+          name: role.name,
+          isSystem: role.isSystem,
+          isActive: true,
+        })),
+      });
+
+      return createdCompany;
     });
 
     return this.toCompanyItem({
@@ -53,9 +75,6 @@ export class PlatformService {
     const companies = await this.db.company.findMany({
       include: {
         shops: {
-          where: {
-            isActive: true,
-          },
           orderBy: {
             name: 'asc',
           },
@@ -170,6 +189,16 @@ export class PlatformService {
     await this.db.company.update({
       where: { id: companyId },
       data,
+    });
+
+    return this.findCompany(companyId);
+  }
+
+  async updateCompanyStatus(companyId: string, body: Record<string, unknown>) {
+    const isActive = this.requireBoolean(body.is_active, 'is_active');
+
+    await this.updateCompany(companyId, {
+      is_active: isActive,
     });
 
     return this.findCompany(companyId);
@@ -332,6 +361,18 @@ export class PlatformService {
     });
 
     return this.toShopItem(updatedShop);
+  }
+
+  async updateShopStatus(
+    companyId: string,
+    shopId: string,
+    body: Record<string, unknown>,
+  ) {
+    const isActive = this.requireBoolean(body.is_active, 'is_active');
+
+    return this.updateShop(companyId, shopId, {
+      is_active: isActive,
+    });
   }
 
   async removeShop(companyId: string, shopId: string) {
