@@ -422,7 +422,7 @@ export class ProductsService {
     });
 
     IMPORT_JOBS.set(jobId, {
-      correlation_id: '',
+      correlation_id: importId,
       message: 'product-load',
       total: rows.length,
       current: rows.length,
@@ -433,6 +433,8 @@ export class ProductsService {
 
     return {
       message: jobId,
+      correlation_id: importId,
+      import_id: importId,
     };
   }
 
@@ -444,6 +446,7 @@ export class ProductsService {
 
     return {
       correlation_id: job.correlation_id,
+      import_id: job.importId,
       message: job.message,
       total: job.total,
       current: job.current,
@@ -453,7 +456,7 @@ export class ProductsService {
   }
 
   getImportItemsDp(id: string) {
-    if (!IMPORT_SESSIONS.has(id)) {
+    if (!this.resolveImportSession(id)) {
       throw new NotFoundException('Import session not found');
     }
 
@@ -471,7 +474,7 @@ export class ProductsService {
       difference: boolean;
     },
   ) {
-    const session = IMPORT_SESSIONS.get(id);
+    const session = this.resolveImportSession(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
@@ -520,7 +523,7 @@ export class ProductsService {
   }
 
   async commitImport(id: string, authorization?: string) {
-    const session = IMPORT_SESSIONS.get(id);
+    const session = this.resolveImportSession(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
@@ -535,6 +538,20 @@ export class ProductsService {
       session.companyId,
       session.branchCode,
     );
+  }
+
+  private resolveImportSession(id: string) {
+    const directSession = IMPORT_SESSIONS.get(id);
+    if (directSession) {
+      return directSession;
+    }
+
+    const job = IMPORT_JOBS.get(id);
+    if (!job) {
+      return undefined;
+    }
+
+    return IMPORT_SESSIONS.get(job.importId);
   }
 
   async findAll({ page, limit, search }: FindProductsArgs, authorization?: string) {
