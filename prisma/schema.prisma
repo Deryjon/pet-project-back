@@ -19,9 +19,13 @@ model Company {
   isActive  Boolean  @default(true)
   shops     Shop[]
   products  Product[]
+  categories Category[]
+  brands    Brand[]
+  suppliers Supplier[]
   roles     CompanyRole[]
   users     User[]
   crmRoles  Role[]
+  sales     Sale[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -98,26 +102,41 @@ model UserShopAccess {
 
 model Category {
   id        Int       @id @default(autoincrement())
-  name      String    @unique
+  companyId String
+  name      String
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   products  Product[]
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
+
+  @@unique([companyId, name])
+  @@index([companyId])
 }
 
 model Brand {
   id        Int       @id @default(autoincrement())
-  name      String    @unique
+  companyId String
+  name      String
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   products  Product[]
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
+
+  @@unique([companyId, name])
+  @@index([companyId])
 }
 
 model Supplier {
   id        Int               @id @default(autoincrement())
-  name      String            @unique
+  companyId String
+  name      String
+  company   Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
   products  ProductSupplier[]
   createdAt DateTime          @default(now())
   updatedAt DateTime          @updatedAt
+
+  @@unique([companyId, name])
+  @@index([companyId])
 }
 
 model Product {
@@ -125,8 +144,8 @@ model Product {
   companyId      String?
   photo          String?
   name           String
-  sku            String?           @unique
-  barcode        String?           @unique
+  sku            String?
+  barcode        String?
   productType    String?
   variantType    String?
   unit           String?
@@ -148,6 +167,8 @@ model Product {
   updatedAt      DateTime          @updatedAt
 
   @@index([companyId])
+  @@unique([companyId, sku])
+  @@unique([companyId, barcode])
 }
 
 model ProductSupplier {
@@ -174,6 +195,7 @@ model ProductStock {
 
 model Sale {
   id              Int        @id @default(autoincrement())
+  companyId       String?
   number          String     @unique
   status          String     @default("draft")
   discountPercent Float      @default(0)
@@ -185,11 +207,14 @@ model Sale {
   branchCode      String?
   isDraft         Boolean    @default(true)
   userId          Int?
+  company         Company?   @relation(fields: [companyId], references: [id], onDelete: SetNull)
   user            User?      @relation(fields: [userId], references: [id])
   items           SaleItem[]
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
   paidAt          DateTime?
+
+  @@index([companyId])
 }
 
 model SaleItem {

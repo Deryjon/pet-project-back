@@ -641,16 +641,40 @@ export class ProductsService {
         category: categoryName
           ? {
               connectOrCreate: {
-                where: { name: categoryName },
-                create: { name: categoryName },
+                where: {
+                  companyId_name: {
+                    companyId: productCompanyId,
+                    name: categoryName,
+                  },
+                },
+                create: {
+                  company: {
+                    connect: {
+                      id: productCompanyId,
+                    },
+                  },
+                  name: categoryName,
+                },
               },
             }
           : undefined,
         brand: brandName
           ? {
               connectOrCreate: {
-                where: { name: brandName },
-                create: { name: brandName },
+                where: {
+                  companyId_name: {
+                    companyId: productCompanyId,
+                    name: brandName,
+                  },
+                },
+                create: {
+                  company: {
+                    connect: {
+                      id: productCompanyId,
+                    },
+                  },
+                  name: brandName,
+                },
               },
             }
           : undefined,
@@ -659,8 +683,20 @@ export class ProductsService {
               create: [...supplierNames].map((supplierName) => ({
                 supplier: {
                   connectOrCreate: {
-                    where: { name: supplierName },
-                    create: { name: supplierName },
+                    where: {
+                      companyId_name: {
+                        companyId: productCompanyId,
+                        name: supplierName,
+                      },
+                    },
+                    create: {
+                      company: {
+                        connect: {
+                          id: productCompanyId,
+                        },
+                      },
+                      name: supplierName,
+                    },
                   },
                 },
               })),
@@ -734,6 +770,10 @@ export class ProductsService {
     const supplierIdNumbers = supplierIds
       .map((value) => Number(value))
       .filter((value) => Number.isInteger(value));
+    const scopedSupplierIds = await this.resolveSupplierIdsForCompany(
+      supplierIdNumbers,
+      productCompanyId,
+    );
     const shipments = this.extractStockPayload(body);
     const shipmentsWithBranchCodes = await this.attachBranchCodesToShipments(
       shipments,
@@ -791,14 +831,26 @@ export class ProductsService {
         brand: brandName
           ? {
               connectOrCreate: {
-                where: { name: brandName },
-                create: { name: brandName },
+                where: {
+                  companyId_name: {
+                    companyId: productCompanyId,
+                    name: brandName,
+                  },
+                },
+                create: {
+                  company: {
+                    connect: {
+                      id: productCompanyId,
+                    },
+                  },
+                  name: brandName,
+                },
               },
             }
           : undefined,
-        suppliers: supplierIdNumbers.length
+        suppliers: scopedSupplierIds.length
           ? {
-              create: supplierIdNumbers.map((supplierId) => ({
+              create: scopedSupplierIds.map((supplierId) => ({
                 supplier: {
                   connect: {
                     id: supplierId,
@@ -948,6 +1000,10 @@ export class ProductsService {
     const supplierIdNumbers = supplierIds
       .map((value) => Number(value))
       .filter((value) => Number.isInteger(value));
+    const scopedSupplierIds = await this.resolveSupplierIdsForCompany(
+      supplierIdNumbers,
+      writeContext.companyId ?? null,
+    );
     const description = this.optionalString(body.description);
 
     const updatedProduct = await this.prisma.product.update({
@@ -988,9 +1044,9 @@ export class ProductsService {
           body.supplier_ids !== undefined
             ? {
                 deleteMany: {},
-                ...(supplierIdNumbers.length
+                ...(scopedSupplierIds.length
                   ? {
-                      create: supplierIdNumbers.map((supplierId) => ({
+                      create: scopedSupplierIds.map((supplierId) => ({
                         supplier: {
                           connect: {
                             id: supplierId,
@@ -1093,7 +1149,7 @@ export class ProductsService {
     for (let attempt = 0; attempt < 50; attempt += 1) {
       const randomNumber = Math.floor(Math.random() * 10 ** SKU_NUMBER_LENGTH);
       const candidate = `${prefix}-${String(randomNumber).padStart(SKU_NUMBER_LENGTH, '0')}`;
-      const existing = await this.prisma.product.findUnique({
+      const existing = await this.prisma.product.findFirst({
         where: { sku: candidate },
         select: { id: true },
       });
@@ -1134,7 +1190,7 @@ export class ProductsService {
     }
 
     const barcode = String(nextValue);
-    const existing = await this.prisma.product.findUnique({
+    const existing = await this.prisma.product.findFirst({
       where: { barcode },
       select: { id: true },
     });
@@ -2647,6 +2703,39 @@ export class ProductsService {
     }
 
     return parsed;
+  }
+
+  private async resolveSupplierIdsForCompany(
+    supplierIds: number[],
+    companyId?: string | null,
+  ) {
+    if (!supplierIds.length) {
+      return [];
+    }
+
+    if (!companyId) {
+      return supplierIds;
+    }
+
+    const suppliers = await this.prisma.supplier.findMany({
+      where: {
+        id: {
+          in: supplierIds,
+        },
+        companyId,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (suppliers.length !== supplierIds.length) {
+      throw new BadRequestException(
+        'One or more suppliers are not available for this company',
+      );
+    }
+
+    return suppliers.map((supplier) => supplier.id);
   }
 
   private buildCatalogMetadata(
