@@ -77,6 +77,8 @@ export class SalesService {
     const context = await this.getRequestContext(authorization);
     const sale = await this.prisma.sale.create({
       data: {
+        companyId:
+          context?.userType === 'company' ? context.companyId ?? undefined : undefined,
         number: this.generateSaleNumber(),
         branchCode: context?.currentBranchCode ?? undefined,
         userId: context?.userId ?? undefined,
@@ -93,6 +95,8 @@ export class SalesService {
 
     const sale = await this.prisma.sale.create({
       data: {
+        companyId:
+          context?.userType === 'company' ? context.companyId ?? undefined : undefined,
         number: this.generateOrderNumber(),
         status: 'draft',
         isDraft: true,
@@ -1343,15 +1347,33 @@ export class SalesService {
       return undefined;
     }
 
-    return context.allowedBranchCodes?.length
-      ? {
-          branchCode: {
-            in: context.allowedBranchCodes,
-          },
-        }
-      : {
-          id: -1,
-        };
+    if (!context.companyId) {
+      return {
+        id: -1,
+      };
+    }
+
+    const scopedFilters: Record<string, unknown>[] = [
+      {
+        companyId: context.companyId,
+      },
+    ];
+
+    if (context.allowedBranchCodes?.length) {
+      scopedFilters.push({
+        branchCode: {
+          in: context.allowedBranchCodes,
+        },
+      });
+    } else {
+      scopedFilters.push({
+        id: -1,
+      });
+    }
+
+    return {
+      AND: scopedFilters,
+    };
   }
 
   private async resolveScopedBranchCode(
@@ -1422,9 +1444,16 @@ export class SalesService {
     return this.resolveBranchCodeByShopId(normalizedIdentifier);
   }
 
-  private assertSaleAccess(sale: { branchCode: string | null }, context: any) {
+  private assertSaleAccess(
+    sale: { companyId?: string | null; branchCode: string | null },
+    context: any,
+  ) {
     if (!context || context.userType !== 'company' || !sale.branchCode) {
       return;
+    }
+
+    if (context.companyId && sale.companyId && context.companyId !== sale.companyId) {
+      throw new NotFoundException('Order not found');
     }
 
     if (!context.allowedBranchCodes.includes(sale.branchCode)) {
