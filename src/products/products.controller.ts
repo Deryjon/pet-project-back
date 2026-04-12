@@ -48,6 +48,45 @@ export class ProductsController {
     return this.productsService.getExcelImportProperties(limit);
   }
 
+  @Post('v2/imports')
+  createImportDraft(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.createImportDraft(body, authorization);
+  }
+
+  @Get('v2/imports')
+  listImports(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.productsService.listImports({
+      page: Number(page) || 1,
+      limit: Number(limit) || 10,
+    });
+  }
+
+  @Get('v2/imports/:id')
+  getImportById(@Param('id') id: string) {
+    return this.productsService.getImportById(id);
+  }
+
+  @Post('v2/imports/:id/validate')
+  validateImportDraft(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.validateExcelImport(
+      {
+        ...body,
+        import_id: id,
+      },
+      authorization,
+    );
+  }
+
   @Post('v2/excel/validate-import')
   validateExcelImport(
     @Body() body: Record<string, unknown>,
@@ -86,6 +125,19 @@ export class ProductsController {
     @Headers('authorization') authorization?: string,
   ) {
     return this.productsService.commitImport(id, authorization);
+  }
+
+  @Post('v2/imports/:id/commit')
+  commitImportDraft(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.commitImport(id, authorization);
+  }
+
+  @Post('v2/imports/:id/cancel')
+  cancelImportDraft(@Param('id') id: string) {
+    return this.productsService.cancelImport(id);
   }
 
   @Post('v2/excel/import-without-check')
