@@ -175,6 +175,32 @@ const PRODUCT_CHARACTERISTICS = [
   },
 ];
 
+const EXCEL_IMPORT_PROPERTIES = [
+  'VARIATION_ID',
+  'NAME',
+  'SKU',
+  'BARCODE',
+  'QUANTITY',
+  'SUPPLY_PRICE',
+  'RETAIL_PRICE',
+  'CATEGORY_NAME',
+  'BRAND_NAME',
+  'MEASUREMENT_UNIT',
+  'SUPPLIER',
+  'MIN_PRICE',
+  'MAX_PRICE',
+  'WHOLESALE_PRICE',
+  'DESCRIPTION',
+].map((systemName) => ({
+  id: '',
+  name: systemName,
+  system_name: systemName,
+  is_uploadable: false,
+  is_new: false,
+  is_attribute: false,
+  is_characteristics: false,
+}));
+
 const COMPANY_ID = process.env.COMPANY_ID ?? '';
 const DEFAULT_PRODUCT_TYPE_ID =
   process.env.DEFAULT_PRODUCT_TYPE_ID ?? '69e939aa-9b8f-46a9-b605-8b2675475b7b';
@@ -269,6 +295,20 @@ export class ProductsService {
       deleted_count: 2,
       product_characteristics: PRODUCT_CHARACTERISTICS.slice(0, safeLimit),
     };
+  }
+
+  getExcelImportProperties(limit?: string) {
+    const parsedLimit = limit ? Number(limit) : EXCEL_IMPORT_PROPERTIES.length;
+    if (Number.isNaN(parsedLimit) || parsedLimit <= 0) {
+      throw new BadRequestException('limit must be a positive number');
+    }
+
+    const safeLimit = Math.min(
+      Math.trunc(parsedLimit),
+      EXCEL_IMPORT_PROPERTIES.length,
+    );
+
+    return EXCEL_IMPORT_PROPERTIES.slice(0, safeLimit);
   }
 
   async findAll({ page, limit, search }: FindProductsArgs, authorization?: string) {

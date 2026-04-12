@@ -43,6 +43,11 @@ export class ProductsController {
     return this.productsService.getProductCharacteristics(limit);
   }
 
+  @Get('v2/excel/import-properties')
+  getExcelImportProperties(@Query('limit') limit?: string) {
+    return this.productsService.getExcelImportProperties(limit);
+  }
+
   @Get('v2/product')
   findAllV2(
     @Query('page') page?: string,
