@@ -1149,7 +1149,7 @@ export class ProductsService {
     for (let attempt = 0; attempt < 50; attempt += 1) {
       const randomNumber = Math.floor(Math.random() * 10 ** SKU_NUMBER_LENGTH);
       const candidate = `${prefix}-${String(randomNumber).padStart(SKU_NUMBER_LENGTH, '0')}`;
-      const existing = await this.prisma.product.findUnique({
+      const existing = await this.prisma.product.findFirst({
         where: { sku: candidate },
         select: { id: true },
       });
@@ -1190,7 +1190,7 @@ export class ProductsService {
     }
 
     const barcode = String(nextValue);
-    const existing = await this.prisma.product.findUnique({
+    const existing = await this.prisma.product.findFirst({
       where: { barcode },
       select: { id: true },
     });
