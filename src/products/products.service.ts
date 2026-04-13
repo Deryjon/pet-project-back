@@ -495,7 +495,7 @@ export class ProductsService {
     const context = await this.getImportSessionContext(authorization);
     const safePage = Math.max(1, query.page ?? 1);
     const safeLimit = Math.min(Math.max(1, query.limit ?? 10), 100);
-    const sessions = await this.prisma.importSession.findMany({
+    const sessions = await this.importSessionDelegate().findMany({
       where: this.buildImportSessionWhere(context),
       orderBy: {
         createdAt: 'desc',
@@ -503,7 +503,7 @@ export class ProductsService {
       skip: (safePage - 1) * safeLimit,
       take: safeLimit,
     });
-    const total = await this.prisma.importSession.count({
+    const total = await this.importSessionDelegate().count({
       where: this.buildImportSessionWhere(context),
     });
     const items = sessions
@@ -607,7 +607,7 @@ export class ProductsService {
 
   async getImportProgress(id: string, authorization?: string) {
     const context = await this.getImportSessionContext(authorization);
-    const jobRecord = await this.prisma.importJob.findUnique({
+    const jobRecord = await this.importJobDelegate().findUnique({
       where: { id },
     });
     const job = jobRecord ? this.mapImportJobRecord(jobRecord) : null;
@@ -827,7 +827,7 @@ export class ProductsService {
       companyId?: string | null;
     } | null,
   ) {
-    const directSession = await this.prisma.importSession.findFirst({
+    const directSession = await this.importSessionDelegate().findFirst({
       where: {
         id,
         ...this.buildImportSessionWhere(context),
@@ -837,14 +837,14 @@ export class ProductsService {
       return this.mapImportSessionRecord(directSession);
     }
 
-    const job = await this.prisma.importJob.findUnique({
+    const job = await this.importJobDelegate().findUnique({
       where: { id },
     });
     if (!job) {
       return undefined;
     }
 
-    const session = await this.prisma.importSession.findFirst({
+    const session = await this.importSessionDelegate().findFirst({
       where: {
         id: job.importId,
         ...this.buildImportSessionWhere(context),
@@ -1046,7 +1046,7 @@ export class ProductsService {
   private buildImportSessionWhere(context?: {
     userType?: string;
     companyId?: string | null;
-  } | null): Prisma.ImportSessionWhereInput {
+  } | null): Record<string, unknown> {
     if (context?.userType === 'company') {
       return {
         companyId: context.companyId ?? '',
@@ -1146,8 +1146,28 @@ export class ProductsService {
     };
   }
 
+  private importSessionDelegate() {
+    return (this.prisma as PrismaService & {
+      importSession: {
+        findMany: (args: Record<string, unknown>) => Promise<any[]>;
+        count: (args: Record<string, unknown>) => Promise<number>;
+        findFirst: (args: Record<string, unknown>) => Promise<any | null>;
+        upsert: (args: Record<string, unknown>) => Promise<any>;
+      };
+    }).importSession;
+  }
+
+  private importJobDelegate() {
+    return (this.prisma as PrismaService & {
+      importJob: {
+        findUnique: (args: Record<string, unknown>) => Promise<any | null>;
+        upsert: (args: Record<string, unknown>) => Promise<any>;
+      };
+    }).importJob;
+  }
+
   private async persistImportSession(session: ImportSession) {
-    await this.prisma.importSession.upsert({
+    await this.importSessionDelegate().upsert({
       where: {
         id: session.id,
       },
@@ -1194,7 +1214,7 @@ export class ProductsService {
     job: ImportJob & { id: string },
     companyId: string,
   ) {
-    await this.prisma.importJob.upsert({
+    await this.importJobDelegate().upsert({
       where: {
         id: job.id,
       },
