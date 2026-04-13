@@ -332,8 +332,6 @@ const EXCEL_IMPORT_PROPERTIES = [
   is_characteristics: false,
 }));
 
-const IMPORT_JOBS = new Map<string, ImportJob>();
-const IMPORT_SESSIONS = new Map<string, ImportSession>();
 const IMPORT_COMMIT_LOCKS = new Set<string>();
 const PRODUCT_IMPORT_LOCKS = new Set<string>();
 
@@ -462,13 +460,7 @@ export class ProductsService {
       this.extractImportOnMatchPolicy(body) ?? this.defaultImportOnMatchPolicy();
     const now = this.formatDateTime(new Date());
     const importId = randomUUID();
-    const mode = 'without_check' as const;
-    const result = await this.applyImportRows(
-      rows,
-      companyId,
-      branchCode,
-      onMatchPolicy,
-    );
+    const mode = this.parseImportMode(body.mode);
 
     const session: ImportSession = {
       id: importId,
@@ -478,41 +470,55 @@ export class ProductsService {
       branchCode,
       name: this.requireString(body.name, 'name'),
       mode,
-      status: 'completed',
+      status: 'draft',
       fields,
       rows,
       items: [],
       onMatchPolicy,
       dryRunSummary: undefined,
-      result,
+      result: undefined,
       createdAt: now,
       updatedAt: now,
     };
 
-    IMPORT_SESSIONS.set(importId, session);
+    await this.persistImportSession(session);
 
     return {
       ...this.toImportSessionSummary(session),
-      result,
     };
   }
 
-  listImports(query: { page?: number; limit?: number }) {
+  async listImports(
+    query: { page?: number; limit?: number },
+    authorization?: string,
+  ) {
+    const context = await this.getImportSessionContext(authorization);
     const safePage = Math.max(1, query.page ?? 1);
     const safeLimit = Math.min(Math.max(1, query.limit ?? 10), 100);
-    const items = [...IMPORT_SESSIONS.values()]
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .slice((safePage - 1) * safeLimit, safePage * safeLimit)
+    const sessions = await this.prisma.importSession.findMany({
+      where: this.buildImportSessionWhere(context),
+      orderBy: {
+        createdAt: 'desc',
+      },
+      skip: (safePage - 1) * safeLimit,
+      take: safeLimit,
+    });
+    const total = await this.prisma.importSession.count({
+      where: this.buildImportSessionWhere(context),
+    });
+    const items = sessions
+      .map((session) => this.mapImportSessionRecord(session))
       .map((session) => this.toImportSessionSummary(session));
 
     return {
-      count: IMPORT_SESSIONS.size,
+      count: total,
       items,
     };
   }
 
-  getImportById(id: string) {
-    const session = this.resolveImportSession(id);
+  async getImportById(id: string, authorization?: string) {
+    const context = await this.getImportSessionContext(authorization);
+    const session = await this.resolveImportSession(id, context);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
@@ -540,7 +546,7 @@ export class ProductsService {
       this.optionalString(body.import_id) ??
       this.optionalString(body.id) ??
       randomUUID();
-    const existingSession = IMPORT_SESSIONS.get(importId);
+    const existingSession = await this.resolveImportSession(importId, writeContext);
     const jobId = randomUUID();
     const fields = this.extractImportFields(body);
     const onMatchPolicy =
@@ -557,7 +563,7 @@ export class ProductsService {
     const dryRunSummary = this.buildImportDryRunSummary(items);
 
     const now = this.formatDateTime(new Date());
-    IMPORT_SESSIONS.set(importId, {
+    const session: ImportSession = {
       id: importId,
       jobId,
       companyId,
@@ -577,9 +583,11 @@ export class ProductsService {
       result: existingSession?.result,
       createdAt: existingSession?.createdAt ?? now,
       updatedAt: now,
-    });
+    };
+    await this.persistImportSession(session);
 
-    IMPORT_JOBS.set(jobId, {
+    await this.persistImportJob({
+      id: jobId,
       correlation_id: importId,
       message: 'product-load',
       total: rows.length,
@@ -587,7 +595,7 @@ export class ProductsService {
       percent: 100,
       is_finished: true,
       importId,
-    });
+    }, companyId);
 
     return {
       message: jobId,
@@ -597,9 +605,14 @@ export class ProductsService {
     };
   }
 
-  getImportProgress(id: string) {
-    const job = IMPORT_JOBS.get(id);
-    if (!job) {
+  async getImportProgress(id: string, authorization?: string) {
+    const context = await this.getImportSessionContext(authorization);
+    const jobRecord = await this.prisma.importJob.findUnique({
+      where: { id },
+    });
+    const job = jobRecord ? this.mapImportJobRecord(jobRecord) : null;
+    const session = job ? await this.resolveImportSession(job.importId, context) : null;
+    if (!job || !session) {
       throw new NotFoundException('Import job not found');
     }
 
@@ -614,8 +627,9 @@ export class ProductsService {
     };
   }
 
-  async getImportItemsDp(id: string) {
-    const session = this.resolveImportSession(id);
+  async getImportItemsDp(id: string, authorization?: string) {
+    const context = await this.getImportSessionContext(authorization);
+    const session = await this.resolveImportSession(id, context);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
@@ -635,8 +649,10 @@ export class ProductsService {
       page: number;
       difference: boolean;
     },
+    authorization?: string,
   ) {
-    const session = this.resolveImportSession(id);
+    const context = await this.getImportSessionContext(authorization);
+    const session = await this.resolveImportSession(id, context);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
@@ -694,7 +710,7 @@ export class ProductsService {
       onMatchPolicy,
     );
 
-    IMPORT_SESSIONS.set(importId, {
+    await this.persistImportSession({
       id: importId,
       jobId: '',
       companyId,
@@ -720,13 +736,18 @@ export class ProductsService {
   }
 
   async commitImport(id: string, authorization?: string) {
-    const session = this.resolveImportSession(id);
+    const context = await this.getRequestContext(authorization);
+    const writeContext = this.requireCatalogWriteContext(context);
+    const session = await this.resolveImportSession(id, writeContext);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
 
-    const context = await this.getRequestContext(authorization);
-    const writeContext = this.requireCatalogWriteContext(context);
+    if (session.status === 'cancelled' || session.status === 'failed') {
+      throw new BadRequestException(
+        `Cannot commit import session with status "${session.status}"`,
+      );
+    }
 
     if (session.status === 'completed' && session.result) {
       return {
@@ -744,6 +765,7 @@ export class ProductsService {
     try {
       session.status = 'importing';
       session.updatedAt = this.formatDateTime(new Date());
+      await this.persistImportSession(session);
       await this.ensureImportPreviewItems(session);
       const result = await this.applyImportRows(
         session.items
@@ -764,6 +786,12 @@ export class ProductsService {
       };
       session.status = 'completed';
       session.updatedAt = this.formatDateTime(new Date());
+      await this.persistImportSession(session);
+    } catch (error) {
+      session.status = 'failed';
+      session.updatedAt = this.formatDateTime(new Date());
+      await this.persistImportSession(session);
+      throw error;
     } finally {
       IMPORT_COMMIT_LOCKS.delete(session.id);
     }
@@ -774,30 +802,59 @@ export class ProductsService {
     };
   }
 
-  cancelImport(id: string) {
-    const session = this.resolveImportSession(id);
+  async cancelImport(id: string, authorization?: string) {
+    const context = await this.getImportSessionContext(authorization);
+    const session = await this.resolveImportSession(id, context);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
 
+    if (session.status === 'completed') {
+      throw new BadRequestException('Completed import cannot be cancelled');
+    }
+
     session.status = 'cancelled';
     session.updatedAt = this.formatDateTime(new Date());
+    await this.persistImportSession(session);
 
     return this.toImportSessionSummary(session);
   }
 
-  private resolveImportSession(id: string) {
-    const directSession = IMPORT_SESSIONS.get(id);
+  private async resolveImportSession(
+    id: string,
+    context?: {
+      userType?: string;
+      companyId?: string | null;
+    } | null,
+  ) {
+    const directSession = await this.prisma.importSession.findFirst({
+      where: {
+        id,
+        ...this.buildImportSessionWhere(context),
+      },
+    });
     if (directSession) {
-      return directSession;
+      return this.mapImportSessionRecord(directSession);
     }
 
-    const job = IMPORT_JOBS.get(id);
+    const job = await this.prisma.importJob.findUnique({
+      where: { id },
+    });
     if (!job) {
       return undefined;
     }
 
-    return IMPORT_SESSIONS.get(job.importId);
+    const session = await this.prisma.importSession.findFirst({
+      where: {
+        id: job.importId,
+        ...this.buildImportSessionWhere(context),
+      },
+    });
+    if (!session) {
+      return undefined;
+    }
+
+    return this.mapImportSessionRecord(session);
   }
 
   private async ensureImportPreviewItems(session: ImportSession) {
@@ -814,6 +871,7 @@ export class ProductsService {
     );
     session.dryRunSummary = this.buildImportDryRunSummary(session.items);
     session.updatedAt = this.formatDateTime(new Date());
+    await this.persistImportSession(session);
 
     return session.items;
   }
@@ -978,6 +1036,190 @@ export class ProductsService {
     }
 
     return requestedCompanyId;
+  }
+
+  private async getImportSessionContext(authorization?: string) {
+    const context = await this.getRequestContext(authorization);
+    return this.requireCatalogWriteContext(context);
+  }
+
+  private buildImportSessionWhere(context?: {
+    userType?: string;
+    companyId?: string | null;
+  } | null): Prisma.ImportSessionWhereInput {
+    if (context?.userType === 'company') {
+      return {
+        companyId: context.companyId ?? '',
+      };
+    }
+
+    return {};
+  }
+
+  private canAccessImportSession(
+    session: ImportSession,
+    context?: {
+      userType?: string;
+      companyId?: string | null;
+    } | null,
+  ) {
+    if (!context) {
+      return false;
+    }
+
+    if (context.userType === 'platform') {
+      return true;
+    }
+
+    if (context.userType === 'company') {
+      return context.companyId === session.companyId;
+    }
+
+    return false;
+  }
+
+  private mapImportSessionRecord(record: {
+    id: string;
+    jobId: string | null;
+    companyId: string;
+    shopId: string;
+    branchCode: string;
+    name: string;
+    mode: string;
+    status: string;
+    fields: Prisma.JsonValue;
+    rows: Prisma.JsonValue;
+    items: Prisma.JsonValue;
+    onMatchPolicy: Prisma.JsonValue;
+    dryRunSummary: Prisma.JsonValue | null;
+    result: Prisma.JsonValue | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }): ImportSession {
+    return {
+      id: record.id,
+      jobId: record.jobId ?? '',
+      companyId: record.companyId,
+      shopId: record.shopId,
+      branchCode: record.branchCode,
+      name: record.name,
+      mode: record.mode as ImportSession['mode'],
+      status: record.status as ImportSession['status'],
+      fields: Array.isArray(record.fields)
+        ? (record.fields as ImportSession['fields'])
+        : [],
+      rows: Array.isArray(record.rows)
+        ? (record.rows as ImportRowInput[])
+        : [],
+      items: Array.isArray(record.items)
+        ? (record.items as PreparedImportItem[])
+        : [],
+      onMatchPolicy: record.onMatchPolicy as ImportOnMatchPolicy,
+      dryRunSummary:
+        (record.dryRunSummary as ImportDryRunSummary | null) ?? undefined,
+      result:
+        (record.result as ImportSession['result'] | null) ?? undefined,
+      createdAt: this.formatDateTime(record.createdAt),
+      updatedAt: this.formatDateTime(record.updatedAt),
+    };
+  }
+
+  private mapImportJobRecord(record: {
+    id: string;
+    correlationId: string;
+    message: string;
+    total: number;
+    current: number;
+    percent: number;
+    isFinished: boolean;
+    importId: string;
+  }): ImportJob & { id: string } {
+    return {
+      id: record.id,
+      correlation_id: record.correlationId,
+      message: record.message,
+      total: record.total,
+      current: record.current,
+      percent: record.percent,
+      is_finished: record.isFinished,
+      importId: record.importId,
+    };
+  }
+
+  private async persistImportSession(session: ImportSession) {
+    await this.prisma.importSession.upsert({
+      where: {
+        id: session.id,
+      },
+      create: {
+        id: session.id,
+        jobId: session.jobId || null,
+        companyId: session.companyId,
+        shopId: session.shopId,
+        branchCode: session.branchCode,
+        name: session.name,
+        mode: session.mode,
+        status: session.status,
+        fields: session.fields as Prisma.InputJsonValue,
+        rows: session.rows as Prisma.InputJsonValue,
+        items: session.items as Prisma.InputJsonValue,
+        onMatchPolicy: session.onMatchPolicy as Prisma.InputJsonValue,
+        dryRunSummary:
+          (session.dryRunSummary as Prisma.InputJsonValue | undefined) ?? undefined,
+        result: (session.result as Prisma.InputJsonValue | undefined) ?? undefined,
+        createdAt: new Date(session.createdAt),
+        updatedAt: new Date(session.updatedAt),
+      },
+      update: {
+        jobId: session.jobId || null,
+        shopId: session.shopId,
+        branchCode: session.branchCode,
+        name: session.name,
+        mode: session.mode,
+        status: session.status,
+        fields: session.fields as Prisma.InputJsonValue,
+        rows: session.rows as Prisma.InputJsonValue,
+        items: session.items as Prisma.InputJsonValue,
+        onMatchPolicy: session.onMatchPolicy as Prisma.InputJsonValue,
+        dryRunSummary:
+          (session.dryRunSummary as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+        result:
+          (session.result as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+        updatedAt: new Date(session.updatedAt),
+      },
+    });
+  }
+
+  private async persistImportJob(
+    job: ImportJob & { id: string },
+    companyId: string,
+  ) {
+    await this.prisma.importJob.upsert({
+      where: {
+        id: job.id,
+      },
+      create: {
+        id: job.id,
+        correlationId: job.correlation_id,
+        message: job.message,
+        total: job.total,
+        current: job.current,
+        percent: job.percent,
+        isFinished: job.is_finished,
+        importId: job.importId,
+        companyId,
+      },
+      update: {
+        correlationId: job.correlation_id,
+        message: job.message,
+        total: job.total,
+        current: job.current,
+        percent: job.percent,
+        isFinished: job.is_finished,
+        importId: job.importId,
+        companyId,
+      },
+    });
   }
 
   async findAll({ page, limit, search }: FindProductsArgs, authorization?: string) {
@@ -3063,9 +3305,21 @@ export class ProductsService {
     const items: PreparedImportItem[] = [];
     for (let index = 0; index < rows.length; index += 1) {
       const row = rows[index];
-      const existingProduct = await this.findImportMatchedProduct(companyId, row);
+      let existingProduct: CatalogProductWithRelations | null = null;
+      let error = this.validateImportRow(row);
+
+      if (!error) {
+        try {
+          existingProduct = await this.findImportMatchedProduct(companyId, row);
+        } catch (matchError) {
+          error =
+            matchError instanceof Error
+              ? matchError.message
+              : 'Failed to match import row';
+        }
+      }
+
       const differentFields = this.collectDifferentFields(existingProduct, row);
-      const error = this.validateImportRow(row);
 
       items.push({
         id: randomUUID(),
@@ -3123,27 +3377,82 @@ export class ProductsService {
   }
 
   private async findImportMatchedProduct(companyId: string, row: ImportRowInput) {
-    if (!row.sku || !row.barcode) {
+    const sku = row.sku?.trim();
+    const barcode = row.barcode?.trim();
+
+    if (!sku && !barcode) {
       return null;
     }
 
-    return this.prisma.product.findFirst({
-      where: {
-        companyId,
-        sku: row.sku,
-        barcode: row.barcode,
-      },
-      include: {
-        category: true,
-        brand: true,
-        suppliers: {
-          include: {
-            supplier: true,
-          },
+    if (sku && barcode) {
+      const exactMatch = await this.prisma.product.findFirst({
+        where: {
+          companyId,
+          sku,
+          barcode,
         },
-        stocks: true,
-      },
-    });
+        include: {
+          category: true,
+          brand: true,
+          suppliers: {
+            include: {
+              supplier: true,
+            },
+          },
+          stocks: true,
+        },
+      });
+      if (exactMatch) {
+        return exactMatch;
+      }
+    }
+
+    const [skuMatch, barcodeMatch] = await Promise.all([
+      sku
+        ? this.prisma.product.findFirst({
+            where: {
+              companyId,
+              sku,
+            },
+            include: {
+              category: true,
+              brand: true,
+              suppliers: {
+                include: {
+                  supplier: true,
+                },
+              },
+              stocks: true,
+            },
+          })
+        : Promise.resolve(null),
+      barcode
+        ? this.prisma.product.findFirst({
+            where: {
+              companyId,
+              barcode,
+            },
+            include: {
+              category: true,
+              brand: true,
+              suppliers: {
+                include: {
+                  supplier: true,
+                },
+              },
+              stocks: true,
+            },
+          })
+        : Promise.resolve(null),
+    ]);
+
+    if (skuMatch && barcodeMatch && skuMatch.id !== barcodeMatch.id) {
+      throw new BadRequestException(
+        'Import row matches different products by sku and barcode',
+      );
+    }
+
+    return skuMatch ?? barcodeMatch;
   }
 
   private collectDifferentFields(
@@ -3279,13 +3588,13 @@ export class ProductsService {
         continue;
       }
 
-      const matchedProduct = await this.findImportMatchedProduct(companyId, row);
       const productLockKey = this.resolveImportProductLockKey(companyId, row);
 
       try {
         const actionResult = await this.withImportProductLock(
           productLockKey,
           async () => {
+            const matchedProduct = await this.findImportMatchedProduct(companyId, row);
             if (matchedProduct) {
               const changedFields = await this.applyImportUpdate(
                 matchedProduct.id,
@@ -3461,164 +3770,167 @@ export class ProductsService {
     onMatchPolicy: ImportOnMatchPolicy,
   ): Promise<Array<{ field: string; reason: string }>> {
     const changedFields: Array<{ field: string; reason: string }> = [];
-    const existingProduct = await this.prisma.product.findUnique({
-      where: { id: productId },
-      include: {
-        category: true,
-        brand: true,
-      },
-    });
 
-    if (!existingProduct) {
-      throw new NotFoundException(`Product ${productId} not found`);
-    }
+    await this.prisma.$transaction(async (tx) => {
+      const existingProduct = await tx.product.findUnique({
+        where: { id: productId },
+        include: {
+          category: true,
+          brand: true,
+        },
+      });
 
-    const existingStock = await this.prisma.productStock.findFirst({
-      where: {
-        productId,
-        branchCode,
-      },
-    });
+      if (!existingProduct) {
+        throw new NotFoundException(`Product ${productId} not found`);
+      }
 
-    if (existingStock) {
-      await this.prisma.productStock.update({
+      const existingStock = await tx.productStock.findFirst({
         where: {
-          id: existingStock.id,
-        },
-        data: {
-          quantity: existingStock.quantity + row.quantity,
-          purchasePrice: row.supplyPrice,
-          salePrice: row.retailPrice,
-        },
-      });
-      changedFields.push({
-        field: 'quantity',
-        reason: 'existing_stock_incremented',
-      });
-    } else {
-      await this.prisma.productStock.create({
-        data: {
           productId,
           branchCode,
-          quantity: row.quantity,
-          purchasePrice: row.supplyPrice,
-          salePrice: row.retailPrice,
         },
       });
+
+      if (existingStock) {
+        await tx.productStock.update({
+          where: {
+            id: existingStock.id,
+          },
+          data: {
+            quantity: existingStock.quantity + row.quantity,
+            purchasePrice: row.supplyPrice,
+            salePrice: row.retailPrice,
+          },
+        });
+        changedFields.push({
+          field: 'quantity',
+          reason: 'existing_stock_incremented',
+        });
+      } else {
+        await tx.productStock.create({
+          data: {
+            productId,
+            branchCode,
+            quantity: row.quantity,
+            purchasePrice: row.supplyPrice,
+            salePrice: row.retailPrice,
+          },
+        });
+        changedFields.push({
+          field: 'quantity',
+          reason: 'new_stock_row_created',
+        });
+      }
+
       changedFields.push({
-        field: 'quantity',
-        reason: 'new_stock_row_created',
+        field: 'purchasePrice',
+        reason: 'replaced_with_last_arrival',
       });
-    }
+      changedFields.push({
+        field: 'salePrice',
+        reason: 'replaced_with_last_arrival',
+      });
 
-    changedFields.push({
-      field: 'purchasePrice',
-      reason: 'replaced_with_last_arrival',
-    });
-    changedFields.push({
-      field: 'salePrice',
-      reason: 'replaced_with_last_arrival',
-    });
-
-    const allStocks = await this.prisma.productStock.findMany({
-      where: {
-        productId,
-      },
-    });
-
-    await this.prisma.product.update({
-      where: {
-        id: productId,
-      },
-      data: {
-        name:
-          this.shouldUseFileValue(onMatchPolicy.name) && row.name
-            ? row.name
-            : undefined,
-        purchasePrice: row.supplyPrice,
-        salePrice: row.retailPrice,
-        quantity: allStocks.reduce((sum, stock) => sum + stock.quantity, 0),
-        unit:
-          this.shouldUseFileValue(onMatchPolicy.measurementUnit) &&
-          row.measurementUnit
-            ? row.measurementUnit
-            : undefined,
-        metadata: this.buildImportMetadata(
-          companyId,
-          this.shouldUseFileValue(onMatchPolicy.description)
-            ? row.description ?? ''
-            : this.resolveDescriptionFromMetadata(existingProduct.metadata),
-        ),
-        category:
-          this.shouldUseFileValue(onMatchPolicy.category) && row.categoryName
-          ? {
-              connectOrCreate: {
-                where: {
-                  companyId_name: {
-                    companyId,
-                    name: row.categoryName,
-                  },
-                },
-                create: {
-                  companyId,
-                  name: row.categoryName,
-                },
-              },
-            }
-          : undefined,
-        brand:
-          this.shouldUseFileValue(onMatchPolicy.brand) && row.brandName
-          ? {
-              connectOrCreate: {
-                where: {
-                  companyId_name: {
-                    companyId,
-                    name: row.brandName,
-                  },
-                },
-                create: {
-                  companyId,
-                  name: row.brandName,
-                },
-              },
-            }
-          : undefined,
-      },
-    });
-
-    if (this.shouldUseFileValue(onMatchPolicy.supplier) && row.supplier) {
-      const supplier = await this.prisma.supplier.upsert({
+      const allStocks = await tx.productStock.findMany({
         where: {
-          companyId_name: {
+          productId,
+        },
+      });
+
+      await tx.product.update({
+        where: {
+          id: productId,
+        },
+        data: {
+          name:
+            this.shouldUseFileValue(onMatchPolicy.name) && row.name
+              ? row.name
+              : undefined,
+          purchasePrice: row.supplyPrice,
+          salePrice: row.retailPrice,
+          quantity: allStocks.reduce((sum, stock) => sum + stock.quantity, 0),
+          unit:
+            this.shouldUseFileValue(onMatchPolicy.measurementUnit) &&
+            row.measurementUnit
+              ? row.measurementUnit
+              : undefined,
+          metadata: this.buildImportMetadata(
+            companyId,
+            this.shouldUseFileValue(onMatchPolicy.description)
+              ? row.description ?? ''
+              : this.resolveDescriptionFromMetadata(existingProduct.metadata),
+          ),
+          category:
+            this.shouldUseFileValue(onMatchPolicy.category) && row.categoryName
+              ? {
+                  connectOrCreate: {
+                    where: {
+                      companyId_name: {
+                        companyId,
+                        name: row.categoryName,
+                      },
+                    },
+                    create: {
+                      companyId,
+                      name: row.categoryName,
+                    },
+                  },
+                }
+              : undefined,
+          brand:
+            this.shouldUseFileValue(onMatchPolicy.brand) && row.brandName
+              ? {
+                  connectOrCreate: {
+                    where: {
+                      companyId_name: {
+                        companyId,
+                        name: row.brandName,
+                      },
+                    },
+                    create: {
+                      companyId,
+                      name: row.brandName,
+                    },
+                  },
+                }
+              : undefined,
+        },
+      });
+
+      if (this.shouldUseFileValue(onMatchPolicy.supplier) && row.supplier) {
+        const supplier = await tx.supplier.upsert({
+          where: {
+            companyId_name: {
+              companyId,
+              name: row.supplier,
+            },
+          },
+          update: {},
+          create: {
             companyId,
             name: row.supplier,
           },
-        },
-        update: {},
-        create: {
-          companyId,
-          name: row.supplier,
-        },
-      });
+        });
 
-      await this.prisma.productSupplier.upsert({
-        where: {
-          productId_supplierId: {
+        await tx.productSupplier.upsert({
+          where: {
+            productId_supplierId: {
+              productId,
+              supplierId: supplier.id,
+            },
+          },
+          update: {},
+          create: {
             productId,
             supplierId: supplier.id,
           },
-        },
-        update: {},
-        create: {
-          productId,
-          supplierId: supplier.id,
-        },
-      });
-      changedFields.push({
-        field: 'supplier',
-        reason: 'updated_from_file_by_policy',
-      });
-    }
+        });
+        changedFields.push({
+          field: 'supplier',
+          reason: 'updated_from_file_by_policy',
+        });
+      }
+    });
 
     if (this.shouldUseFileValue(onMatchPolicy.name) && row.name) {
       changedFields.push({
@@ -3713,6 +4025,14 @@ export class ProductsService {
     const barcode = row.barcode?.trim();
     if (sku && barcode) {
       return `${companyId}:${sku}:${barcode}`;
+    }
+
+    if (sku) {
+      return `${companyId}:sku:${sku}`;
+    }
+
+    if (barcode) {
+      return `${companyId}:barcode:${barcode}`;
     }
 
     return `${companyId}:row:${randomUUID()}`;

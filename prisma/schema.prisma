@@ -26,6 +26,8 @@ model Company {
   users     User[]
   crmRoles  Role[]
   sales     Sale[]
+  importSessions ImportSession[]
+  importJobs  ImportJob[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -263,4 +265,45 @@ model RolePermission {
   updatedAt    DateTime @updatedAt
 
   @@unique([roleId, permissionId])
+}
+
+model ImportSession {
+  id            String   @id
+  jobId         String?
+  companyId     String
+  shopId        String
+  branchCode    String
+  name          String
+  mode          String
+  status        String
+  fields        Json
+  rows          Json
+  items         Json
+  onMatchPolicy Json
+  dryRunSummary Json?
+  result        Json?
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([companyId, createdAt])
+  @@index([status])
+}
+
+model ImportJob {
+  id            String   @id
+  correlationId String
+  message       String
+  total         Int
+  current       Int
+  percent       Int
+  isFinished    Boolean
+  importId      String
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([importId])
+  @@index([companyId, createdAt])
 }

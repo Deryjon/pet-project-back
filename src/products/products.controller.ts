@@ -60,16 +60,20 @@ export class ProductsController {
   listImports(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Headers('authorization') authorization?: string,
   ) {
     return this.productsService.listImports({
       page: Number(page) || 1,
       limit: Number(limit) || 10,
-    });
+    }, authorization);
   }
 
   @Get('v2/imports/:id')
-  getImportById(@Param('id') id: string) {
-    return this.productsService.getImportById(id);
+  getImportById(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.getImportById(id, authorization);
   }
 
   @Post('v2/imports/:id/validate')
@@ -96,8 +100,11 @@ export class ProductsController {
   }
 
   @Get('v2/import-progress/:id')
-  getImportProgress(@Param('id') id: string) {
-    return this.productsService.getImportProgress(id);
+  getImportProgress(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.getImportProgress(id, authorization);
   }
 
   @Get('v2/import-search/:id')
@@ -106,17 +113,21 @@ export class ProductsController {
     @Query('limit') limit?: string,
     @Query('page') page?: string,
     @Query('difference') difference?: string,
+    @Headers('authorization') authorization?: string,
   ) {
     return this.productsService.getImportSearch(id, {
       limit: Number(limit) || 20,
       page: Number(page) || 1,
       difference: this.toBoolean(difference),
-    });
+    }, authorization);
   }
 
   @Get('v2/import-items-dp/:id')
-  async getImportItemsDp(@Param('id') id: string) {
-    return this.productsService.getImportItemsDp(id);
+  async getImportItemsDp(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.getImportItemsDp(id, authorization);
   }
 
   @Post('v2/import-commit/:id')
@@ -136,8 +147,11 @@ export class ProductsController {
   }
 
   @Post('v2/imports/:id/cancel')
-  cancelImportDraft(@Param('id') id: string) {
-    return this.productsService.cancelImport(id);
+  cancelImportDraft(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.cancelImport(id, authorization);
   }
 
   @Post('v2/excel/import-without-check')
