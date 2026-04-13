@@ -101,11 +101,20 @@ type ImportSession = {
   }>;
   rows: ImportRowInput[];
   items: PreparedImportItem[];
+  onMatchPolicy: ImportOnMatchPolicy;
+  dryRunSummary?: ImportDryRunSummary;
   result?: {
     created_count: number;
     updated_count: number;
     error_count: number;
     errors: Array<{ row: number; message: string }>;
+    audit_rows?: ImportAuditRow[];
+    committed_at?: string;
+    committed_by?: {
+      user_id: number;
+      full_name: string;
+      user_type: string;
+    };
   };
   createdAt: string;
   updatedAt: string;
@@ -119,6 +128,35 @@ type ImportJob = {
   percent: number;
   is_finished: boolean;
   importId: string;
+};
+
+type ImportFieldResolution = 'keep_store' | 'from_file';
+
+type ImportOnMatchPolicy = {
+  name: ImportFieldResolution;
+  brand: ImportFieldResolution;
+  category: ImportFieldResolution;
+  description: ImportFieldResolution;
+  measurementUnit: ImportFieldResolution;
+  supplier: ImportFieldResolution;
+};
+
+type ImportDryRunSummary = {
+  create_count: number;
+  update_count: number;
+  error_count: number;
+  conflict_fields: Record<string, number>;
+};
+
+type ImportAuditRow = {
+  row: number;
+  action: 'create' | 'update' | 'error';
+  reason: string;
+  product_id?: number;
+  changed_fields?: Array<{
+    field: string;
+    reason: string;
+  }>;
 };
 
 const PRODUCT_CHARACTERISTICS = [
@@ -296,6 +334,8 @@ const EXCEL_IMPORT_PROPERTIES = [
 
 const IMPORT_JOBS = new Map<string, ImportJob>();
 const IMPORT_SESSIONS = new Map<string, ImportSession>();
+const IMPORT_COMMIT_LOCKS = new Set<string>();
+const PRODUCT_IMPORT_LOCKS = new Set<string>();
 
 const COMPANY_ID = process.env.COMPANY_ID ?? '';
 const DEFAULT_PRODUCT_TYPE_ID =
@@ -418,6 +458,8 @@ export class ProductsService {
     const branchCode = await this.resolveBranchCodeForWrite(shopId, writeContext);
     const rows = this.extractImportRows(body);
     const fields = this.extractImportFields(body);
+    const onMatchPolicy =
+      this.extractImportOnMatchPolicy(body) ?? this.defaultImportOnMatchPolicy();
     const now = this.formatDateTime(new Date());
     const importId = randomUUID();
 
@@ -433,6 +475,8 @@ export class ProductsService {
       fields,
       rows,
       items: [],
+      onMatchPolicy,
+      dryRunSummary: undefined,
       createdAt: now,
       updatedAt: now,
     };
@@ -466,6 +510,7 @@ export class ProductsService {
       ...this.toImportSessionSummary(session),
       fields: session.fields,
       rows_count: session.rows.length,
+      dry_run_summary: session.dryRunSummary ?? null,
       result: session.result ?? null,
     };
   }
@@ -484,8 +529,13 @@ export class ProductsService {
       this.optionalString(body.import_id) ??
       this.optionalString(body.id) ??
       randomUUID();
+    const existingSession = IMPORT_SESSIONS.get(importId);
     const jobId = randomUUID();
     const fields = this.extractImportFields(body);
+    const onMatchPolicy =
+      this.extractImportOnMatchPolicy(body, false) ??
+      existingSession?.onMatchPolicy ??
+      this.defaultImportOnMatchPolicy();
     const items = await this.prepareImportItems(
       importId,
       companyId,
@@ -493,8 +543,8 @@ export class ProductsService {
       branchCode,
       writeContext.companyId,
     );
+    const dryRunSummary = this.buildImportDryRunSummary(items);
 
-    const existingSession = IMPORT_SESSIONS.get(importId);
     const now = this.formatDateTime(new Date());
     IMPORT_SESSIONS.set(importId, {
       id: importId,
@@ -511,6 +561,8 @@ export class ProductsService {
       fields,
       rows,
       items,
+      onMatchPolicy,
+      dryRunSummary,
       result: existingSession?.result,
       createdAt: existingSession?.createdAt ?? now,
       updatedAt: now,
@@ -530,6 +582,7 @@ export class ProductsService {
       message: jobId,
       correlation_id: importId,
       import_id: importId,
+      dry_run_summary: dryRunSummary,
     };
   }
 
@@ -605,6 +658,7 @@ export class ProductsService {
         0,
       ),
       fields: session.fields,
+      dry_run_summary: session.dryRunSummary ?? this.buildImportDryRunSummary(session.items),
     };
   }
 
@@ -618,9 +672,16 @@ export class ProductsService {
     const shopId = this.requireString(body.shop_id, 'shop_id');
     const branchCode = await this.resolveBranchCodeForWrite(shopId, writeContext);
     const rows = this.extractImportRows(body);
+    const onMatchPolicy =
+      this.extractImportOnMatchPolicy(body) ?? this.defaultImportOnMatchPolicy();
     const now = this.formatDateTime(new Date());
     const importId = randomUUID();
-    const result = await this.applyImportRows(rows, companyId, branchCode);
+    const result = await this.applyImportRows(
+      rows,
+      companyId,
+      branchCode,
+      onMatchPolicy,
+    );
 
     IMPORT_SESSIONS.set(importId, {
       id: importId,
@@ -634,6 +695,8 @@ export class ProductsService {
       fields: this.extractImportFields(body),
       rows,
       items: [],
+      onMatchPolicy,
+      dryRunSummary: undefined,
       result,
       createdAt: now,
       updatedAt: now,
@@ -652,24 +715,50 @@ export class ProductsService {
     }
 
     const context = await this.getRequestContext(authorization);
-    this.requireCatalogWriteContext(context);
+    const writeContext = this.requireCatalogWriteContext(context);
 
-    session.status = 'importing';
-    session.updatedAt = this.formatDateTime(new Date());
-    const result = await this.applyImportRows(
-      session.items
-        .filter((item) => item.action !== 'error')
-        .map((item) => item.raw),
-      session.companyId,
-      session.branchCode,
-    );
-    session.result = result;
-    session.status = 'completed';
-    session.updatedAt = this.formatDateTime(new Date());
+    if (session.status === 'completed' && session.result) {
+      return {
+        import_id: session.id,
+        idempotent: true,
+        ...session.result,
+      };
+    }
+
+    if (IMPORT_COMMIT_LOCKS.has(session.id)) {
+      throw new BadRequestException('Import commit is already in progress');
+    }
+    IMPORT_COMMIT_LOCKS.add(session.id);
+
+    try {
+      session.status = 'importing';
+      session.updatedAt = this.formatDateTime(new Date());
+      const result = await this.applyImportRows(
+        session.items
+          .filter((item) => item.action !== 'error')
+          .map((item) => item.raw),
+        session.companyId,
+        session.branchCode,
+        session.onMatchPolicy,
+      );
+      session.result = {
+        ...result,
+        committed_at: this.formatDateTime(new Date()),
+        committed_by: {
+          user_id: writeContext.userId,
+          full_name: writeContext.fullName,
+          user_type: writeContext.userType,
+        },
+      };
+      session.status = 'completed';
+      session.updatedAt = this.formatDateTime(new Date());
+    } finally {
+      IMPORT_COMMIT_LOCKS.delete(session.id);
+    }
 
     return {
       import_id: session.id,
-      ...result,
+      ...session.result,
     };
   }
 
@@ -711,6 +800,7 @@ export class ProductsService {
       session.branchCode,
       session.companyId,
     );
+    session.dryRunSummary = this.buildImportDryRunSummary(session.items);
     session.updatedAt = this.formatDateTime(new Date());
 
     return session.items;
@@ -718,6 +808,113 @@ export class ProductsService {
 
   private parseImportMode(value: unknown): 'with_check' | 'without_check' {
     return value === 'without_check' ? 'without_check' : 'with_check';
+  }
+
+  private defaultImportOnMatchPolicy(): ImportOnMatchPolicy {
+    return {
+      name: 'keep_store',
+      brand: 'keep_store',
+      category: 'keep_store',
+      description: 'keep_store',
+      measurementUnit: 'keep_store',
+      supplier: 'keep_store',
+    };
+  }
+
+  private parseImportFieldResolution(
+    value: unknown,
+    fieldName: string,
+    strict = false,
+  ): ImportFieldResolution {
+    if (value === undefined || value === null || value === '') {
+      return 'keep_store';
+    }
+
+    if (value === 'from_file' || value === 'keep_store') {
+      return value;
+    }
+
+    if (strict) {
+      throw new BadRequestException(
+        `on_match.${fieldName} must be either "keep_store" or "from_file"`,
+      );
+    }
+
+    return 'keep_store';
+  }
+
+  private extractImportOnMatchPolicy(
+    body: Record<string, unknown>,
+    useDefault = true,
+    strict = true,
+  ): ImportOnMatchPolicy | undefined {
+    const rawValue = body.on_match;
+    if (!rawValue || typeof rawValue !== 'object' || Array.isArray(rawValue)) {
+      return useDefault ? this.defaultImportOnMatchPolicy() : undefined;
+    }
+
+    const policy = rawValue as Record<string, unknown>;
+    const allowedKeys = new Set([
+      'name',
+      'brand',
+      'category',
+      'description',
+      'measurement_unit',
+      'measurementUnit',
+      'supplier',
+    ]);
+
+    for (const key of Object.keys(policy)) {
+      if (!allowedKeys.has(key) && strict) {
+        throw new BadRequestException(`on_match.${key} is not supported`);
+      }
+    }
+
+    return {
+      name: this.parseImportFieldResolution(policy.name, 'name', strict),
+      brand: this.parseImportFieldResolution(policy.brand, 'brand', strict),
+      category: this.parseImportFieldResolution(policy.category, 'category', strict),
+      description: this.parseImportFieldResolution(
+        policy.description,
+        'description',
+        strict,
+      ),
+      measurementUnit: this.parseImportFieldResolution(
+        policy.measurement_unit ?? policy.measurementUnit,
+        'measurement_unit',
+        strict,
+      ),
+      supplier: this.parseImportFieldResolution(policy.supplier, 'supplier', strict),
+    };
+  }
+
+  private shouldUseFileValue(value: ImportFieldResolution) {
+    return value === 'from_file';
+  }
+
+  private buildImportDryRunSummary(items: PreparedImportItem[]): ImportDryRunSummary {
+    const summary: ImportDryRunSummary = {
+      create_count: 0,
+      update_count: 0,
+      error_count: 0,
+      conflict_fields: {},
+    };
+
+    for (const item of items) {
+      if (item.action === 'create') {
+        summary.create_count += 1;
+      } else if (item.action === 'update') {
+        summary.update_count += 1;
+      } else {
+        summary.error_count += 1;
+      }
+
+      for (const field of item.different_fields) {
+        summary.conflict_fields[field] = (summary.conflict_fields[field] ?? 0) + 1;
+      }
+    }
+
+    return summary;
   }
 
   private toImportSessionSummary(session: ImportSession) {
@@ -734,6 +931,8 @@ export class ProductsService {
       created_at: session.createdAt,
       updated_at: session.updatedAt,
       rows_count: session.rows.length,
+      on_match: session.onMatchPolicy,
+      dry_run_summary: session.dryRunSummary ?? null,
       result: session.result ?? null,
     };
   }
@@ -2912,44 +3111,15 @@ export class ProductsService {
   }
 
   private async findImportMatchedProduct(companyId: string, row: ImportRowInput) {
-    const or: Prisma.ProductWhereInput[] = [];
-
-    if (row.sku && row.barcode) {
-      return this.prisma.product.findFirst({
-        where: {
-          companyId,
-          sku: row.sku,
-          barcode: row.barcode,
-        },
-        include: {
-          category: true,
-          brand: true,
-          suppliers: {
-            include: {
-              supplier: true,
-            },
-          },
-          stocks: true,
-        },
-      });
-    }
-
-    if (row.barcode) {
-      or.push({ barcode: row.barcode });
-    }
-
-    if (row.sku) {
-      or.push({ sku: row.sku });
-    }
-
-    if (!or.length) {
+    if (!row.sku || !row.barcode) {
       return null;
     }
 
     return this.prisma.product.findFirst({
       where: {
         companyId,
-        OR: or,
+        sku: row.sku,
+        barcode: row.barcode,
       },
       include: {
         category: true,
@@ -3074,10 +3244,12 @@ export class ProductsService {
     rows: ImportRowInput[],
     companyId: string,
     branchCode: string,
+    onMatchPolicy: ImportOnMatchPolicy,
   ) {
     let createdCount = 0;
     let updatedCount = 0;
     const errors: Array<{ row: number; message: string }> = [];
+    const auditRows: ImportAuditRow[] = [];
 
     for (let index = 0; index < rows.length; index += 1) {
       const row = rows[index];
@@ -3087,23 +3259,79 @@ export class ProductsService {
           row: index + 1,
           message: error,
         });
+        auditRows.push({
+          row: index + 1,
+          action: 'error',
+          reason: error,
+        });
         continue;
       }
 
       const matchedProduct = await this.findImportMatchedProduct(companyId, row);
+      const productLockKey = this.resolveImportProductLockKey(companyId, row);
 
       try {
-        if (matchedProduct) {
-          await this.applyImportUpdate(matchedProduct.id, row, companyId, branchCode);
+        const actionResult = await this.withImportProductLock(
+          productLockKey,
+          async () => {
+            if (matchedProduct) {
+              const changedFields = await this.applyImportUpdate(
+                matchedProduct.id,
+                row,
+                companyId,
+                branchCode,
+                onMatchPolicy,
+              );
+
+              return {
+                action: 'update' as const,
+                productId: matchedProduct.id,
+                changedFields,
+              };
+            }
+
+            const createdProduct = await this.applyImportCreate(row, companyId, branchCode);
+            return {
+              action: 'create' as const,
+              productId: createdProduct.id,
+              changedFields: [
+                {
+                  field: 'product',
+                  reason: 'created_new_product',
+                },
+              ],
+            };
+          },
+        );
+
+        if (actionResult.action === 'update') {
           updatedCount += 1;
         } else {
-          await this.applyImportCreate(row, companyId, branchCode);
           createdCount += 1;
         }
+
+        auditRows.push({
+          row: index + 1,
+          action: actionResult.action,
+          reason:
+            actionResult.action === 'update'
+              ? 'matched_by_exact_sku_and_barcode'
+              : 'product_not_found_by_exact_sku_and_barcode',
+          product_id: actionResult.productId,
+          changed_fields: actionResult.changedFields,
+        });
       } catch (applyError) {
         errors.push({
           row: index + 1,
           message:
+            applyError instanceof Error
+              ? applyError.message
+              : 'Import failed for row',
+        });
+        auditRows.push({
+          row: index + 1,
+          action: 'error',
+          reason:
             applyError instanceof Error
               ? applyError.message
               : 'Import failed for row',
@@ -3116,6 +3344,7 @@ export class ProductsService {
       updated_count: updatedCount,
       error_count: errors.length,
       errors,
+      audit_rows: auditRows,
     };
   }
 
@@ -3124,6 +3353,7 @@ export class ProductsService {
     companyId: string,
     branchCode: string,
   ) {
+    const identifiers = await this.resolveIdentifiersForImportCreate(row, companyId);
     const createdProduct = await this.prisma.product.create({
       data: {
         company: {
@@ -3131,14 +3361,18 @@ export class ProductsService {
             id: companyId,
           },
         },
-        name: row.name || row.sku || row.barcode || `Imported ${Date.now()}`,
-        sku: row.sku,
-        barcode: row.barcode,
+        name:
+          row.name ||
+          identifiers.sku ||
+          identifiers.barcode ||
+          `Imported ${Date.now()}`,
+        sku: identifiers.sku,
+        barcode: identifiers.barcode,
         purchasePrice: row.supplyPrice,
         salePrice: row.retailPrice,
         quantity: row.quantity,
         unit: row.measurementUnit,
-        metadata: this.buildImportMetadata(row, companyId),
+        metadata: this.buildImportMetadata(companyId, row.description ?? ''),
         category: row.categoryName
           ? {
               connectOrCreate: {
@@ -3212,7 +3446,21 @@ export class ProductsService {
     row: ImportRowInput,
     companyId: string,
     branchCode: string,
-  ) {
+    onMatchPolicy: ImportOnMatchPolicy,
+  ): Promise<Array<{ field: string; reason: string }>> {
+    const changedFields: Array<{ field: string; reason: string }> = [];
+    const existingProduct = await this.prisma.product.findUnique({
+      where: { id: productId },
+      include: {
+        category: true,
+        brand: true,
+      },
+    });
+
+    if (!existingProduct) {
+      throw new NotFoundException(`Product ${productId} not found`);
+    }
+
     const existingStock = await this.prisma.productStock.findFirst({
       where: {
         productId,
@@ -3231,6 +3479,10 @@ export class ProductsService {
           salePrice: row.retailPrice,
         },
       });
+      changedFields.push({
+        field: 'quantity',
+        reason: 'existing_stock_incremented',
+      });
     } else {
       await this.prisma.productStock.create({
         data: {
@@ -3241,7 +3493,20 @@ export class ProductsService {
           salePrice: row.retailPrice,
         },
       });
+      changedFields.push({
+        field: 'quantity',
+        reason: 'new_stock_row_created',
+      });
     }
+
+    changedFields.push({
+      field: 'purchasePrice',
+      reason: 'replaced_with_last_arrival',
+    });
+    changedFields.push({
+      field: 'salePrice',
+      reason: 'replaced_with_last_arrival',
+    });
 
     const allStocks = await this.prisma.productStock.findMany({
       where: {
@@ -3254,13 +3519,26 @@ export class ProductsService {
         id: productId,
       },
       data: {
-        name: row.name || undefined,
+        name:
+          this.shouldUseFileValue(onMatchPolicy.name) && row.name
+            ? row.name
+            : undefined,
         purchasePrice: row.supplyPrice,
         salePrice: row.retailPrice,
         quantity: allStocks.reduce((sum, stock) => sum + stock.quantity, 0),
-        unit: row.measurementUnit || undefined,
-        metadata: this.buildImportMetadata(row, companyId),
-        category: row.categoryName
+        unit:
+          this.shouldUseFileValue(onMatchPolicy.measurementUnit) &&
+          row.measurementUnit
+            ? row.measurementUnit
+            : undefined,
+        metadata: this.buildImportMetadata(
+          companyId,
+          this.shouldUseFileValue(onMatchPolicy.description)
+            ? row.description ?? ''
+            : this.resolveDescriptionFromMetadata(existingProduct.metadata),
+        ),
+        category:
+          this.shouldUseFileValue(onMatchPolicy.category) && row.categoryName
           ? {
               connectOrCreate: {
                 where: {
@@ -3276,7 +3554,8 @@ export class ProductsService {
               },
             }
           : undefined,
-        brand: row.brandName
+        brand:
+          this.shouldUseFileValue(onMatchPolicy.brand) && row.brandName
           ? {
               connectOrCreate: {
                 where: {
@@ -3294,12 +3573,158 @@ export class ProductsService {
           : undefined,
       },
     });
+
+    if (this.shouldUseFileValue(onMatchPolicy.supplier) && row.supplier) {
+      const supplier = await this.prisma.supplier.upsert({
+        where: {
+          companyId_name: {
+            companyId,
+            name: row.supplier,
+          },
+        },
+        update: {},
+        create: {
+          companyId,
+          name: row.supplier,
+        },
+      });
+
+      await this.prisma.productSupplier.upsert({
+        where: {
+          productId_supplierId: {
+            productId,
+            supplierId: supplier.id,
+          },
+        },
+        update: {},
+        create: {
+          productId,
+          supplierId: supplier.id,
+        },
+      });
+      changedFields.push({
+        field: 'supplier',
+        reason: 'updated_from_file_by_policy',
+      });
+    }
+
+    if (this.shouldUseFileValue(onMatchPolicy.name) && row.name) {
+      changedFields.push({
+        field: 'name',
+        reason: 'updated_from_file_by_policy',
+      });
+    }
+    if (this.shouldUseFileValue(onMatchPolicy.measurementUnit) && row.measurementUnit) {
+      changedFields.push({
+        field: 'measurementUnit',
+        reason: 'updated_from_file_by_policy',
+      });
+    }
+    if (this.shouldUseFileValue(onMatchPolicy.description)) {
+      changedFields.push({
+        field: 'description',
+        reason: 'updated_from_policy',
+      });
+    }
+    if (this.shouldUseFileValue(onMatchPolicy.brand) && row.brandName) {
+      changedFields.push({
+        field: 'brand',
+        reason: 'updated_from_file_by_policy',
+      });
+    }
+    if (this.shouldUseFileValue(onMatchPolicy.category) && row.categoryName) {
+      changedFields.push({
+        field: 'category',
+        reason: 'updated_from_file_by_policy',
+      });
+    }
+
+    return changedFields;
   }
 
-  private buildImportMetadata(row: ImportRowInput, companyId: string) {
+  private resolveDescriptionFromMetadata(metadata: Prisma.JsonValue | null) {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return '';
+    }
+
+    const description = (metadata as Record<string, unknown>).description;
+    return typeof description === 'string' ? description : '';
+  }
+
+  private async resolveIdentifiersForImportCreate(
+    row: ImportRowInput,
+    companyId: string,
+  ) {
+    let sku = row.sku?.trim() ?? '';
+    let barcode = row.barcode?.trim() ?? '';
+
+    if (!sku) {
+      sku = await this.generateUniqueImportIdentifier(companyId, 'sku', 'SKU');
+    }
+
+    if (!barcode) {
+      barcode = await this.generateUniqueImportIdentifier(
+        companyId,
+        'barcode',
+        'BC',
+      );
+    }
+
+    return { sku, barcode };
+  }
+
+  private async generateUniqueImportIdentifier(
+    companyId: string,
+    field: 'sku' | 'barcode',
+    prefix: string,
+  ) {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const candidate = `${prefix}-${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+      const existing = await this.prisma.product.findFirst({
+        where: {
+          companyId,
+          [field]: candidate,
+        },
+        select: { id: true },
+      });
+
+      if (!existing) {
+        return candidate;
+      }
+    }
+
+    throw new BadRequestException(`Unable to generate unique ${field} for import`);
+  }
+
+  private resolveImportProductLockKey(companyId: string, row: ImportRowInput) {
+    const sku = row.sku?.trim();
+    const barcode = row.barcode?.trim();
+    if (sku && barcode) {
+      return `${companyId}:${sku}:${barcode}`;
+    }
+
+    return `${companyId}:row:${randomUUID()}`;
+  }
+
+  private async withImportProductLock<T>(key: string, callback: () => Promise<T>) {
+    while (PRODUCT_IMPORT_LOCKS.has(key)) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 10);
+      });
+    }
+
+    PRODUCT_IMPORT_LOCKS.add(key);
+    try {
+      return await callback();
+    } finally {
+      PRODUCT_IMPORT_LOCKS.delete(key);
+    }
+  }
+
+  private buildImportMetadata(companyId: string, description: string) {
     return {
       company_id: companyId,
-      description: row.description ?? '',
+      description,
       imported: true,
     } satisfies Prisma.InputJsonObject;
   }
