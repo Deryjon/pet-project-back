@@ -733,6 +733,7 @@ export class ProductsService {
     try {
       session.status = 'importing';
       session.updatedAt = this.formatDateTime(new Date());
+      await this.ensureImportPreviewItems(session);
       const result = await this.applyImportRows(
         session.items
           .filter((item) => item.action !== 'error')
