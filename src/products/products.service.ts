@@ -12,12 +12,14 @@ import { UsersService } from '../users/users.service';
 
 type CatalogProductWithRelations = Prisma.ProductGetPayload<{
   include: {
+    category: true;
     brand: true;
     suppliers: {
       include: {
         supplier: true;
       };
     };
+    stocks: true;
   };
 }>;
 
@@ -26,6 +28,97 @@ type ResolvedShop = {
   shop_id: string;
   shop_name: string;
   branch_code: string;
+};
+
+type ImportRowInput = {
+  name: string;
+  sku?: string;
+  barcode?: string;
+  quantity: number;
+  supplyPrice: number;
+  retailPrice: number;
+  categoryName?: string;
+  brandName?: string;
+  measurementUnit?: string;
+  supplier?: string;
+  description?: string;
+};
+
+type PreparedImportItem = {
+  id: string;
+  import_id: string;
+  row_number: number;
+  product_id: string;
+  product_name: string;
+  product_base_name: string;
+  product_sku: string;
+  product_barcode: string;
+  supply_price: number;
+  retail_price: number;
+  supply_currency: string;
+  retail_currency: string;
+  measurement_type: string;
+  measurement_value: number;
+  measurement_unit: typeof DEFAULT_MEASUREMENT_UNIT;
+  company_id: string;
+  difference: boolean;
+  different_fields: string[];
+  old_product: Record<string, unknown> | null;
+  product_info: Record<string, unknown> | null;
+  free_price: boolean;
+  declared_measurement_value: number;
+  is_undeclared: boolean;
+  supplier_id: string;
+  description: string;
+  error?: string;
+  action: 'create' | 'update' | 'error';
+  raw: ImportRowInput;
+};
+
+type ImportSession = {
+  id: string;
+  jobId: string;
+  companyId: string;
+  shopId: string;
+  branchCode: string;
+  name: string;
+  mode: 'with_check' | 'without_check';
+  status:
+    | 'draft'
+    | 'validating'
+    | 'preview_ready'
+    | 'importing'
+    | 'completed'
+    | 'cancelled'
+    | 'failed';
+  fields: Array<{
+    id: string;
+    name: string;
+    sequence_number: number;
+    is_active: boolean;
+    is_attribute: boolean;
+    is_custom_field: boolean;
+  }>;
+  rows: ImportRowInput[];
+  items: PreparedImportItem[];
+  result?: {
+    created_count: number;
+    updated_count: number;
+    error_count: number;
+    errors: Array<{ row: number; message: string }>;
+  };
+  createdAt: string;
+  updatedAt: string;
+};
+
+type ImportJob = {
+  correlation_id: string;
+  message: string;
+  total: number;
+  current: number;
+  percent: number;
+  is_finished: boolean;
+  importId: string;
 };
 
 const PRODUCT_CHARACTERISTICS = [
@@ -175,6 +268,35 @@ const PRODUCT_CHARACTERISTICS = [
   },
 ];
 
+const EXCEL_IMPORT_PROPERTIES = [
+  'VARIATION_ID',
+  'NAME',
+  'SKU',
+  'BARCODE',
+  'QUANTITY',
+  'SUPPLY_PRICE',
+  'RETAIL_PRICE',
+  'CATEGORY_NAME',
+  'BRAND_NAME',
+  'MEASUREMENT_UNIT',
+  'SUPPLIER',
+  'MIN_PRICE',
+  'MAX_PRICE',
+  'WHOLESALE_PRICE',
+  'DESCRIPTION',
+].map((systemName) => ({
+  id: '',
+  name: systemName,
+  system_name: systemName,
+  is_uploadable: false,
+  is_new: false,
+  is_attribute: false,
+  is_characteristics: false,
+}));
+
+const IMPORT_JOBS = new Map<string, ImportJob>();
+const IMPORT_SESSIONS = new Map<string, ImportSession>();
+
 const COMPANY_ID = process.env.COMPANY_ID ?? '';
 const DEFAULT_PRODUCT_TYPE_ID =
   process.env.DEFAULT_PRODUCT_TYPE_ID ?? '69e939aa-9b8f-46a9-b605-8b2675475b7b';
@@ -268,6 +390,327 @@ export class ProductsService {
       active_count: PRODUCT_CHARACTERISTICS.length,
       deleted_count: 2,
       product_characteristics: PRODUCT_CHARACTERISTICS.slice(0, safeLimit),
+    };
+  }
+
+  getExcelImportProperties(limit?: string) {
+    const parsedLimit = limit ? Number(limit) : EXCEL_IMPORT_PROPERTIES.length;
+    if (Number.isNaN(parsedLimit) || parsedLimit <= 0) {
+      throw new BadRequestException('limit must be a positive number');
+    }
+
+    const safeLimit = Math.min(
+      Math.trunc(parsedLimit),
+      EXCEL_IMPORT_PROPERTIES.length,
+    );
+
+    return EXCEL_IMPORT_PROPERTIES.slice(0, safeLimit);
+  }
+
+  async createImportDraft(
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const writeContext = this.requireCatalogWriteContext(context);
+    const companyId = this.resolveProductCompanyId(body, writeContext);
+    const shopId = this.requireString(body.shop_id, 'shop_id');
+    const branchCode = await this.resolveBranchCodeForWrite(shopId, writeContext);
+    const rows = this.extractImportRows(body);
+    const fields = this.extractImportFields(body);
+    const now = this.formatDateTime(new Date());
+    const importId = randomUUID();
+
+    const session: ImportSession = {
+      id: importId,
+      jobId: '',
+      companyId,
+      shopId,
+      branchCode,
+      name: this.requireString(body.name, 'name'),
+      mode: this.parseImportMode(body.mode),
+      status: 'draft',
+      fields,
+      rows,
+      items: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    IMPORT_SESSIONS.set(importId, session);
+
+    return this.toImportSessionSummary(session);
+  }
+
+  listImports(query: { page?: number; limit?: number }) {
+    const safePage = Math.max(1, query.page ?? 1);
+    const safeLimit = Math.min(Math.max(1, query.limit ?? 10), 100);
+    const items = [...IMPORT_SESSIONS.values()]
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice((safePage - 1) * safeLimit, safePage * safeLimit)
+      .map((session) => this.toImportSessionSummary(session));
+
+    return {
+      count: IMPORT_SESSIONS.size,
+      items,
+    };
+  }
+
+  getImportById(id: string) {
+    const session = this.resolveImportSession(id);
+    if (!session) {
+      throw new NotFoundException('Import session not found');
+    }
+
+    return {
+      ...this.toImportSessionSummary(session),
+      fields: session.fields,
+      rows_count: session.rows.length,
+      result: session.result ?? null,
+    };
+  }
+
+  async validateExcelImport(
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const writeContext = this.requireCatalogWriteContext(context);
+    const companyId = this.resolveProductCompanyId(body, writeContext);
+    const shopId = this.requireString(body.shop_id, 'shop_id');
+    const branchCode = await this.resolveBranchCodeForWrite(shopId, writeContext);
+    const rows = this.extractImportRows(body);
+    const importId =
+      this.optionalString(body.import_id) ??
+      this.optionalString(body.id) ??
+      randomUUID();
+    const jobId = randomUUID();
+    const fields = this.extractImportFields(body);
+    const items = await this.prepareImportItems(
+      importId,
+      companyId,
+      rows,
+      branchCode,
+      writeContext.companyId,
+    );
+
+    const existingSession = IMPORT_SESSIONS.get(importId);
+    const now = this.formatDateTime(new Date());
+    IMPORT_SESSIONS.set(importId, {
+      id: importId,
+      jobId,
+      companyId,
+      shopId,
+      branchCode,
+      name:
+        this.optionalString(body.name) ??
+        existingSession?.name ??
+        `Import ${now}`,
+      mode: existingSession?.mode ?? this.parseImportMode(body.mode),
+      status: 'preview_ready',
+      fields,
+      rows,
+      items,
+      result: existingSession?.result,
+      createdAt: existingSession?.createdAt ?? now,
+      updatedAt: now,
+    });
+
+    IMPORT_JOBS.set(jobId, {
+      correlation_id: importId,
+      message: 'product-load',
+      total: rows.length,
+      current: rows.length,
+      percent: 100,
+      is_finished: true,
+      importId,
+    });
+
+    return {
+      message: jobId,
+      correlation_id: importId,
+      import_id: importId,
+    };
+  }
+
+  getImportProgress(id: string) {
+    const job = IMPORT_JOBS.get(id);
+    if (!job) {
+      throw new NotFoundException('Import job not found');
+    }
+
+    return {
+      correlation_id: job.correlation_id,
+      import_id: job.importId,
+      message: job.message,
+      total: job.total,
+      current: job.current,
+      percent: job.percent,
+      is_finished: job.is_finished,
+    };
+  }
+
+  getImportItemsDp(id: string) {
+    if (!this.resolveImportSession(id)) {
+      throw new NotFoundException('Import session not found');
+    }
+
+    return {
+      count: 0,
+      import_items: null,
+    };
+  }
+
+  getImportSearch(
+    id: string,
+    query: {
+      limit: number;
+      page: number;
+      difference: boolean;
+    },
+  ) {
+    const session = this.resolveImportSession(id);
+    if (!session) {
+      throw new NotFoundException('Import session not found');
+    }
+
+    const safeLimit = Math.min(Math.max(1, query.limit), 10000);
+    const safePage = Math.max(1, query.page);
+    const filteredItems = query.difference
+      ? session.items.filter((item) => item.difference)
+      : session.items;
+    const paginatedItems = filteredItems.slice(
+      (safePage - 1) * safeLimit,
+      safePage * safeLimit,
+    );
+
+    return {
+      items: paginatedItems,
+      count: filteredItems.length,
+      total_measurement_value: filteredItems.reduce(
+        (sum, item) => sum + item.measurement_value,
+        0,
+      ),
+      total_supply_price: filteredItems.reduce(
+        (sum, item) => sum + item.measurement_value * item.supply_price,
+        0,
+      ),
+      total_retail_price: filteredItems.reduce(
+        (sum, item) => sum + item.measurement_value * item.retail_price,
+        0,
+      ),
+      fields: session.fields,
+    };
+  }
+
+  async importWithoutCheck(
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const writeContext = this.requireCatalogWriteContext(context);
+    const companyId = this.resolveProductCompanyId(body, writeContext);
+    const shopId = this.requireString(body.shop_id, 'shop_id');
+    const branchCode = await this.resolveBranchCodeForWrite(shopId, writeContext);
+    const rows = this.extractImportRows(body);
+    const now = this.formatDateTime(new Date());
+    const importId = randomUUID();
+    const result = await this.applyImportRows(rows, companyId, branchCode);
+
+    IMPORT_SESSIONS.set(importId, {
+      id: importId,
+      jobId: '',
+      companyId,
+      shopId,
+      branchCode,
+      name: this.optionalString(body.name) ?? `Import ${now}`,
+      mode: 'without_check',
+      status: 'completed',
+      fields: this.extractImportFields(body),
+      rows,
+      items: [],
+      result,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    return {
+      import_id: importId,
+      ...result,
+    };
+  }
+
+  async commitImport(id: string, authorization?: string) {
+    const session = this.resolveImportSession(id);
+    if (!session) {
+      throw new NotFoundException('Import session not found');
+    }
+
+    const context = await this.getRequestContext(authorization);
+    this.requireCatalogWriteContext(context);
+
+    session.status = 'importing';
+    session.updatedAt = this.formatDateTime(new Date());
+    const result = await this.applyImportRows(
+      session.items
+        .filter((item) => item.action !== 'error')
+        .map((item) => item.raw),
+      session.companyId,
+      session.branchCode,
+    );
+    session.result = result;
+    session.status = 'completed';
+    session.updatedAt = this.formatDateTime(new Date());
+
+    return {
+      import_id: session.id,
+      ...result,
+    };
+  }
+
+  cancelImport(id: string) {
+    const session = this.resolveImportSession(id);
+    if (!session) {
+      throw new NotFoundException('Import session not found');
+    }
+
+    session.status = 'cancelled';
+    session.updatedAt = this.formatDateTime(new Date());
+
+    return this.toImportSessionSummary(session);
+  }
+
+  private resolveImportSession(id: string) {
+    const directSession = IMPORT_SESSIONS.get(id);
+    if (directSession) {
+      return directSession;
+    }
+
+    const job = IMPORT_JOBS.get(id);
+    if (!job) {
+      return undefined;
+    }
+
+    return IMPORT_SESSIONS.get(job.importId);
+  }
+
+  private parseImportMode(value: unknown): 'with_check' | 'without_check' {
+    return value === 'without_check' ? 'without_check' : 'with_check';
+  }
+
+  private toImportSessionSummary(session: ImportSession) {
+    return {
+      id: session.id,
+      import_id: session.id,
+      job_id: session.jobId,
+      name: session.name,
+      mode: session.mode,
+      status: session.status,
+      shop_id: session.shopId,
+      created_at: session.createdAt,
+      updated_at: session.updatedAt,
+      rows_count: session.rows.length,
+      result: session.result ?? null,
     };
   }
 
@@ -2275,6 +2718,535 @@ export class ProductsService {
       total_loaded_items_measurement_value: 0,
     });
     });
+  }
+
+  private extractImportRows(body: Record<string, unknown>): ImportRowInput[] {
+    if (!Array.isArray(body.rows)) {
+      throw new BadRequestException('rows must be an array');
+    }
+
+    return body.rows.flatMap((row, index) => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) {
+        return [];
+      }
+
+      const item = row as Record<string, unknown>;
+      const quantity = this.toInt(item.quantity) ?? 0;
+      const supplyPrice = this.toNumber(item.supply_price) ?? 0;
+      const retailPrice = this.toNumber(item.retail_price) ?? 0;
+      const name = this.optionalString(item.name);
+
+      return [{
+        name: name ?? '',
+        sku: this.optionalString(item.sku),
+        barcode: this.optionalString(item.barcode),
+        quantity,
+        supplyPrice,
+        retailPrice,
+        categoryName: this.optionalString(item.category_name),
+        brandName: this.optionalString(item.brand_name),
+        measurementUnit: this.optionalString(item.measurement_unit),
+        supplier: this.optionalString(item.supplier),
+        description: this.optionalString(item.description),
+        rowNumber: index + 1,
+      }].map(({ rowNumber, ...prepared }) => {
+        if (!prepared.name && !prepared.sku && !prepared.barcode) {
+          throw new BadRequestException(
+            `Row ${rowNumber} must contain at least name, sku, or barcode`,
+          );
+        }
+
+        return prepared;
+      });
+    });
+  }
+
+  private extractImportFields(body: Record<string, unknown>) {
+    const properties = Array.isArray(body.properties) ? body.properties : [];
+
+    return properties
+      .filter(
+        (item): item is Record<string, unknown> =>
+          !!item && typeof item === 'object' && !Array.isArray(item),
+      )
+      .map((item, index) => ({
+        id: this.optionalString(item.id) ?? '',
+        name:
+          this.optionalString(item.name) ??
+          this.optionalString(item.system_name) ??
+          '',
+        sequence_number: this.toInt(item.sequence_number) ?? index + 1,
+        is_active: true,
+        is_attribute: false,
+        is_custom_field: false,
+      }));
+  }
+
+  private async prepareImportItems(
+    importId: string,
+    companyId: string,
+    rows: ImportRowInput[],
+    branchCode: string,
+    contextCompanyId?: string | null,
+  ) {
+    const currencyCode =
+      this.companySettingsService.getDefaultCurrencyIsoCode(
+        contextCompanyId ?? companyId,
+      );
+
+    const items: PreparedImportItem[] = [];
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      const existingProduct = await this.findImportMatchedProduct(companyId, row);
+      const differentFields = this.collectDifferentFields(existingProduct, row);
+      const error = this.validateImportRow(row);
+
+      items.push({
+        id: randomUUID(),
+        import_id: importId,
+        row_number: index + 1,
+        product_id: existingProduct ? String(existingProduct.id) : '',
+        product_name: row.name,
+        product_base_name: row.name,
+        product_sku: row.sku ?? '',
+        product_barcode: row.barcode ?? '',
+        supply_price: row.supplyPrice,
+        retail_price: row.retailPrice,
+        supply_currency: currencyCode,
+        retail_currency: currencyCode,
+        measurement_type: 'COUNTABLE',
+        measurement_value: row.quantity,
+        measurement_unit: DEFAULT_MEASUREMENT_UNIT,
+        company_id: companyId,
+        difference: differentFields.length > 0,
+        different_fields: differentFields,
+        old_product: existingProduct
+          ? this.toImportExistingProductResponse(existingProduct, branchCode)
+          : null,
+        product_info: existingProduct
+          ? this.toImportExistingProductResponse(existingProduct, branchCode)
+          : null,
+        free_price: false,
+        declared_measurement_value: 0,
+        is_undeclared: false,
+        supplier_id: '',
+        description: row.description ?? '',
+        error: error ?? undefined,
+        action: error ? 'error' : existingProduct ? 'update' : 'create',
+        raw: row,
+      });
+    }
+
+    return items;
+  }
+
+  private validateImportRow(row: ImportRowInput) {
+    if (row.quantity <= 0) {
+      return 'quantity must be greater than 0';
+    }
+
+    if (row.retailPrice < row.supplyPrice) {
+      return 'retail_price cannot be lower than supply_price';
+    }
+
+    if (!row.name && !row.sku && !row.barcode) {
+      return 'row must contain at least one identifier';
+    }
+
+    return null;
+  }
+
+  private async findImportMatchedProduct(companyId: string, row: ImportRowInput) {
+    const or: Prisma.ProductWhereInput[] = [];
+
+    if (row.sku && row.barcode) {
+      return this.prisma.product.findFirst({
+        where: {
+          companyId,
+          sku: row.sku,
+          barcode: row.barcode,
+        },
+        include: {
+          category: true,
+          brand: true,
+          suppliers: {
+            include: {
+              supplier: true,
+            },
+          },
+          stocks: true,
+        },
+      });
+    }
+
+    if (row.barcode) {
+      or.push({ barcode: row.barcode });
+    }
+
+    if (row.sku) {
+      or.push({ sku: row.sku });
+    }
+
+    if (!or.length) {
+      return null;
+    }
+
+    return this.prisma.product.findFirst({
+      where: {
+        companyId,
+        OR: or,
+      },
+      include: {
+        category: true,
+        brand: true,
+        suppliers: {
+          include: {
+            supplier: true,
+          },
+        },
+        stocks: true,
+      },
+    });
+  }
+
+  private collectDifferentFields(
+    product: CatalogProductWithRelations | null,
+    row: ImportRowInput,
+  ) {
+    if (!product) {
+      return [];
+    }
+
+    const differentFields: string[] = [];
+
+    if (row.name && product.name.trim() !== row.name.trim()) {
+      differentFields.push('name');
+    }
+
+    if (
+      row.brandName &&
+      (product.brand?.name ?? '').trim() !== row.brandName.trim()
+    ) {
+      differentFields.push('brand');
+    }
+
+    if (
+      row.categoryName &&
+      (product.category?.name ?? '').trim() !== row.categoryName.trim()
+    ) {
+      differentFields.push('category');
+    }
+
+    return differentFields;
+  }
+
+  private toImportExistingProductResponse(
+    product: CatalogProductWithRelations,
+    branchCode: string,
+  ) {
+    const relevantStock = product.stocks.find(
+      (stock) => stock.branchCode === branchCode,
+    );
+    const totalMeasurementValue = product.stocks.reduce(
+      (sum, stock) => sum + stock.quantity,
+      0,
+    );
+
+    return {
+      id: String(product.id),
+      company_id: product.companyId ?? '',
+      name: product.name,
+      sku: product.sku ?? '',
+      barcode: product.barcode ?? '',
+      categories: product.category
+        ? [
+            {
+              id: String(product.category.id),
+              name: product.category.name,
+            },
+          ]
+        : [],
+      measurement_values: {
+        total_measurement_value: totalMeasurementValue,
+        total_active_measurement_value: totalMeasurementValue,
+        total_inactive_measurement_value: 0,
+      },
+      measurement_unit: DEFAULT_MEASUREMENT_UNIT,
+      shop_measurement_values: product.stocks.map((stock) => ({
+        small_left_measurement_value: 0,
+        has_trigger: false,
+        shop_id: this.resolveShopByBranchCode(stock.branchCode).shop_id,
+        total_measurement_value: stock.quantity,
+        total_sold_measurement_value: 0,
+        total_imported_measurement_value: 0,
+        import_started_measurement_value: 0,
+      })),
+      shop_prices: product.stocks.map((stock) => ({
+        shop_id: this.resolveShopByBranchCode(stock.branchCode).shop_id,
+        retail_price: stock.salePrice ?? product.salePrice ?? 0,
+        supply_price: stock.purchasePrice ?? product.purchasePrice ?? 0,
+        min_supply_price: stock.purchasePrice ?? product.purchasePrice ?? 0,
+        max_supply_price: stock.purchasePrice ?? product.purchasePrice ?? 0,
+        retail_currency: 'UZS',
+        supply_currency: 'UZS',
+      })),
+      brand_id: product.brandId ? String(product.brandId) : '',
+      brand_name: product.brand?.name ?? '',
+      base_name: product.name,
+      product_supply_stock: [],
+      status: 0,
+      scale_plu: 0,
+      scale_code: 0,
+      is_scalable: false,
+      shop_free_prices: relevantStock
+        ? [
+            {
+              shop_id: this.resolveShopByBranchCode(branchCode).shop_id,
+              sell_with_free_price: false,
+            },
+          ]
+        : null,
+      suppliers: product.suppliers.map((item) => ({
+        id: String(item.supplier.id),
+        company_id: item.supplier.companyId,
+        name: item.supplier.name,
+        deleted_at: 0,
+      })),
+    };
+  }
+
+  private async applyImportRows(
+    rows: ImportRowInput[],
+    companyId: string,
+    branchCode: string,
+  ) {
+    let createdCount = 0;
+    let updatedCount = 0;
+    const errors: Array<{ row: number; message: string }> = [];
+
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      const error = this.validateImportRow(row);
+      if (error) {
+        errors.push({
+          row: index + 1,
+          message: error,
+        });
+        continue;
+      }
+
+      const matchedProduct = await this.findImportMatchedProduct(companyId, row);
+
+      try {
+        if (matchedProduct) {
+          await this.applyImportUpdate(matchedProduct.id, row, companyId, branchCode);
+          updatedCount += 1;
+        } else {
+          await this.applyImportCreate(row, companyId, branchCode);
+          createdCount += 1;
+        }
+      } catch (applyError) {
+        errors.push({
+          row: index + 1,
+          message:
+            applyError instanceof Error
+              ? applyError.message
+              : 'Import failed for row',
+        });
+      }
+    }
+
+    return {
+      created_count: createdCount,
+      updated_count: updatedCount,
+      error_count: errors.length,
+      errors,
+    };
+  }
+
+  private async applyImportCreate(
+    row: ImportRowInput,
+    companyId: string,
+    branchCode: string,
+  ) {
+    const createdProduct = await this.prisma.product.create({
+      data: {
+        company: {
+          connect: {
+            id: companyId,
+          },
+        },
+        name: row.name || row.sku || row.barcode || `Imported ${Date.now()}`,
+        sku: row.sku,
+        barcode: row.barcode,
+        purchasePrice: row.supplyPrice,
+        salePrice: row.retailPrice,
+        quantity: row.quantity,
+        unit: row.measurementUnit,
+        metadata: this.buildImportMetadata(row, companyId),
+        category: row.categoryName
+          ? {
+              connectOrCreate: {
+                where: {
+                  companyId_name: {
+                    companyId,
+                    name: row.categoryName,
+                  },
+                },
+                create: {
+                  companyId,
+                  name: row.categoryName,
+                },
+              },
+            }
+          : undefined,
+        brand: row.brandName
+          ? {
+              connectOrCreate: {
+                where: {
+                  companyId_name: {
+                    companyId,
+                    name: row.brandName,
+                  },
+                },
+                create: {
+                  companyId,
+                  name: row.brandName,
+                },
+              },
+            }
+          : undefined,
+        suppliers: row.supplier
+          ? {
+              create: [
+                {
+                  supplier: {
+                    connectOrCreate: {
+                      where: {
+                        companyId_name: {
+                          companyId,
+                          name: row.supplier,
+                        },
+                      },
+                      create: {
+                        companyId,
+                        name: row.supplier,
+                      },
+                    },
+                  },
+                },
+              ],
+            }
+          : undefined,
+        stocks: {
+          create: {
+            branchCode,
+            quantity: row.quantity,
+            purchasePrice: row.supplyPrice,
+            salePrice: row.retailPrice,
+          },
+        },
+      },
+    });
+
+    return createdProduct;
+  }
+
+  private async applyImportUpdate(
+    productId: number,
+    row: ImportRowInput,
+    companyId: string,
+    branchCode: string,
+  ) {
+    const existingStock = await this.prisma.productStock.findFirst({
+      where: {
+        productId,
+        branchCode,
+      },
+    });
+
+    if (existingStock) {
+      await this.prisma.productStock.update({
+        where: {
+          id: existingStock.id,
+        },
+        data: {
+          quantity: existingStock.quantity + row.quantity,
+          purchasePrice: row.supplyPrice,
+          salePrice: row.retailPrice,
+        },
+      });
+    } else {
+      await this.prisma.productStock.create({
+        data: {
+          productId,
+          branchCode,
+          quantity: row.quantity,
+          purchasePrice: row.supplyPrice,
+          salePrice: row.retailPrice,
+        },
+      });
+    }
+
+    const allStocks = await this.prisma.productStock.findMany({
+      where: {
+        productId,
+      },
+    });
+
+    await this.prisma.product.update({
+      where: {
+        id: productId,
+      },
+      data: {
+        name: row.name || undefined,
+        purchasePrice: row.supplyPrice,
+        salePrice: row.retailPrice,
+        quantity: allStocks.reduce((sum, stock) => sum + stock.quantity, 0),
+        unit: row.measurementUnit || undefined,
+        metadata: this.buildImportMetadata(row, companyId),
+        category: row.categoryName
+          ? {
+              connectOrCreate: {
+                where: {
+                  companyId_name: {
+                    companyId,
+                    name: row.categoryName,
+                  },
+                },
+                create: {
+                  companyId,
+                  name: row.categoryName,
+                },
+              },
+            }
+          : undefined,
+        brand: row.brandName
+          ? {
+              connectOrCreate: {
+                where: {
+                  companyId_name: {
+                    companyId,
+                    name: row.brandName,
+                  },
+                },
+                create: {
+                  companyId,
+                  name: row.brandName,
+                },
+              },
+            }
+          : undefined,
+      },
+    });
+  }
+
+  private buildImportMetadata(row: ImportRowInput, companyId: string) {
+    return {
+      company_id: companyId,
+      description: row.description ?? '',
+      imported: true,
+    } satisfies Prisma.InputJsonObject;
   }
 
   private resolveProductType(value: unknown) {

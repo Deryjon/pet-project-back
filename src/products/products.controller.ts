@@ -43,6 +43,111 @@ export class ProductsController {
     return this.productsService.getProductCharacteristics(limit);
   }
 
+  @Get('v2/excel/import-properties')
+  getExcelImportProperties(@Query('limit') limit?: string) {
+    return this.productsService.getExcelImportProperties(limit);
+  }
+
+  @Post('v2/imports')
+  createImportDraft(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.createImportDraft(body, authorization);
+  }
+
+  @Get('v2/imports')
+  listImports(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.productsService.listImports({
+      page: Number(page) || 1,
+      limit: Number(limit) || 10,
+    });
+  }
+
+  @Get('v2/imports/:id')
+  getImportById(@Param('id') id: string) {
+    return this.productsService.getImportById(id);
+  }
+
+  @Post('v2/imports/:id/validate')
+  validateImportDraft(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.validateExcelImport(
+      {
+        ...body,
+        import_id: id,
+      },
+      authorization,
+    );
+  }
+
+  @Post('v2/excel/validate-import')
+  validateExcelImport(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.validateExcelImport(body, authorization);
+  }
+
+  @Get('v2/import-progress/:id')
+  getImportProgress(@Param('id') id: string) {
+    return this.productsService.getImportProgress(id);
+  }
+
+  @Get('v2/import-search/:id')
+  getImportSearch(
+    @Param('id') id: string,
+    @Query('limit') limit?: string,
+    @Query('page') page?: string,
+    @Query('difference') difference?: string,
+  ) {
+    return this.productsService.getImportSearch(id, {
+      limit: Number(limit) || 20,
+      page: Number(page) || 1,
+      difference: this.toBoolean(difference),
+    });
+  }
+
+  @Get('v2/import-items-dp/:id')
+  getImportItemsDp(@Param('id') id: string) {
+    return this.productsService.getImportItemsDp(id);
+  }
+
+  @Post('v2/import-commit/:id')
+  importCommit(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.commitImport(id, authorization);
+  }
+
+  @Post('v2/imports/:id/commit')
+  commitImportDraft(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.commitImport(id, authorization);
+  }
+
+  @Post('v2/imports/:id/cancel')
+  cancelImportDraft(@Param('id') id: string) {
+    return this.productsService.cancelImport(id);
+  }
+
+  @Post('v2/excel/import-without-check')
+  importWithoutCheck(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.importWithoutCheck(body, authorization);
+  }
+
   @Get('v2/product')
   findAllV2(
     @Query('page') page?: string,
