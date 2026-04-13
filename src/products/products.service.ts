@@ -413,7 +413,7 @@ export class ProductsService {
   ) {
     const context = await this.getRequestContext(authorization);
     const writeContext = this.requireCatalogWriteContext(context);
-    const companyId = this.resolveProductCompanyId(body, writeContext);
+    const companyId = this.resolveImportCompanyId(body, writeContext);
     const shopId = this.requireString(body.shop_id, 'shop_id');
     const branchCode = await this.resolveBranchCodeForWrite(shopId, writeContext);
     const rows = this.extractImportRows(body);
@@ -476,7 +476,7 @@ export class ProductsService {
   ) {
     const context = await this.getRequestContext(authorization);
     const writeContext = this.requireCatalogWriteContext(context);
-    const companyId = this.resolveProductCompanyId(body, writeContext);
+    const companyId = this.resolveImportCompanyId(body, writeContext);
     const shopId = this.requireString(body.shop_id, 'shop_id');
     const branchCode = await this.resolveBranchCodeForWrite(shopId, writeContext);
     const rows = this.extractImportRows(body);
@@ -614,7 +614,7 @@ export class ProductsService {
   ) {
     const context = await this.getRequestContext(authorization);
     const writeContext = this.requireCatalogWriteContext(context);
-    const companyId = this.resolveProductCompanyId(body, writeContext);
+    const companyId = this.resolveImportCompanyId(body, writeContext);
     const shopId = this.requireString(body.shop_id, 'shop_id');
     const branchCode = await this.resolveBranchCodeForWrite(shopId, writeContext);
     const rows = this.extractImportRows(body);
@@ -728,12 +728,45 @@ export class ProductsService {
       name: session.name,
       mode: session.mode,
       status: session.status,
+      company_id: session.companyId,
       shop_id: session.shopId,
+      branch_code: session.branchCode,
       created_at: session.createdAt,
       updated_at: session.updatedAt,
       rows_count: session.rows.length,
       result: session.result ?? null,
     };
+  }
+
+  private resolveImportCompanyId(
+    body: Record<string, unknown>,
+    context?: {
+      userType?: string;
+      companyId?: string | null;
+    } | null,
+  ) {
+    if (context?.userType === 'company') {
+      if (!context.companyId) {
+        throw new UnauthorizedException('Company user is missing company');
+      }
+
+      return context.companyId;
+    }
+
+    const requestedCompanyId =
+      this.optionalString(body.company_id) ??
+      this.optionalString(
+        (body.metadata as Record<string, unknown> | undefined)?.company_id,
+      ) ??
+      context?.companyId;
+
+    if (!requestedCompanyId) {
+      throw new BadRequestException(
+        'company_id is required for import requests made by platform users',
+      );
+    }
+
+    return requestedCompanyId;
   }
 
   async findAll({ page, limit, search }: FindProductsArgs, authorization?: string) {
