@@ -462,28 +462,86 @@ export class ProductsService {
       this.extractImportOnMatchPolicy(body) ?? this.defaultImportOnMatchPolicy();
     const now = this.formatDateTime(new Date());
     const importId = randomUUID();
+    const mode = this.parseImportMode(body.mode);
+
+    if (mode === 'without_check') {
+      const result = await this.applyImportRows(
+        rows,
+        companyId,
+        branchCode,
+        onMatchPolicy,
+      );
+
+      const session: ImportSession = {
+        id: importId,
+        jobId: '',
+        companyId,
+        shopId,
+        branchCode,
+        name: this.requireString(body.name, 'name'),
+        mode,
+        status: 'completed',
+        fields,
+        rows,
+        items: [],
+        onMatchPolicy,
+        dryRunSummary: undefined,
+        result,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      IMPORT_SESSIONS.set(importId, session);
+
+      return {
+        ...this.toImportSessionSummary(session),
+        result,
+      };
+    }
+
+    const jobId = randomUUID();
+    const items = await this.prepareImportItems(
+      importId,
+      companyId,
+      rows,
+      branchCode,
+      writeContext.companyId,
+    );
+    const dryRunSummary = this.buildImportDryRunSummary(items);
 
     const session: ImportSession = {
       id: importId,
-      jobId: '',
+      jobId,
       companyId,
       shopId,
       branchCode,
       name: this.requireString(body.name, 'name'),
-      mode: this.parseImportMode(body.mode),
-      status: 'draft',
+      mode,
+      status: 'preview_ready',
       fields,
       rows,
-      items: [],
+      items,
       onMatchPolicy,
-      dryRunSummary: undefined,
+      dryRunSummary,
       createdAt: now,
       updatedAt: now,
     };
 
     IMPORT_SESSIONS.set(importId, session);
+    IMPORT_JOBS.set(jobId, {
+      correlation_id: importId,
+      message: 'product-load',
+      total: rows.length,
+      current: rows.length,
+      percent: 100,
+      is_finished: true,
+      importId,
+    });
 
-    return this.toImportSessionSummary(session);
+    return {
+      ...this.toImportSessionSummary(session),
+      dry_run_summary: dryRunSummary,
+    };
   }
 
   listImports(query: { page?: number; limit?: number }) {
