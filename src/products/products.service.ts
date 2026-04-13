@@ -550,18 +550,21 @@ export class ProductsService {
     };
   }
 
-  getImportItemsDp(id: string) {
-    if (!this.resolveImportSession(id)) {
+  async getImportItemsDp(id: string) {
+    const session = this.resolveImportSession(id);
+    if (!session) {
       throw new NotFoundException('Import session not found');
     }
 
+    await this.ensureImportPreviewItems(session);
+
     return {
-      count: 0,
-      import_items: null,
+      count: session.items.length,
+      import_items: session.items,
     };
   }
 
-  getImportSearch(
+  async getImportSearch(
     id: string,
     query: {
       limit: number;
@@ -573,6 +576,8 @@ export class ProductsService {
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
+
+    await this.ensureImportPreviewItems(session);
 
     const safeLimit = Math.min(Math.max(1, query.limit), 10000);
     const safePage = Math.max(1, query.page);
@@ -692,6 +697,23 @@ export class ProductsService {
     }
 
     return IMPORT_SESSIONS.get(job.importId);
+  }
+
+  private async ensureImportPreviewItems(session: ImportSession) {
+    if (session.items.length > 0) {
+      return session.items;
+    }
+
+    session.items = await this.prepareImportItems(
+      session.id,
+      session.companyId,
+      session.rows,
+      session.branchCode,
+      session.companyId,
+    );
+    session.updatedAt = this.formatDateTime(new Date());
+
+    return session.items;
   }
 
   private parseImportMode(value: unknown): 'with_check' | 'without_check' {

@@ -101,7 +101,7 @@ export class ProductsController {
   }
 
   @Get('v2/import-search/:id')
-  getImportSearch(
+  async getImportSearch(
     @Param('id') id: string,
     @Query('limit') limit?: string,
     @Query('page') page?: string,
@@ -115,7 +115,7 @@ export class ProductsController {
   }
 
   @Get('v2/import-items-dp/:id')
-  getImportItemsDp(@Param('id') id: string) {
+  async getImportItemsDp(@Param('id') id: string) {
     return this.productsService.getImportItemsDp(id);
   }
 
