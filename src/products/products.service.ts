@@ -597,11 +597,25 @@ export class ProductsService {
       importId,
     }, companyId);
 
+    const shouldAutoCommit = this.shouldAutoCommitImport(body);
+    if (shouldAutoCommit) {
+      const commitResult = await this.commitImport(importId, authorization);
+      return {
+        message: jobId,
+        correlation_id: importId,
+        import_id: importId,
+        dry_run_summary: dryRunSummary,
+        auto_committed: true,
+        commit_result: commitResult,
+      };
+    }
+
     return {
       message: jobId,
       correlation_id: importId,
       import_id: importId,
       dry_run_summary: dryRunSummary,
+      auto_committed: false,
     };
   }
 
@@ -4809,6 +4823,15 @@ export class ProductsService {
     }
 
     return false;
+  }
+
+  private shouldAutoCommitImport(body: Record<string, unknown>) {
+    const explicitAutoCommit = body.auto_commit ?? body.autoCommit;
+    if (explicitAutoCommit !== undefined) {
+      return this.toBooleanValue(explicitAutoCommit);
+    }
+
+    return true;
   }
 
   private extractFirstImage(value: unknown) {
