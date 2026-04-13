@@ -332,6 +332,8 @@ const EXCEL_IMPORT_PROPERTIES = [
   is_characteristics: false,
 }));
 
+const IMPORT_JOBS = new Map<string, ImportJob>();
+const IMPORT_SESSIONS = new Map<string, ImportSession>();
 const IMPORT_COMMIT_LOCKS = new Set<string>();
 const PRODUCT_IMPORT_LOCKS = new Set<string>();
 
@@ -460,7 +462,13 @@ export class ProductsService {
       this.extractImportOnMatchPolicy(body) ?? this.defaultImportOnMatchPolicy();
     const now = this.formatDateTime(new Date());
     const importId = randomUUID();
-    const mode = this.parseImportMode(body.mode);
+    const mode = 'without_check' as const;
+    const result = await this.applyImportRows(
+      rows,
+      companyId,
+      branchCode,
+      onMatchPolicy,
+    );
 
     const session: ImportSession = {
       id: importId,
@@ -470,55 +478,41 @@ export class ProductsService {
       branchCode,
       name: this.requireString(body.name, 'name'),
       mode,
-      status: 'draft',
+      status: 'completed',
       fields,
       rows,
       items: [],
       onMatchPolicy,
       dryRunSummary: undefined,
-      result: undefined,
+      result,
       createdAt: now,
       updatedAt: now,
     };
 
-    await this.persistImportSession(session);
+    IMPORT_SESSIONS.set(importId, session);
 
     return {
       ...this.toImportSessionSummary(session),
+      result,
     };
   }
 
-  async listImports(
-    query: { page?: number; limit?: number },
-    authorization?: string,
-  ) {
-    const context = await this.getImportSessionContext(authorization);
+  listImports(query: { page?: number; limit?: number }) {
     const safePage = Math.max(1, query.page ?? 1);
     const safeLimit = Math.min(Math.max(1, query.limit ?? 10), 100);
-    const sessions = await this.importSessionDelegate().findMany({
-      where: this.buildImportSessionWhere(context),
-      orderBy: {
-        createdAt: 'desc',
-      },
-      skip: (safePage - 1) * safeLimit,
-      take: safeLimit,
-    });
-    const total = await this.importSessionDelegate().count({
-      where: this.buildImportSessionWhere(context),
-    });
-    const items = sessions
-      .map((session) => this.mapImportSessionRecord(session))
+    const items = [...IMPORT_SESSIONS.values()]
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice((safePage - 1) * safeLimit, safePage * safeLimit)
       .map((session) => this.toImportSessionSummary(session));
 
     return {
-      count: total,
+      count: IMPORT_SESSIONS.size,
       items,
     };
   }
 
-  async getImportById(id: string, authorization?: string) {
-    const context = await this.getImportSessionContext(authorization);
-    const session = await this.resolveImportSession(id, context);
+  getImportById(id: string) {
+    const session = this.resolveImportSession(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
@@ -546,7 +540,7 @@ export class ProductsService {
       this.optionalString(body.import_id) ??
       this.optionalString(body.id) ??
       randomUUID();
-    const existingSession = await this.resolveImportSession(importId, writeContext);
+    const existingSession = IMPORT_SESSIONS.get(importId);
     const jobId = randomUUID();
     const fields = this.extractImportFields(body);
     const onMatchPolicy =
@@ -563,7 +557,7 @@ export class ProductsService {
     const dryRunSummary = this.buildImportDryRunSummary(items);
 
     const now = this.formatDateTime(new Date());
-    const session: ImportSession = {
+    IMPORT_SESSIONS.set(importId, {
       id: importId,
       jobId,
       companyId,
@@ -583,11 +577,9 @@ export class ProductsService {
       result: existingSession?.result,
       createdAt: existingSession?.createdAt ?? now,
       updatedAt: now,
-    };
-    await this.persistImportSession(session);
+    });
 
-    await this.persistImportJob({
-      id: jobId,
+    IMPORT_JOBS.set(jobId, {
       correlation_id: importId,
       message: 'product-load',
       total: rows.length,
@@ -595,7 +587,7 @@ export class ProductsService {
       percent: 100,
       is_finished: true,
       importId,
-    }, companyId);
+    });
 
     return {
       message: jobId,
@@ -605,14 +597,9 @@ export class ProductsService {
     };
   }
 
-  async getImportProgress(id: string, authorization?: string) {
-    const context = await this.getImportSessionContext(authorization);
-    const jobRecord = await this.importJobDelegate().findUnique({
-      where: { id },
-    });
-    const job = jobRecord ? this.mapImportJobRecord(jobRecord) : null;
-    const session = job ? await this.resolveImportSession(job.importId, context) : null;
-    if (!job || !session) {
+  getImportProgress(id: string) {
+    const job = IMPORT_JOBS.get(id);
+    if (!job) {
       throw new NotFoundException('Import job not found');
     }
 
@@ -627,9 +614,8 @@ export class ProductsService {
     };
   }
 
-  async getImportItemsDp(id: string, authorization?: string) {
-    const context = await this.getImportSessionContext(authorization);
-    const session = await this.resolveImportSession(id, context);
+  async getImportItemsDp(id: string) {
+    const session = this.resolveImportSession(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
@@ -649,10 +635,8 @@ export class ProductsService {
       page: number;
       difference: boolean;
     },
-    authorization?: string,
   ) {
-    const context = await this.getImportSessionContext(authorization);
-    const session = await this.resolveImportSession(id, context);
+    const session = this.resolveImportSession(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
@@ -710,7 +694,7 @@ export class ProductsService {
       onMatchPolicy,
     );
 
-    await this.persistImportSession({
+    IMPORT_SESSIONS.set(importId, {
       id: importId,
       jobId: '',
       companyId,
@@ -736,18 +720,13 @@ export class ProductsService {
   }
 
   async commitImport(id: string, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
-    const writeContext = this.requireCatalogWriteContext(context);
-    const session = await this.resolveImportSession(id, writeContext);
+    const session = this.resolveImportSession(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
 
-    if (session.status === 'cancelled' || session.status === 'failed') {
-      throw new BadRequestException(
-        `Cannot commit import session with status "${session.status}"`,
-      );
-    }
+    const context = await this.getRequestContext(authorization);
+    const writeContext = this.requireCatalogWriteContext(context);
 
     if (session.status === 'completed' && session.result) {
       return {
@@ -765,7 +744,6 @@ export class ProductsService {
     try {
       session.status = 'importing';
       session.updatedAt = this.formatDateTime(new Date());
-      await this.persistImportSession(session);
       await this.ensureImportPreviewItems(session);
       const result = await this.applyImportRows(
         session.items
@@ -786,12 +764,6 @@ export class ProductsService {
       };
       session.status = 'completed';
       session.updatedAt = this.formatDateTime(new Date());
-      await this.persistImportSession(session);
-    } catch (error) {
-      session.status = 'failed';
-      session.updatedAt = this.formatDateTime(new Date());
-      await this.persistImportSession(session);
-      throw error;
     } finally {
       IMPORT_COMMIT_LOCKS.delete(session.id);
     }
@@ -802,59 +774,30 @@ export class ProductsService {
     };
   }
 
-  async cancelImport(id: string, authorization?: string) {
-    const context = await this.getImportSessionContext(authorization);
-    const session = await this.resolveImportSession(id, context);
+  cancelImport(id: string) {
+    const session = this.resolveImportSession(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
 
-    if (session.status === 'completed') {
-      throw new BadRequestException('Completed import cannot be cancelled');
-    }
-
     session.status = 'cancelled';
     session.updatedAt = this.formatDateTime(new Date());
-    await this.persistImportSession(session);
 
     return this.toImportSessionSummary(session);
   }
 
-  private async resolveImportSession(
-    id: string,
-    context?: {
-      userType?: string;
-      companyId?: string | null;
-    } | null,
-  ) {
-    const directSession = await this.importSessionDelegate().findFirst({
-      where: {
-        id,
-        ...this.buildImportSessionWhere(context),
-      },
-    });
+  private resolveImportSession(id: string) {
+    const directSession = IMPORT_SESSIONS.get(id);
     if (directSession) {
-      return this.mapImportSessionRecord(directSession);
+      return directSession;
     }
 
-    const job = await this.importJobDelegate().findUnique({
-      where: { id },
-    });
+    const job = IMPORT_JOBS.get(id);
     if (!job) {
       return undefined;
     }
 
-    const session = await this.importSessionDelegate().findFirst({
-      where: {
-        id: job.importId,
-        ...this.buildImportSessionWhere(context),
-      },
-    });
-    if (!session) {
-      return undefined;
-    }
-
-    return this.mapImportSessionRecord(session);
+    return IMPORT_SESSIONS.get(job.importId);
   }
 
   private async ensureImportPreviewItems(session: ImportSession) {
@@ -871,7 +814,6 @@ export class ProductsService {
     );
     session.dryRunSummary = this.buildImportDryRunSummary(session.items);
     session.updatedAt = this.formatDateTime(new Date());
-    await this.persistImportSession(session);
 
     return session.items;
   }
@@ -1038,209 +980,6 @@ export class ProductsService {
     return requestedCompanyId;
   }
 
-  private async getImportSessionContext(authorization?: string) {
-    const context = await this.getRequestContext(authorization);
-    return this.requireCatalogWriteContext(context);
-  }
-
-  private buildImportSessionWhere(context?: {
-    userType?: string;
-    companyId?: string | null;
-  } | null): Record<string, unknown> {
-    if (context?.userType === 'company') {
-      return {
-        companyId: context.companyId ?? '',
-      };
-    }
-
-    return {};
-  }
-
-  private canAccessImportSession(
-    session: ImportSession,
-    context?: {
-      userType?: string;
-      companyId?: string | null;
-    } | null,
-  ) {
-    if (!context) {
-      return false;
-    }
-
-    if (context.userType === 'platform') {
-      return true;
-    }
-
-    if (context.userType === 'company') {
-      return context.companyId === session.companyId;
-    }
-
-    return false;
-  }
-
-  private mapImportSessionRecord(record: {
-    id: string;
-    jobId: string | null;
-    companyId: string;
-    shopId: string;
-    branchCode: string;
-    name: string;
-    mode: string;
-    status: string;
-    fields: Prisma.JsonValue;
-    rows: Prisma.JsonValue;
-    items: Prisma.JsonValue;
-    onMatchPolicy: Prisma.JsonValue;
-    dryRunSummary: Prisma.JsonValue | null;
-    result: Prisma.JsonValue | null;
-    createdAt: Date;
-    updatedAt: Date;
-  }): ImportSession {
-    return {
-      id: record.id,
-      jobId: record.jobId ?? '',
-      companyId: record.companyId,
-      shopId: record.shopId,
-      branchCode: record.branchCode,
-      name: record.name,
-      mode: record.mode as ImportSession['mode'],
-      status: record.status as ImportSession['status'],
-      fields: Array.isArray(record.fields)
-        ? (record.fields as ImportSession['fields'])
-        : [],
-      rows: Array.isArray(record.rows)
-        ? (record.rows as ImportRowInput[])
-        : [],
-      items: Array.isArray(record.items)
-        ? (record.items as PreparedImportItem[])
-        : [],
-      onMatchPolicy: record.onMatchPolicy as ImportOnMatchPolicy,
-      dryRunSummary:
-        (record.dryRunSummary as ImportDryRunSummary | null) ?? undefined,
-      result:
-        (record.result as ImportSession['result'] | null) ?? undefined,
-      createdAt: this.formatDateTime(record.createdAt),
-      updatedAt: this.formatDateTime(record.updatedAt),
-    };
-  }
-
-  private mapImportJobRecord(record: {
-    id: string;
-    correlationId: string;
-    message: string;
-    total: number;
-    current: number;
-    percent: number;
-    isFinished: boolean;
-    importId: string;
-  }): ImportJob & { id: string } {
-    return {
-      id: record.id,
-      correlation_id: record.correlationId,
-      message: record.message,
-      total: record.total,
-      current: record.current,
-      percent: record.percent,
-      is_finished: record.isFinished,
-      importId: record.importId,
-    };
-  }
-
-  private importSessionDelegate() {
-    return (this.prisma as PrismaService & {
-      importSession: {
-        findMany: (args: Record<string, unknown>) => Promise<any[]>;
-        count: (args: Record<string, unknown>) => Promise<number>;
-        findFirst: (args: Record<string, unknown>) => Promise<any | null>;
-        upsert: (args: Record<string, unknown>) => Promise<any>;
-      };
-    }).importSession;
-  }
-
-  private importJobDelegate() {
-    return (this.prisma as PrismaService & {
-      importJob: {
-        findUnique: (args: Record<string, unknown>) => Promise<any | null>;
-        upsert: (args: Record<string, unknown>) => Promise<any>;
-      };
-    }).importJob;
-  }
-
-  private async persistImportSession(session: ImportSession) {
-    await this.importSessionDelegate().upsert({
-      where: {
-        id: session.id,
-      },
-      create: {
-        id: session.id,
-        jobId: session.jobId || null,
-        companyId: session.companyId,
-        shopId: session.shopId,
-        branchCode: session.branchCode,
-        name: session.name,
-        mode: session.mode,
-        status: session.status,
-        fields: session.fields as Prisma.InputJsonValue,
-        rows: session.rows as Prisma.InputJsonValue,
-        items: session.items as Prisma.InputJsonValue,
-        onMatchPolicy: session.onMatchPolicy as Prisma.InputJsonValue,
-        dryRunSummary:
-          (session.dryRunSummary as Prisma.InputJsonValue | undefined) ?? undefined,
-        result: (session.result as Prisma.InputJsonValue | undefined) ?? undefined,
-        createdAt: new Date(session.createdAt),
-        updatedAt: new Date(session.updatedAt),
-      },
-      update: {
-        jobId: session.jobId || null,
-        shopId: session.shopId,
-        branchCode: session.branchCode,
-        name: session.name,
-        mode: session.mode,
-        status: session.status,
-        fields: session.fields as Prisma.InputJsonValue,
-        rows: session.rows as Prisma.InputJsonValue,
-        items: session.items as Prisma.InputJsonValue,
-        onMatchPolicy: session.onMatchPolicy as Prisma.InputJsonValue,
-        dryRunSummary:
-          (session.dryRunSummary as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
-        result:
-          (session.result as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
-        updatedAt: new Date(session.updatedAt),
-      },
-    });
-  }
-
-  private async persistImportJob(
-    job: ImportJob & { id: string },
-    companyId: string,
-  ) {
-    await this.importJobDelegate().upsert({
-      where: {
-        id: job.id,
-      },
-      create: {
-        id: job.id,
-        correlationId: job.correlation_id,
-        message: job.message,
-        total: job.total,
-        current: job.current,
-        percent: job.percent,
-        isFinished: job.is_finished,
-        importId: job.importId,
-        companyId,
-      },
-      update: {
-        correlationId: job.correlation_id,
-        message: job.message,
-        total: job.total,
-        current: job.current,
-        percent: job.percent,
-        isFinished: job.is_finished,
-        importId: job.importId,
-        companyId,
-      },
-    });
-  }
 
   async findAll({ page, limit, search }: FindProductsArgs, authorization?: string) {
     const context = await this.getRequestContext(authorization);
