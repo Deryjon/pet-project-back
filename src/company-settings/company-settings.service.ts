@@ -326,6 +326,7 @@ const DEFAULT_SHOPS: ShopProfile[] = [
     id: 'be25385b-8db2-4d96-8240-f1bb6bb3420c',
     company_id: DEFAULT_COMPANY_ID,
     name: 'Globus Mall',
+    branch_code: 'a',
     address: '',
     phone_numbers: [],
     cash_boxes_count: 1,
@@ -343,6 +344,7 @@ const DEFAULT_SHOPS: ShopProfile[] = [
     id: '11dc3536-e1ce-447b-aedb-ce3784c4b1ad',
     company_id: DEFAULT_COMPANY_ID,
     name: 'Samarqand Darvoza',
+    branch_code: 'main',
     address: '',
     phone_numbers: [''],
     cash_boxes_count: 1,
@@ -513,6 +515,7 @@ export class CompanySettingsService {
     limit?: number;
     name?: string;
     companyId?: string;
+    allowedShopIds?: string[];
   }) {
     const safeLimit = this.normalizeLimit(query.limit, 10);
     const safePage = Math.max(1, Number(query.page) || 1);
@@ -521,6 +524,13 @@ export class CompanySettingsService {
     const dbShops = await this.db.shop.findMany({
       where: {
         companyId,
+        ...(query.allowedShopIds?.length
+          ? {
+              id: {
+                in: query.allowedShopIds,
+              },
+            }
+          : {}),
         ...(normalizedName
           ? {
               name: {
@@ -554,25 +564,9 @@ export class CompanySettingsService {
       };
     }
 
-    const shops = this.parseJsonArray<ShopProfile>(
-      process.env.SHOPS_JSON,
-      DEFAULT_SHOPS,
-    );
-
-    const allForCompany = shops.filter(
-      (shop) => this.stringOrDefault(shop.company_id, '') === companyId,
-    );
-    const filtered = allForCompany.filter(
-      (shop) =>
-        !normalizedName ||
-        this.stringOrDefault(shop.name, '')
-          .toLowerCase()
-          .includes(normalizedName),
-    );
-
     return {
-      count: filtered.length,
-      shops: filtered.slice((safePage - 1) * safeLimit, safePage * safeLimit),
+      count: 0,
+      shops: [],
     };
   }
 

@@ -1,10 +1,22 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Headers,
+  Param,
+  Post,
+  Put,
+  Query,
+} from '@nestjs/common';
 import { CompanySettingsService } from './company-settings.service';
+import { UsersService } from '../users/users.service';
 
 @Controller()
 export class CompanySettingsController {
   constructor(
     private readonly companySettingsService: CompanySettingsService,
+    private readonly usersService: UsersService,
   ) {}
 
   @Get('default-currency')
@@ -41,18 +53,25 @@ export class CompanySettingsController {
 
   @Get('shop')
   @Get('v1/shop')
-  getShops(
+  async getShops(
     @Query('limit') limit?: string,
     @Query('page') page?: string,
     @Query('name') name?: string,
     @Query('company_id') companyId?: string,
-    @Query('only_allowed') _onlyAllowed?: string,
+    @Query('only_allowed') onlyAllowed?: string,
+    @Headers('authorization') authorization?: string,
   ) {
+    const shouldUseAllowed = onlyAllowed === 'true';
+    const context = authorization
+      ? await this.usersService.getRequestContext(authorization)
+      : null;
+
     return this.companySettingsService.getShops({
       limit: Number(limit),
       page: Number(page),
       name,
-      companyId,
+      companyId: companyId || context?.companyId || undefined,
+      allowedShopIds: shouldUseAllowed ? (context?.allowedShopIds ?? []) : undefined,
     });
   }
 
