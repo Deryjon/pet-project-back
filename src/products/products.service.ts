@@ -4226,6 +4226,27 @@ export class ProductsService {
       return shop.branchCode;
     }
 
+    const shopDirectory = await this.companySettingsService.getShops({
+      page: 1,
+      limit: 1000,
+      companyId: context?.companyId,
+    });
+    const shopFromDirectory = shopDirectory.shops.find((item) => {
+      if (!item || typeof item !== 'object') {
+        return false;
+      }
+
+      const candidate = item as Record<string, unknown>;
+      const id = this.optionalString(candidate.id);
+      return id === normalizedIdentifier;
+    });
+    const directoryBranchCode = this.optionalString(
+      (shopFromDirectory as Record<string, unknown> | undefined)?.branch_code,
+    );
+    if (directoryBranchCode) {
+      return directoryBranchCode;
+    }
+
     const legacyBranchCode = this.resolveBranchCodeByShopId(normalizedIdentifier);
     if (legacyBranchCode) {
       const legacyShop = await this.prisma.shop.findFirst({
