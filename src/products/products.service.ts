@@ -547,15 +547,29 @@ export class ProductsService {
   ) {
     const context = await this.getRequestContext(authorization);
     const writeContext = this.requireCatalogWriteContext(context);
-    const companyId = this.resolveImportCompanyId(body, writeContext);
-    const shopId = this.requireString(body.shop_id, 'shop_id');
-    const branchCode = await this.resolveBranchCodeForWrite(shopId, writeContext);
-    const rows = this.extractImportRows(body);
     const importId =
       this.optionalString(body.import_id) ??
       this.optionalString(body.id) ??
       randomUUID();
     const existingSession = IMPORT_SESSIONS.get(importId);
+    const shopId =
+      this.optionalString(body.shop_id) ?? existingSession?.shopId ?? '';
+
+    if (!shopId) {
+      throw new BadRequestException('shop_id must be a non-empty string');
+    }
+
+    const companyId = this.resolveImportCompanyId(
+      existingSession
+        ? {
+            ...body,
+            company_id: this.optionalString(body.company_id) ?? existingSession.companyId,
+          }
+        : body,
+      writeContext,
+    );
+    const branchCode = await this.resolveBranchCodeForWrite(shopId, writeContext);
+    const rows = this.extractImportRows(body);
     const jobId = randomUUID();
     const fields = this.extractImportFields(body);
     const onMatchPolicy =
