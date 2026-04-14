@@ -326,6 +326,7 @@ const DEFAULT_SHOPS: ShopProfile[] = [
     id: 'be25385b-8db2-4d96-8240-f1bb6bb3420c',
     company_id: DEFAULT_COMPANY_ID,
     name: 'Globus Mall',
+    branch_code: 'a',
     address: '',
     phone_numbers: [],
     cash_boxes_count: 1,
@@ -343,6 +344,7 @@ const DEFAULT_SHOPS: ShopProfile[] = [
     id: '11dc3536-e1ce-447b-aedb-ce3784c4b1ad',
     company_id: DEFAULT_COMPANY_ID,
     name: 'Samarqand Darvoza',
+    branch_code: 'main',
     address: '',
     phone_numbers: [''],
     cash_boxes_count: 1,
@@ -572,7 +574,17 @@ export class CompanySettingsService {
 
     return {
       count: filtered.length,
-      shops: filtered.slice((safePage - 1) * safeLimit, safePage * safeLimit),
+      shops: filtered
+        .slice((safePage - 1) * safeLimit, safePage * safeLimit)
+        .map((shop) => {
+          const branchCode = this.stringOrDefault(shop.branch_code, '')
+            || this.stringOrDefault(shop.branchCode, '');
+
+          return {
+            ...shop,
+            branch_code: branchCode,
+          };
+        }),
     };
   }
 
