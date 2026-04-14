@@ -462,13 +462,7 @@ export class ProductsService {
       this.extractImportOnMatchPolicy(body) ?? this.defaultImportOnMatchPolicy();
     const now = this.formatDateTime(new Date());
     const importId = randomUUID();
-    const mode = 'without_check' as const;
-    const result = await this.applyImportRows(
-      rows,
-      companyId,
-      branchCode,
-      onMatchPolicy,
-    );
+    const mode = this.parseImportMode(body.mode);
 
     const session: ImportSession = {
       id: importId,
@@ -478,23 +472,20 @@ export class ProductsService {
       branchCode,
       name: this.requireString(body.name, 'name'),
       mode,
-      status: 'completed',
+      status: 'draft',
       fields,
       rows,
       items: [],
       onMatchPolicy,
       dryRunSummary: undefined,
-      result,
+      result: undefined,
       createdAt: now,
       updatedAt: now,
     };
 
     IMPORT_SESSIONS.set(importId, session);
 
-    return {
-      ...this.toImportSessionSummary(session),
-      result,
-    };
+    return this.toImportSessionSummary(session);
   }
 
   listImports(query: { page?: number; limit?: number }) {
