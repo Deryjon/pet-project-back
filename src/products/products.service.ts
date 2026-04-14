@@ -380,10 +380,11 @@ const SHOP_BY_BRANCH_CODE: Record<
   string,
   { shop_id: string; shop_name: string; id?: string; aliases?: string[] }
 > = {
-  main: {
+  sd_mall: {
     id: 'eaca6237-dc5c-4d4b-83e5-62a1eeb9a89a',
     shop_id: '11dc3536-e1ce-447b-aedb-ce3784c4b1ad',
     shop_name: 'Samarqand Darvoza',
+    aliases: ['main'],
   },
   globus_mall: {
     id: '5a256a71-34c1-42a0-a84d-1061bf84eb6c',
