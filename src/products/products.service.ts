@@ -462,13 +462,7 @@ export class ProductsService {
       this.extractImportOnMatchPolicy(body) ?? this.defaultImportOnMatchPolicy();
     const now = this.formatDateTime(new Date());
     const importId = randomUUID();
-    const mode = 'without_check' as const;
-    const result = await this.applyImportRows(
-      rows,
-      companyId,
-      branchCode,
-      onMatchPolicy,
-    );
+    const mode = this.parseImportMode(body.mode);
 
     const session: ImportSession = {
       id: importId,
@@ -478,23 +472,20 @@ export class ProductsService {
       branchCode,
       name: this.requireString(body.name, 'name'),
       mode,
-      status: 'completed',
+      status: 'draft',
       fields,
       rows,
       items: [],
       onMatchPolicy,
       dryRunSummary: undefined,
-      result,
+      result: undefined,
       createdAt: now,
       updatedAt: now,
     };
 
     IMPORT_SESSIONS.set(importId, session);
 
-    return {
-      ...this.toImportSessionSummary(session),
-      result,
-    };
+    return this.toImportSessionSummary(session);
   }
 
   listImports(query: { page?: number; limit?: number }) {
@@ -521,6 +512,7 @@ export class ProductsService {
       ...this.toImportSessionSummary(session),
       fields: session.fields,
       rows_count: session.rows.length,
+      rows: session.rows,
       dry_run_summary: session.dryRunSummary ?? null,
       result: session.result ?? null,
     };
@@ -4234,9 +4226,42 @@ export class ProductsService {
       return shop.branchCode;
     }
 
+    const shopDirectory = await this.companySettingsService.getShops({
+      page: 1,
+      limit: 1000,
+      companyId: context?.companyId,
+    });
+    const shopFromDirectory = shopDirectory.shops.find((item) => {
+      if (!item || typeof item !== 'object') {
+        return false;
+      }
+
+      const candidate = item as Record<string, unknown>;
+      const id = this.optionalString(candidate.id);
+      return id === normalizedIdentifier;
+    });
+    const directoryBranchCode = this.optionalString(
+      (shopFromDirectory as Record<string, unknown> | undefined)?.branch_code,
+    );
+    if (directoryBranchCode) {
+      return directoryBranchCode;
+    }
+
     const legacyBranchCode = this.resolveBranchCodeByShopId(normalizedIdentifier);
     if (legacyBranchCode) {
-      return legacyBranchCode;
+      const legacyShop = await this.prisma.shop.findFirst({
+        where: {
+          branchCode: legacyBranchCode,
+          ...(context?.companyId ? { companyId: context.companyId } : {}),
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      if (legacyShop) {
+        return legacyBranchCode;
+      }
     }
 
     return normalizedIdentifier;
