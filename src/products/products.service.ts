@@ -512,6 +512,7 @@ export class ProductsService {
       ...this.toImportSessionSummary(session),
       fields: session.fields,
       rows_count: session.rows.length,
+      rows: session.rows,
       dry_run_summary: session.dryRunSummary ?? null,
       result: session.result ?? null,
     };
