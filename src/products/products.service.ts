@@ -628,6 +628,7 @@ export class ProductsService {
       const commitResult = await this.commitImport(importId, authorization);
       return {
         message: jobId,
+        job_id: jobId,
         correlation_id: importId,
         import_id: importId,
         dry_run_summary: dryRunSummary,
@@ -638,6 +639,7 @@ export class ProductsService {
 
     return {
       message: jobId,
+      job_id: jobId,
       correlation_id: importId,
       import_id: importId,
       dry_run_summary: dryRunSummary,
@@ -646,7 +648,10 @@ export class ProductsService {
   }
 
   getImportProgress(id: string) {
-    const job = IMPORT_JOBS.get(id);
+    const resolvedJobId = IMPORT_JOBS.has(id)
+      ? id
+      : this.resolveImportSession(id)?.jobId ?? '';
+    const job = resolvedJobId ? IMPORT_JOBS.get(resolvedJobId) : undefined;
     if (!job) {
       throw new NotFoundException('Import job not found');
     }
