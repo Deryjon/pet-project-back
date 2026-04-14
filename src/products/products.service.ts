@@ -4228,7 +4228,19 @@ export class ProductsService {
 
     const legacyBranchCode = this.resolveBranchCodeByShopId(normalizedIdentifier);
     if (legacyBranchCode) {
-      return legacyBranchCode;
+      const legacyShop = await this.prisma.shop.findFirst({
+        where: {
+          branchCode: legacyBranchCode,
+          ...(context?.companyId ? { companyId: context.companyId } : {}),
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      if (legacyShop) {
+        return legacyBranchCode;
+      }
     }
 
     return normalizedIdentifier;
