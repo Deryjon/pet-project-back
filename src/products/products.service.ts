@@ -569,7 +569,12 @@ export class ProductsService {
       writeContext,
     );
     const branchCode = await this.resolveBranchCodeForWrite(shopId, writeContext);
-    const rows = this.extractImportRows(body);
+    const rows =
+      Array.isArray(body.rows) ? this.extractImportRows(body) : existingSession?.rows ?? [];
+
+    if (!rows.length) {
+      throw new BadRequestException('rows must be an array');
+    }
     const jobId = randomUUID();
     const fields = this.extractImportFields(body);
     const onMatchPolicy =
