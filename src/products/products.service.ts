@@ -385,10 +385,11 @@ const SHOP_BY_BRANCH_CODE: Record<
     shop_id: '11dc3536-e1ce-447b-aedb-ce3784c4b1ad',
     shop_name: 'Samarqand Darvoza',
   },
-  a: {
+  globus_mall: {
     id: '5a256a71-34c1-42a0-a84d-1061bf84eb6c',
     shop_id: 'be25385b-8db2-4d96-8240-f1bb6bb3420c',
     shop_name: 'Globus Mall',
+    aliases: ['a'],
   },
 };
 
