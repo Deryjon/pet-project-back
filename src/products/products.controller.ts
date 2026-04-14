@@ -60,11 +60,12 @@ export class ProductsController {
   listImports(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Headers('authorization') authorization?: string,
   ) {
     return this.productsService.listImports({
       page: Number(page) || 1,
       limit: Number(limit) || 10,
-    });
+    }, authorization);
   }
 
   @Get('v2/imports/:id')

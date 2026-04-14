@@ -148,6 +148,11 @@ type ImportDryRunSummary = {
   conflict_fields: Record<string, number>;
 };
 
+type LegacyImportActor = {
+  id: string;
+  name: string;
+};
+
 type ImportAuditRow = {
   row: number;
   action: 'create' | 'update' | 'error';
@@ -363,6 +368,14 @@ const DEFAULT_MEASUREMENT_UNIT = {
   is_default: false,
 };
 const DEFAULT_EMPTY_SUPPLIER_ID = '00000000-0000-0000-0000-000000000000';
+const IMPORT_TYPE_WITH_CHECK_ID = 'a230b02b-46f8-42f4-885e-d81813c297d6';
+const IMPORT_TYPE_WITHOUT_CHECK_ID = 'fd152773-2e12-4c1a-8fb5-a7d5c9955750';
+const IMPORT_STATUS_COMPLETED_ID = '31cd30a7-46ae-460c-9530-7c2df1356b62';
+const IMPORT_STATUS_IN_PROGRESS_ID = 'f5e9f7df-9d5a-4b28-9b97-6c436caf3bf2';
+const DEFAULT_IMPORT_ACTOR: LegacyImportActor = {
+  id: '54a76f3a-afc4-405d-913f-6bd1ef01c951',
+  name: 'Iskandarjon Yusupov',
+};
 const SHOP_BY_BRANCH_CODE: Record<
   string,
   { shop_id: string; shop_name: string; id?: string; aliases?: string[] }
@@ -488,17 +501,27 @@ export class ProductsService {
     return this.toImportSessionSummary(session);
   }
 
-  listImports(query: { page?: number; limit?: number }) {
+  async listImports(
+    query: { page?: number; limit?: number },
+    authorization?: string,
+  ) {
     const safePage = Math.max(1, query.page ?? 1);
     const safeLimit = Math.min(Math.max(1, query.limit ?? 10), 100);
-    const items = [...IMPORT_SESSIONS.values()]
+    const context = await this.getRequestContext(authorization);
+    const imports = [...IMPORT_SESSIONS.values()]
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice((safePage - 1) * safeLimit, safePage * safeLimit)
-      .map((session) => this.toImportSessionSummary(session));
+      .map((session, index) =>
+        this.toLegacyImportListItem(
+          session,
+          (safePage - 1) * safeLimit + index,
+          context,
+        ),
+      );
 
     return {
+      imports,
       count: IMPORT_SESSIONS.size,
-      items,
     };
   }
 
@@ -953,6 +976,135 @@ export class ProductsService {
       dry_run_summary: session.dryRunSummary ?? null,
       result: session.result ?? null,
     };
+  }
+
+  private toLegacyImportListItem(
+    session: ImportSession,
+    index: number,
+    context?: {
+      userId?: number;
+      fullName?: string;
+    } | null,
+  ) {
+    const shop = this.resolveShopByBranchCode(session.branchCode);
+    const totals = this.buildLegacyImportTotals(session);
+    const actor = this.resolveLegacyImportActor(session, context);
+    const finishedActor =
+      session.status === 'completed' ? actor : { id: '', name: '' };
+    const processJob = session.jobId ? IMPORT_JOBS.get(session.jobId) : undefined;
+    const processPercentage =
+      processJob?.percent ??
+      (session.status === 'completed'
+        ? 100
+        : session.status === 'preview_ready'
+          ? 100
+          : session.status === 'importing'
+            ? 50
+            : 0);
+    const legacyNumericId = this.buildLegacyImportNumericId(session, index);
+
+    return {
+      id: session.id,
+      external_id: String(1000000 + legacyNumericId),
+      company_id: session.companyId ?? '',
+      name: session.name,
+      shop_id: shop.shop_id,
+      shop_name: shop.shop_name,
+      import_type_id:
+        session.mode === 'without_check'
+          ? IMPORT_TYPE_WITHOUT_CHECK_ID
+          : IMPORT_TYPE_WITH_CHECK_ID,
+      import_status_id:
+        session.status === 'completed'
+          ? IMPORT_STATUS_COMPLETED_ID
+          : IMPORT_STATUS_IN_PROGRESS_ID,
+      total_loaded_measurement_value: totals.totalLoadedMeasurementValue,
+      total_arrived_measurement_value: totals.totalArrivedMeasurementValue,
+      total_sold_measurement_value: 0,
+      total_supply_price: totals.totalSupplyPrice,
+      total_retail_price: totals.totalRetailPrice,
+      import_items: null,
+      suppliers: null,
+      comment: '',
+      created_at: session.createdAt,
+      created_by: actor,
+      finished_at: session.result?.committed_at ?? session.updatedAt,
+      finished_by: finishedActor,
+      session_id: '',
+      process_percentage: processPercentage,
+      total_processed_measurement_value: 0,
+      stocktaking_id: '',
+      process_id: session.jobId,
+      int_id: 12000000 + legacyNumericId,
+    };
+  }
+
+  private buildLegacyImportTotals(session: ImportSession) {
+    const sourceRows = session.items.length
+      ? session.items.map((item) => ({
+          quantity: item.measurement_value,
+          supplyPrice: item.supply_price,
+          retailPrice: item.retail_price,
+        }))
+      : session.rows.map((row) => ({
+          quantity: row.quantity,
+          supplyPrice: row.supplyPrice,
+          retailPrice: row.retailPrice,
+        }));
+
+    const totalLoadedMeasurementValue = sourceRows.reduce(
+      (sum, row) => sum + row.quantity,
+      0,
+    );
+
+    return {
+      totalLoadedMeasurementValue,
+      totalArrivedMeasurementValue: totalLoadedMeasurementValue,
+      totalSupplyPrice: sourceRows.reduce(
+        (sum, row) => sum + row.quantity * row.supplyPrice,
+        0,
+      ),
+      totalRetailPrice: sourceRows.reduce(
+        (sum, row) => sum + row.quantity * row.retailPrice,
+        0,
+      ),
+    };
+  }
+
+  private resolveLegacyImportActor(
+    session: ImportSession,
+    context?: {
+      userId?: number;
+      fullName?: string;
+    } | null,
+  ): LegacyImportActor {
+    const committedBy = session.result?.committed_by;
+    if (committedBy) {
+      return {
+        id: String(committedBy.user_id),
+        name: committedBy.full_name,
+      };
+    }
+
+    if (context?.userId && context.fullName) {
+      return {
+        id: String(context.userId),
+        name: context.fullName,
+      };
+    }
+
+    return DEFAULT_IMPORT_ACTOR;
+  }
+
+  private buildLegacyImportNumericId(session: ImportSession, index: number) {
+    const seed = `${session.id}:${session.createdAt}:${index}`;
+    let hash = 0;
+
+    for (let cursor = 0; cursor < seed.length; cursor += 1) {
+      hash = (hash * 31 + seed.charCodeAt(cursor)) % 100000;
+    }
+
+    return hash;
   }
 
   private resolveImportCompanyId(
