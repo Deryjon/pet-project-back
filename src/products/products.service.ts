@@ -4218,6 +4218,22 @@ export class ProductsService {
       }
     }
 
+    const shop = await this.prisma.shop.findFirst({
+      where: {
+        OR: [
+          { id: normalizedIdentifier },
+          { branchCode: normalizedIdentifier },
+        ],
+      },
+      select: {
+        branchCode: true,
+      },
+    });
+
+    if (shop) {
+      return shop.branchCode;
+    }
+
     const legacyBranchCode = this.resolveBranchCodeByShopId(normalizedIdentifier);
     if (legacyBranchCode) {
       return legacyBranchCode;
