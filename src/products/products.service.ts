@@ -2260,7 +2260,6 @@ export class ProductsService {
 
   private toProductResponseV2(product: {
     id: number;
-    publicId: string;
     name: string;
     sku: string | null;
     barcode: string | null;
@@ -2325,7 +2324,7 @@ export class ProductsService {
 
     return {
       id: String(product.id),
-      public_id: product.publicId,
+      public_id: this.getProductPublicId(product),
       company_id: COMPANY_ID,
       name: product.name,
       sku: product.sku,
@@ -2517,9 +2516,9 @@ export class ProductsService {
     const primarySupplier = product.suppliers[0]?.supplier;
 
     return {
-      id: product.publicId,
+      id: this.getProductPublicId(product),
       internal_id: String(product.id),
-      public_id: product.publicId,
+      public_id: this.getProductPublicId(product),
       parent_id: '',
       company_id: product.companyId ?? context?.companyId ?? COMPANY_ID,
       product_type_id: product.productType ?? DEFAULT_PRODUCT_TYPE_ID,
@@ -2849,7 +2848,7 @@ export class ProductsService {
       description: this.optionalString(body.description) ?? '',
       free_price: false,
       id: String(product.id),
-      public_id: product.publicId,
+      public_id: this.getProductPublicId(product),
       is_archived: false,
       is_marked: this.toBooleanValue(body.is_marked),
       is_scalable: false,
@@ -3809,7 +3808,7 @@ export class ProductsService {
 
     return {
       id: String(product.id),
-      public_id: product.publicId,
+      public_id: this.getProductPublicId(product),
       company_id: product.companyId ?? '',
       name: product.name,
       sku: product.sku ?? '',
@@ -4985,13 +4984,25 @@ export class ProductsService {
     const parsed = Number(normalized);
     if (Number.isInteger(parsed) && String(parsed) === normalized) {
       return {
-        OR: [{ id: parsed }, { publicId: normalized }],
-      };
+        OR: [
+          { id: parsed },
+          { publicId: normalized } as unknown as Prisma.ProductWhereInput,
+        ],
+      } as Prisma.ProductWhereInput;
     }
 
     return {
       publicId: normalized,
-    };
+    } as unknown as Prisma.ProductWhereInput;
+  }
+
+  private getProductPublicId(product: { id: number } & Record<string, unknown>) {
+    const publicId =
+      typeof (product as Record<string, unknown>).publicId === 'string'
+        ? ((product as Record<string, unknown>).publicId as string).trim()
+        : '';
+
+    return publicId || String(product.id);
   }
 
   private async resolveSupplierIdsForCompany(
