@@ -141,6 +141,7 @@ model Supplier {
 
 model Product {
   id             Int               @id @default(autoincrement())
+  publicId       String            @default(uuid()) @unique
   companyId      String?
   photo          String?
   name           String
