@@ -38,6 +38,8 @@ type ShopProfile = Record<string, unknown>;
 type CompanyPaymentType = Record<string, unknown>;
 type CashBoxProfile = Record<string, unknown>;
 type ChequeProfile = Record<string, unknown>;
+type MeasurementUnitProfile = Record<string, unknown>;
+type PriceTagProfile = Record<string, unknown>;
 
 const DEFAULT_COMPANY_ID =
   process.env.COMPANY_ID ?? '3b791c40-5394-49ea-8779-fcf8af1459ee';
@@ -388,6 +390,49 @@ const DEFAULT_CHEQUES: ChequeProfile[] = [
   },
 ];
 
+const DEFAULT_MEASUREMENT_UNIT: MeasurementUnitProfile = {
+  id: '12a69bc0-c575-4586-9f0f-76e8295d4139',
+  name: 'Штука',
+  company_id: DEFAULT_COMPANY_ID,
+  short_name: 'шт',
+  precision: '1',
+  is_editable: false,
+  is_default: true,
+};
+
+const DEFAULT_PRICE_TAGS: PriceTagProfile[] = [
+  {
+    id: '157cb24e-4d81-4aee-a199-29a79c7e2617',
+    company_id: DEFAULT_COMPANY_ID,
+    name: 'маленький размер',
+    width: 40,
+    length: 20,
+    barcode_type: 'CODE128',
+    barcode_type_id: 'db83218c-a8d0-41fe-b981-c38d280321be',
+    properties: null,
+  },
+  {
+    id: 'fe27e598-45bb-4025-aa82-e001bd3dc88b',
+    company_id: DEFAULT_COMPANY_ID,
+    name: 'hh',
+    width: 40,
+    length: 20,
+    barcode_type: 'CODE128',
+    barcode_type_id: 'db83218c-a8d0-41fe-b981-c38d280321be',
+    properties: null,
+  },
+  {
+    id: '4c4a47e1-02ae-4fba-9cfb-1fa3746824ed',
+    company_id: DEFAULT_COMPANY_ID,
+    name: 'Ценник 1',
+    width: 40,
+    length: 20,
+    barcode_type: 'EAN13',
+    barcode_type_id: '5517af95-ea38-444e-bf19-90fe4e9e4df7',
+    properties: null,
+  },
+];
+
 @Injectable()
 export class CompanySettingsService {
   private companyPaymentTypesStore?: CompanyPaymentType[];
@@ -567,6 +612,48 @@ export class CompanySettingsService {
     return {
       count: 0,
       shops: [],
+    };
+  }
+
+  getMeasurementUnitById(id: string, companyId?: string) {
+    const measurementUnitId = this.requireString(id, 'id');
+    const targetCompanyId = companyId?.trim() || DEFAULT_COMPANY_ID;
+    const configuredUnits = this.parseJsonArray<MeasurementUnitProfile>(
+      process.env.MEASUREMENT_UNITS_JSON,
+      [DEFAULT_MEASUREMENT_UNIT],
+    );
+
+    const matchedUnit = configuredUnits.find(
+      (unit) => this.stringOrDefault(unit.id, '') === measurementUnitId,
+    );
+
+    if (matchedUnit) {
+      return {
+        ...matchedUnit,
+        company_id: this.stringOrDefault(matchedUnit.company_id, targetCompanyId),
+      };
+    }
+
+    return {
+      ...DEFAULT_MEASUREMENT_UNIT,
+      id: measurementUnitId,
+      company_id: targetCompanyId,
+      is_default: measurementUnitId === DEFAULT_MEASUREMENT_UNIT.id,
+    };
+  }
+
+  getPriceTags(companyId?: string) {
+    const targetCompanyId = companyId?.trim() || DEFAULT_COMPANY_ID;
+    const configuredPriceTags = this.parseJsonArray<PriceTagProfile>(
+      process.env.PRICE_TAGS_JSON,
+      DEFAULT_PRICE_TAGS,
+    );
+
+    return {
+      price_tags: configuredPriceTags.map((priceTag) => ({
+        ...priceTag,
+        company_id: targetCompanyId,
+      })),
     };
   }
 

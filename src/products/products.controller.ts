@@ -235,6 +235,14 @@ export class ProductsController {
     }, authorization);
   }
 
+  @Get('v2/product/:id')
+  getProductById(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.getProductById(id, authorization);
+  }
+
   @Post('v2/product')
   @HttpCode(200)
   findAllV2Post(
@@ -296,6 +304,14 @@ export class ProductsController {
     return this.productsService.updateCatalogProduct(id, body, authorization);
   }
 
+  @Put('v2/products/bulk/archive')
+  bulkArchiveProducts(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.bulkArchiveProducts(body, authorization);
+  }
+
   @Post('v2/product/generate-sku')
   generateSku(@Body() body: Record<string, unknown>) {
     return this.productsService.generateSku(body);
@@ -304,6 +320,27 @@ export class ProductsController {
   @Post('v2/product/generate-barcode')
   generateBarcode() {
     return this.productsService.generateBarcode();
+  }
+
+  @Get('v2/product-movement/:id')
+  getProductMovement(
+    @Param('id') id: string,
+    @Query('limit') limit?: string,
+    @Query('page') page?: string,
+    @Query('from_created_at') fromCreatedAt?: string,
+    @Query('to_created_at') toCreatedAt?: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.getProductMovement(
+      id,
+      {
+        limit: Number(limit) || 10,
+        page: Number(page) || 1,
+        fromCreatedAt: fromCreatedAt?.trim(),
+        toCreatedAt: toCreatedAt?.trim(),
+      },
+      authorization,
+    );
   }
 
   @Post('v2/product-search-with-filters')

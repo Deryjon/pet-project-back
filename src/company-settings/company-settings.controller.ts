@@ -75,6 +75,37 @@ export class CompanySettingsController {
     });
   }
 
+  @Get('v2/measurement-unit/:id')
+  async getMeasurementUnit(
+    @Param('id') id: string,
+    @Query('company_id') companyId?: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const context = authorization
+      ? await this.usersService.getRequestContext(authorization)
+      : null;
+
+    return this.companySettingsService.getMeasurementUnitById(
+      id,
+      companyId || context?.companyId || undefined,
+    );
+  }
+
+  @Get('price-tag')
+  @Get('v1/price-tag')
+  async getPriceTags(
+    @Query('company_id') companyId?: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const context = authorization
+      ? await this.usersService.getRequestContext(authorization)
+      : null;
+
+    return this.companySettingsService.getPriceTags(
+      companyId || context?.companyId || undefined,
+    );
+  }
+
   @Get('cheque')
   @Get('v1/cheque')
   getCheque(@Query('limit') limit?: string) {

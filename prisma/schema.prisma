@@ -141,6 +141,7 @@ model Supplier {
 
 model Product {
   id             Int               @id @default(autoincrement())
+  publicId       String            @default(uuid()) @unique
   companyId      String?
   photo          String?
   name           String
@@ -157,6 +158,9 @@ model Product {
   metadata       Json?
   categoryId     Int?
   brandId        Int?
+  archivedAt     DateTime?
+  archivedByUserId Int?
+  archivedByName String?
   company        Company?          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   category       Category?         @relation(fields: [categoryId], references: [id])
   brand          Brand?            @relation(fields: [brandId], references: [id])
