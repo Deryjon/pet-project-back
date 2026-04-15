@@ -71,7 +71,9 @@ export class CompanySettingsController {
       page: Number(page),
       name,
       companyId: companyId || context?.companyId || undefined,
-      allowedShopIds: shouldUseAllowed ? (context?.allowedShopIds ?? []) : undefined,
+      allowedShopIds: shouldUseAllowed
+        ? (context?.allowedShopIds ?? [])
+        : undefined,
     });
   }
 
@@ -104,6 +106,27 @@ export class CompanySettingsController {
     return this.companySettingsService.getPriceTags(
       companyId || context?.companyId || undefined,
     );
+  }
+
+  @Post('price-tag')
+  @Post('v1/price-tag')
+  createPriceTag(@Body() body: Record<string, unknown>) {
+    return this.companySettingsService.createPriceTag(body);
+  }
+
+  @Put('price-tag/:id')
+  @Put('v1/price-tag/:id')
+  updatePriceTag(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.companySettingsService.updatePriceTag(id, body);
+  }
+
+  @Delete('price-tag/:id')
+  @Delete('v1/price-tag/:id')
+  deletePriceTag(@Param('id') id: string) {
+    return this.companySettingsService.deletePriceTag(id);
   }
 
   @Get('cheque')
