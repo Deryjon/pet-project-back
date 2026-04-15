@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -436,6 +440,7 @@ const DEFAULT_PRICE_TAGS: PriceTagProfile[] = [
 @Injectable()
 export class CompanySettingsService {
   private companyPaymentTypesStore?: CompanyPaymentType[];
+  private priceTagsStore?: PriceTagProfile[];
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -630,7 +635,10 @@ export class CompanySettingsService {
     if (matchedUnit) {
       return {
         ...matchedUnit,
-        company_id: this.stringOrDefault(matchedUnit.company_id, targetCompanyId),
+        company_id: this.stringOrDefault(
+          matchedUnit.company_id,
+          targetCompanyId,
+        ),
       };
     }
 
@@ -643,17 +651,114 @@ export class CompanySettingsService {
   }
 
   getPriceTags(companyId?: string) {
+    const priceTags = this.getStoredPriceTags();
     const targetCompanyId = companyId?.trim() || DEFAULT_COMPANY_ID;
-    const configuredPriceTags = this.parseJsonArray<PriceTagProfile>(
-      process.env.PRICE_TAGS_JSON,
-      DEFAULT_PRICE_TAGS,
-    );
 
     return {
-      price_tags: configuredPriceTags.map((priceTag) => ({
-        ...priceTag,
-        company_id: targetCompanyId,
-      })),
+      price_tags: priceTags
+        .filter(
+          (priceTag) =>
+            this.stringOrDefault(priceTag.company_id, '') === targetCompanyId,
+        )
+        .map((priceTag) => ({
+          ...priceTag,
+          company_id: targetCompanyId,
+        })),
+    };
+  }
+
+  createPriceTag(body: Record<string, unknown>) {
+    const priceTags = this.getStoredPriceTags();
+    const companyId =
+      this.optionalString(body.company_id) ?? DEFAULT_COMPANY_ID;
+
+    const created: PriceTagProfile = {
+      id: randomUUID(),
+      company_id: companyId,
+      name: this.requireString(body.name, 'name'),
+      width: this.toNumber(body.width) ?? 40,
+      length: this.toNumber(body.length) ?? 20,
+      barcode_type: this.optionalString(body.barcode_type) ?? 'EAN13',
+      barcode_type_id:
+        this.optionalString(body.barcode_type_id) ??
+        '5517af95-ea38-444e-bf19-90fe4e9e4df7',
+      properties: body.properties ?? null,
+    };
+
+    priceTags.unshift(created);
+    return created;
+  }
+
+  updatePriceTag(id: string, body: Record<string, unknown>) {
+    const priceTags = this.getStoredPriceTags();
+    const priceTag = priceTags.find(
+      (item) => this.stringOrDefault(item.id, '') === id,
+    );
+
+    if (!priceTag) {
+      throw new NotFoundException('Price tag not found');
+    }
+
+    if (body.company_id !== undefined) {
+      priceTag.company_id = this.requireString(body.company_id, 'company_id');
+    }
+
+    if (body.name !== undefined) {
+      priceTag.name = this.requireString(body.name, 'name');
+    }
+
+    if (body.width !== undefined) {
+      const width = this.toNumber(body.width);
+      if (width === undefined) {
+        throw new BadRequestException('width must be a number');
+      }
+      priceTag.width = width;
+    }
+
+    if (body.length !== undefined) {
+      const length = this.toNumber(body.length);
+      if (length === undefined) {
+        throw new BadRequestException('length must be a number');
+      }
+      priceTag.length = length;
+    }
+
+    if (body.barcode_type !== undefined) {
+      priceTag.barcode_type = this.requireString(
+        body.barcode_type,
+        'barcode_type',
+      );
+    }
+
+    if (body.barcode_type_id !== undefined) {
+      priceTag.barcode_type_id = this.requireString(
+        body.barcode_type_id,
+        'barcode_type_id',
+      );
+    }
+
+    if (body.properties !== undefined) {
+      priceTag.properties = body.properties;
+    }
+
+    return priceTag;
+  }
+
+  deletePriceTag(id: string) {
+    const priceTags = this.getStoredPriceTags();
+    const index = priceTags.findIndex(
+      (item) => this.stringOrDefault(item.id, '') === id,
+    );
+
+    if (index === -1) {
+      throw new NotFoundException('Price tag not found');
+    }
+
+    const [deleted] = priceTags.splice(index, 1);
+
+    return {
+      success: true,
+      price_tag: deleted,
     };
   }
 
@@ -736,7 +841,10 @@ export class CompanySettingsService {
     }
 
     if (body.company_id !== undefined) {
-      paymentType.company_id = this.requireString(body.company_id, 'company_id');
+      paymentType.company_id = this.requireString(
+        body.company_id,
+        'company_id',
+      );
     }
 
     if (body.token !== undefined) {
@@ -770,7 +878,10 @@ export class CompanySettingsService {
         : {};
 
     if (body.payment_type_id !== undefined) {
-      paymentTypeMeta.id = this.requireString(body.payment_type_id, 'payment_type_id');
+      paymentTypeMeta.id = this.requireString(
+        body.payment_type_id,
+        'payment_type_id',
+      );
     }
 
     if (body.payment_type_name !== undefined) {
@@ -934,6 +1045,17 @@ export class CompanySettingsService {
     return this.companyPaymentTypesStore;
   }
 
+  private getStoredPriceTags() {
+    if (!this.priceTagsStore) {
+      this.priceTagsStore = this.parseJsonArray<PriceTagProfile>(
+        process.env.PRICE_TAGS_JSON,
+        DEFAULT_PRICE_TAGS,
+      ).map((item) => ({ ...item }));
+    }
+
+    return this.priceTagsStore;
+  }
+
   private parseJsonObject(raw?: string): Record<string, unknown> {
     const parsed = this.parseJsonValue(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -993,6 +1115,19 @@ export class CompanySettingsService {
     }
 
     return undefined;
+  }
+
+  private toNumber(value: unknown) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+
+    const normalized = Number(value);
+    return Number.isFinite(normalized) ? normalized : undefined;
   }
 
   private optionalNestedString(value: unknown, key: string) {
