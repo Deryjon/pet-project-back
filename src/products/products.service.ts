@@ -2081,6 +2081,63 @@ export class ProductsService {
     };
   }
 
+  async bulkArchiveProducts(
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const writeContext = this.requireCatalogWriteContext(context);
+    const productIdentifiers = this.toStringArrayValue(body.product_ids);
+
+    if (!productIdentifiers.length) {
+      throw new BadRequestException('product_ids must contain at least one id');
+    }
+
+    const products = await this.prisma.product.findMany({
+      where: this.applyProductScope(
+        this.buildBulkProductIdentifierWhere(productIdentifiers),
+        writeContext,
+      ),
+      select: {
+        id: true,
+        publicId: true,
+        archivedAt: true,
+      },
+    });
+
+    if (!products.length) {
+      throw new NotFoundException('Products not found');
+    }
+
+    const productsToArchive = products.filter((product) => !product.archivedAt);
+    const archivedAt = new Date();
+
+    if (productsToArchive.length) {
+      await this.prisma.product.updateMany({
+        where: {
+          id: {
+            in: productsToArchive.map((product) => product.id),
+          },
+        },
+        data: {
+          archivedAt,
+          archivedByUserId: writeContext.userId,
+          archivedByName: writeContext.fullName,
+        },
+      });
+    }
+
+    return {
+      count: productsToArchive.length,
+      product_ids: products.map((product) => product.publicId),
+      archived_at: archivedAt.toISOString(),
+      archived_by: {
+        id: String(writeContext.userId),
+        name: writeContext.fullName,
+      },
+    };
+  }
+
   async generateSku(body: Record<string, unknown>) {
     const requestedPrefix = this.optionalString(body.prefix);
     const name = this.optionalString(body.name);
@@ -2270,6 +2327,9 @@ export class ProductsService {
     productType: string | null;
     createdAt: Date;
     updatedAt: Date;
+    archivedAt?: Date | null;
+    archivedByUserId?: number | null;
+    archivedByName?: string | null;
     category: { name: string } | null;
     brand: { name: string } | null;
     suppliers: { supplier: { id: number; name: string } }[];
@@ -2408,11 +2468,8 @@ export class ProductsService {
       created_at: this.formatDateTime(product.createdAt),
       updated_at: this.formatDateTime(product.updatedAt),
       base_name: product.name,
-      archived_at: '0001-01-01T00:00:00Z',
-      archived_by: {
-        id: '',
-        name: '',
-      },
+      archived_at: this.toArchivedAtResponse(product.archivedAt),
+      archived_by: this.toArchivedByResponse(product),
       supplier_id: primarySupplier ? String(primarySupplier.id) : undefined,
       supplier_ids: product.suppliers.length
         ? product.suppliers.map((item) => String(item.supplier.id))
@@ -2446,7 +2503,7 @@ export class ProductsService {
         supply_price: stock.supplyPrice,
         supplier_ids: stock.supplierIds,
       })),
-      status: 0,
+      status: product.archivedAt ? 0 : 1,
       scale_plu: 0,
       scale_code: 0,
       is_scalable: false,
@@ -2454,6 +2511,7 @@ export class ProductsService {
       brand_name: product.brand?.name ?? null,
       category_name: product.category?.name ?? null,
       photo: product.photo,
+      is_archived: Boolean(product.archivedAt),
     };
   }
 
@@ -2659,7 +2717,7 @@ export class ProductsService {
       custom_fields: [],
       created_at: product.createdAt.toISOString(),
       updated_at: product.updatedAt.toISOString(),
-      is_archived: false,
+      is_archived: Boolean(product.archivedAt),
       brand_name: product.brand?.name ?? '',
       product_supply_stock: stockSummaries.map((item) => ({
         shop_id: item.shop.shop_id,
@@ -2688,13 +2746,10 @@ export class ProductsService {
       base_name: product.name,
       variation_id: '',
       free_price: freePrice,
-      archived_at: '',
-      archived_by: {
-        id: '',
-        name: '',
-      },
+      archived_at: this.toArchivedAtResponse(product.archivedAt),
+      archived_by: this.toArchivedByResponse(product),
       deleted: false,
-      status: 1,
+      status: product.archivedAt ? 0 : 1,
       all_promos: [],
       scale_plu: 0,
       scale_code: 0,
@@ -2829,11 +2884,8 @@ export class ProductsService {
 
     return {
       additional_barcodes: null,
-      archived_at: '',
-      archived_by: {
-        id: '',
-        name: '',
-      },
+      archived_at: this.toArchivedAtResponse(product.archivedAt),
+      archived_by: this.toArchivedByResponse(product),
       barcode: product.barcode,
       barcode_lower: '',
       barcode_upper: '',
@@ -2849,7 +2901,7 @@ export class ProductsService {
       free_price: false,
       id: String(product.id),
       public_id: this.getProductPublicId(product),
-      is_archived: false,
+      is_archived: Boolean(product.archivedAt),
       is_marked: this.toBooleanValue(body.is_marked),
       is_scalable: false,
       is_variative: isVariative,
@@ -3043,9 +3095,13 @@ export class ProductsService {
 
     if (archivedList) {
       and.push({
-        quantity: {
-          lte: 0,
+        archivedAt: {
+          not: null,
         },
+      });
+    } else {
+      and.push({
+        archivedAt: null,
       });
     }
 
@@ -3848,8 +3904,10 @@ export class ProductsService {
       brand_id: product.brandId ? String(product.brandId) : '',
       brand_name: product.brand?.name ?? '',
       base_name: product.name,
+      archived_at: this.toArchivedAtResponse(product.archivedAt),
+      archived_by: this.toArchivedByResponse(product),
       product_supply_stock: [],
-      status: 0,
+      status: product.archivedAt ? 0 : 1,
       scale_plu: 0,
       scale_code: 0,
       is_scalable: false,
@@ -3867,6 +3925,7 @@ export class ProductsService {
         name: item.supplier.name,
         deleted_at: 0,
       })),
+      is_archived: Boolean(product.archivedAt),
     };
   }
 
@@ -4996,6 +5055,34 @@ export class ProductsService {
     } as unknown as Prisma.ProductWhereInput;
   }
 
+  private buildBulkProductIdentifierWhere(ids: string[]): Prisma.ProductWhereInput {
+    const normalizedIds = ids.map((id) => id.trim()).filter(Boolean);
+    const numericIds = normalizedIds
+      .map((id) => Number(id))
+      .filter((id) => Number.isInteger(id));
+    const orConditions: Prisma.ProductWhereInput[] = [];
+
+    if (numericIds.length) {
+      orConditions.push({
+        id: {
+          in: numericIds,
+        },
+      });
+    }
+
+    orConditions.push({
+      publicId: {
+        in: normalizedIds,
+      },
+    } as unknown as Prisma.ProductWhereInput);
+
+    return orConditions.length === 1
+      ? orConditions[0]
+      : ({
+          OR: orConditions,
+        } as Prisma.ProductWhereInput);
+  }
+
   private getProductPublicId(product: { id: number } & Record<string, unknown>) {
     const publicId =
       typeof (product as Record<string, unknown>).publicId === 'string'
@@ -5003,6 +5090,20 @@ export class ProductsService {
         : '';
 
     return publicId || String(product.id);
+  }
+
+  private toArchivedAtResponse(value?: Date | null) {
+    return value ? value.toISOString() : '';
+  }
+
+  private toArchivedByResponse(product: {
+    archivedByUserId?: number | null;
+    archivedByName?: string | null;
+  }) {
+    return {
+      id: product.archivedByUserId ? String(product.archivedByUserId) : '',
+      name: product.archivedByName ?? '',
+    };
   }
 
   private async resolveSupplierIdsForCompany(

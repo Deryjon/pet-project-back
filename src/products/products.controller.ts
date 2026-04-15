@@ -304,6 +304,14 @@ export class ProductsController {
     return this.productsService.updateCatalogProduct(id, body, authorization);
   }
 
+  @Put('v2/products/bulk/archive')
+  bulkArchiveProducts(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.bulkArchiveProducts(body, authorization);
+  }
+
   @Post('v2/product/generate-sku')
   generateSku(@Body() body: Record<string, unknown>) {
     return this.productsService.generateSku(body);
