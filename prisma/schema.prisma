@@ -78,6 +78,7 @@ model User {
   language    String   @default("ru")
   theme       String   @default("auto")
   isActive    Boolean  @default(true)
+  deletedAt   Int      @default(0)
   company     Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
   crmRole     Role?    @relation(fields: [crmRoleId], references: [id], onDelete: SetNull)
   currentShop Shop?    @relation("CurrentShop", fields: [currentShopId], references: [id], onDelete: SetNull)

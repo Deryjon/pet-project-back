@@ -66,6 +66,8 @@ const ALLOWED_AVATAR_MIME_TYPES = new Set([
 const MAX_AVATAR_SIZE_BYTES = 5 * 1024 * 1024;
 const PLATFORM_ADMIN_ROLES = new Set(['platform_admin', 'superadmin']);
 const COMPANY_ADMIN_ROLES = new Set(['admin', 'owner', 'superadmin']);
+const BILLZ_CURRENT_STATUS_ID = '75af5991-a4a3-4bea-b2a7-1306e22d6529';
+const BILLZ_BLOCKED_STATUS_ID = '70162b38-9b4e-4e8e-90d1-a69b04bc51f1';
 const DEFAULT_PLATFORM_ROLES = [
   { code: 'platform_admin', name: 'Админ платформы', isSystem: true },
   { code: 'support', name: 'Поддержка', isSystem: true },
@@ -134,6 +136,74 @@ export class UsersService {
     return Promise.all(users.map((user) => this.toListItem(user)));
   }
 
+  async findBillzUsers(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const actor = await this.getAuthenticatedUser(authorization);
+    const scopedWhere = this.buildBillzUsersScopedWhere(actor, query);
+    const where = this.withBillzStatusFilter(scopedWhere, query.status_ids);
+    const limit = this.parsePositiveInteger(query.limit, 10, 100);
+    const page = this.parsePositiveInteger(query.page, 1, 1);
+    const skip = (page - 1) * limit;
+
+    const [
+      users,
+      count,
+      currentUsersCount,
+      blockedUsersCount,
+      deletedUsersCount,
+    ] = await this.db.$transaction([
+      this.db.user.findMany({
+        where,
+        include: this.userRelationsInclude(),
+        orderBy: {
+          id: 'asc',
+        },
+        skip,
+        take: limit,
+      }),
+      this.db.user.count({ where }),
+      this.db.user.count({
+        where: {
+          ...scopedWhere,
+          deletedAt: 0,
+          isActive: true,
+        },
+      }),
+      this.db.user.count({
+        where: {
+          ...scopedWhere,
+          deletedAt: 0,
+          isActive: false,
+        },
+      }),
+      this.db.user.count({
+        where: {
+          ...scopedWhere,
+          deletedAt: {
+            not: 0,
+          },
+        },
+      }),
+    ]);
+
+    return {
+      current_users_count: currentUsersCount,
+      blocked_users_count: blockedUsersCount,
+      deleted_users_count: deletedUsersCount,
+      count,
+      users: await Promise.all(
+        users.map((user: UserWithRelations) =>
+          this.toBillzUserItem(
+            user,
+            this.resolveBillzDeletedStatusId(query.status_ids),
+          ),
+        ),
+      ),
+    };
+  }
+
   async findPlatformUsers(authorization?: string) {
     const actor = await this.getAuthenticatedUser(authorization);
 
@@ -146,6 +216,7 @@ export class UsersService {
     const users = await this.db.user.findMany({
       where: {
         userType: 'platform',
+        deletedAt: 0,
       },
       include: this.userRelationsInclude(),
       orderBy: {
@@ -175,10 +246,7 @@ export class UsersService {
     );
   }
 
-  async findCompanyUsersForPlatform(
-    companyId: string,
-    authorization?: string,
-  ) {
+  async findCompanyUsersForPlatform(companyId: string, authorization?: string) {
     const actor = await this.getAuthenticatedUser(authorization);
 
     if (actor.userType !== 'platform') {
@@ -193,6 +261,7 @@ export class UsersService {
       where: {
         companyId,
         userType: 'company',
+        deletedAt: 0,
       },
       include: this.userRelationsInclude(),
       orderBy: {
@@ -228,7 +297,8 @@ export class UsersService {
   }
 
   async findPlatformUserByPhoneNumber(phoneNumber: string) {
-    const phoneNumberVariants = this.buildPhoneNumberLookupVariants(phoneNumber);
+    const phoneNumberVariants =
+      this.buildPhoneNumberLookupVariants(phoneNumber);
 
     return this.db.user.findFirst({
       where: {
@@ -245,7 +315,8 @@ export class UsersService {
   }
 
   async findByPhoneNumberAndCompany(phoneNumber: string, companyId: string) {
-    const phoneNumberVariants = this.buildPhoneNumberLookupVariants(phoneNumber);
+    const phoneNumberVariants =
+      this.buildPhoneNumberLookupVariants(phoneNumber);
 
     return this.db.user.findFirst({
       where: {
@@ -423,8 +494,7 @@ export class UsersService {
       data.code = nextCode;
     }
 
-    const nextCodeValue =
-      typeof data.code === 'string' ? data.code : role.code;
+    const nextCodeValue = typeof data.code === 'string' ? data.code : role.code;
     const deactivatingAdminRole =
       body.is_active === false && COMPANY_ADMIN_ROLES.has(role.code);
 
@@ -515,8 +585,11 @@ export class UsersService {
   }
 
   async findByIdOrThrow(id: number) {
-    const user = await this.db.user.findUnique({
-      where: { id },
+    const user = await this.db.user.findFirst({
+      where: {
+        id,
+        deletedAt: 0,
+      },
       include: this.userRelationsInclude(),
     });
 
@@ -593,7 +666,9 @@ export class UsersService {
       );
 
       if (actor && !this.isPlatformAdmin(actor)) {
-        throw new ForbiddenException('Only platform admin can create platform users');
+        throw new ForbiddenException(
+          'Only platform admin can create platform users',
+        );
       }
 
       const existingPlatformUser = await this.db.user.findFirst({
@@ -626,7 +701,10 @@ export class UsersService {
       return this.findOneResponse(user.id);
     }
 
-    const companyId = await this.resolveCompanyIdForActor(body.company_id, actor);
+    const companyId = await this.resolveCompanyIdForActor(
+      body.company_id,
+      actor,
+    );
     const crmRole = await this.resolveCrmRoleForWrite(
       this.optionalString(body.crm_role_id),
       companyId,
@@ -641,15 +719,15 @@ export class UsersService {
       this.optionalString(body.current_shop_id) ??
         this.optionalString(body.branch_location),
     );
-    const currentShop =
-      await this.resolveCurrentShopForWrite(
-        companyId,
-        this.optionalString(body.current_shop_id) ??
-          this.optionalString(body.branch_location),
-        allowedShops,
-      );
+    const currentShop = await this.resolveCurrentShopForWrite(
+      companyId,
+      this.optionalString(body.current_shop_id) ??
+        this.optionalString(body.branch_location),
+      allowedShops,
+    );
     const canSwitchShops =
-      (this.optionalBoolean(body.can_switch_shops) ?? allowedShops.length > 1) &&
+      (this.optionalBoolean(body.can_switch_shops) ??
+        allowedShops.length > 1) &&
       allowedShops.length > 1;
 
     const existingCompanyUser = await this.db.user.findFirst({
@@ -700,7 +778,9 @@ export class UsersService {
     const user = await this.getAuthenticatedUser(authorization);
 
     if (!this.isPlatformAdmin(user)) {
-      throw new ForbiddenException('Only platform admin can perform this action');
+      throw new ForbiddenException(
+        'Only platform admin can perform this action',
+      );
     }
 
     return user;
@@ -722,7 +802,9 @@ export class UsersService {
     const user = await this.getAuthenticatedUser(authorization);
 
     if (!this.isCompanyAdmin(user) || !user.companyId) {
-      throw new ForbiddenException('Only company admin can manage company roles');
+      throw new ForbiddenException(
+        'Only company admin can manage company roles',
+      );
     }
 
     return user;
@@ -789,7 +871,8 @@ export class UsersService {
     }
 
     if (body.can_switch_shops !== undefined) {
-      data.canSwitchShops = this.optionalBoolean(body.can_switch_shops) ?? false;
+      data.canSwitchShops =
+        this.optionalBoolean(body.can_switch_shops) ?? false;
     }
 
     if (targetUser.userType === 'company' && companyId) {
@@ -864,7 +947,7 @@ export class UsersService {
       data.branchCode = currentShop?.branchCode ?? null;
       data.canSwitchShops =
         (body.can_switch_shops !== undefined
-          ? this.optionalBoolean(body.can_switch_shops) ?? false
+          ? (this.optionalBoolean(body.can_switch_shops) ?? false)
           : targetUser.canSwitchShops) && allowedShops.length > 1;
       data.shopAccesses =
         body.allowed_shop_ids !== undefined ||
@@ -894,7 +977,9 @@ export class UsersService {
       });
 
       if (duplicate) {
-        throw new BadRequestException('User with this phone number already exists');
+        throw new BadRequestException(
+          'User with this phone number already exists',
+        );
       }
     }
 
@@ -914,17 +999,12 @@ export class UsersService {
     }
 
     await this.db.$transaction(async (tx: any) => {
-      await tx.sale.updateMany({
-        where: {
-          userId: id,
-        },
-        data: {
-          userId: null,
-        },
-      });
-
-      await tx.user.delete({
+      await tx.user.update({
         where: { id },
+        data: {
+          deletedAt: Math.floor(Date.now() / 1000),
+          isActive: false,
+        },
       });
     });
 
@@ -1153,7 +1233,11 @@ export class UsersService {
 
   async toAuthProfile(userInput: UserWithRelations) {
     const user = await this.prepareAuthenticatedUser(userInput.id);
-    const roles = await this.resolveRoles(user.role, user.userType, user.companyId);
+    const roles = await this.resolveRoles(
+      user.role,
+      user.userType,
+      user.companyId,
+    );
 
     if (user.userType === 'platform') {
       return {
@@ -1226,9 +1310,7 @@ export class UsersService {
     );
 
     if (!Boolean(user.canSwitchShops) || availableShops.length <= 1) {
-      throw new BadRequestException(
-        'This user is not allowed to switch shops',
-      );
+      throw new BadRequestException('This user is not allowed to switch shops');
     }
 
     if (!availableShops.some((shop) => shop.id === targetShop.id)) {
@@ -1295,15 +1377,234 @@ export class UsersService {
     };
   }
 
+  private buildBillzUsersScopedWhere(
+    actor: UserWithRelations,
+    query: Record<string, string | undefined>,
+  ) {
+    const where: Record<string, unknown> = {};
+
+    if (this.isPlatformAdmin(actor)) {
+      if (query.type === '1') {
+        where.userType = 'company';
+      } else if (query.type === '0') {
+        where.userType = 'platform';
+      }
+    } else if (actor.userType === 'company' && actor.companyId) {
+      where.userType = 'company';
+      where.companyId = actor.companyId;
+    } else {
+      throw new ForbiddenException('You cannot view users');
+    }
+
+    const search = query.search?.trim();
+    if (search) {
+      where.OR = [
+        { firstName: { contains: search, mode: 'insensitive' } },
+        { lastName: { contains: search, mode: 'insensitive' } },
+        { phoneNumber: { contains: search } },
+      ];
+    }
+
+    return where;
+  }
+
+  private withBillzStatusFilter(
+    where: Record<string, unknown>,
+    statusIdsValue?: string,
+  ) {
+    const statusIds = new Set(
+      statusIdsValue
+        ?.split(',')
+        .map((statusId) => statusId.trim())
+        .filter(Boolean) ?? [],
+    );
+
+    if (!statusIds.size) {
+      return {
+        ...where,
+        deletedAt: 0,
+      };
+    }
+
+    const includesCurrent = statusIds.has(BILLZ_CURRENT_STATUS_ID);
+    const includesBlocked = statusIds.has(BILLZ_BLOCKED_STATUS_ID);
+
+    if (includesCurrent && includesBlocked) {
+      return {
+        ...where,
+        deletedAt: 0,
+      };
+    }
+
+    if (includesCurrent) {
+      return {
+        ...where,
+        deletedAt: 0,
+        isActive: true,
+      };
+    }
+
+    if (includesBlocked) {
+      return {
+        ...where,
+        deletedAt: 0,
+        isActive: false,
+      };
+    }
+
+    return {
+      ...where,
+      deletedAt: {
+        not: 0,
+      },
+    };
+  }
+
+  private resolveBillzDeletedStatusId(statusIdsValue?: string) {
+    return (
+      statusIdsValue
+        ?.split(',')
+        .map((statusId) => statusId.trim())
+        .find(
+          (statusId) =>
+            statusId &&
+            statusId !== BILLZ_CURRENT_STATUS_ID &&
+            statusId !== BILLZ_BLOCKED_STATUS_ID,
+        ) ?? ''
+    );
+  }
+
+  private parsePositiveInteger(
+    value: string | undefined,
+    fallback: number,
+    max: number,
+  ) {
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < 1) {
+      return fallback;
+    }
+
+    return Math.min(parsed, max);
+  }
+
+  private async toBillzUserItem(user: UserWithRelations, deletedStatusId = '') {
+    const roles = await this.toBillzUserRoles(user);
+    const image = this.extractAvatarFileName(user.avatarUrl);
+
+    return {
+      id: String(user.id),
+      external_id: user.id,
+      company_id: user.companyId ?? '',
+      phone_number: user.phoneNumber,
+      first_name: user.firstName,
+      last_name: user.lastName,
+      birth_date: this.formatIsoDate(user.birthDate) ?? '',
+      gender: '',
+      mobile_login_allowed: true,
+      enable_max_validated_devices_limit: false,
+      max_validated_devices: 5,
+      status_id:
+        user.deletedAt && user.deletedAt !== 0
+          ? deletedStatusId
+          : user.isActive
+            ? BILLZ_CURRENT_STATUS_ID
+            : BILLZ_BLOCKED_STATUS_ID,
+      password: '',
+      is_active: user.isActive,
+      image,
+      image_url: user.avatarUrl ?? '',
+      is_image_avatar: false,
+      language: user.language ?? '',
+      theme: user.theme ?? '',
+      current_cashbox_id: '',
+      current_shop_id: user.currentShopId ?? '',
+      cashboxes: null,
+      shops: user.shopAccesses.map((access: UserWithRelations) => ({
+        id: String(access.id),
+        shop_id: access.shopId,
+        shop: {
+          name: access.shop?.name ?? '',
+        },
+      })),
+      roles,
+      created_at: this.formatBillzDateTime(user.createdAt),
+      updated_at: this.formatBillzDateTime(user.updatedAt),
+      deleted_at: user.deletedAt ?? 0,
+      telegram_id: 0,
+      props_updated: false,
+      type: user.userType === 'company' ? 1 : 0,
+      tariff_limits: {
+        company_tariff: '',
+        cashbox_count: 0,
+        products_count: 0,
+        users_count: 0,
+        customers_count: 0,
+      },
+    };
+  }
+
+  private async toBillzUserRoles(user: UserWithRelations) {
+    if (user.crmRole) {
+      return [
+        {
+          id: `${user.id}:${user.crmRole.id}`,
+          role_id: user.crmRole.id,
+          role: {
+            name: user.crmRole.name,
+          },
+        },
+      ];
+    }
+
+    const rolePayload = await this.resolveUserPrimaryRolePayload(user);
+
+    return [
+      {
+        id: `${user.id}:${rolePayload.role_code}`,
+        role_id: rolePayload.role_code,
+        role: {
+          name: rolePayload.role_name,
+        },
+      },
+    ];
+  }
+
+  private extractAvatarFileName(avatarUrl: string | null) {
+    if (!avatarUrl) {
+      return '';
+    }
+
+    const [urlWithoutQuery] = avatarUrl.split('?');
+    return urlWithoutQuery.split('/').pop() ?? '';
+  }
+
+  private formatBillzDateTime(value: Date | null) {
+    if (!value) {
+      return '';
+    }
+
+    const year = value.getUTCFullYear();
+    const month = (value.getUTCMonth() + 1).toString().padStart(2, '0');
+    const day = value.getUTCDate().toString().padStart(2, '0');
+    const hours = value.getUTCHours().toString().padStart(2, '0');
+    const minutes = value.getUTCMinutes().toString().padStart(2, '0');
+    const seconds = value.getUTCSeconds().toString().padStart(2, '0');
+
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  }
+
   private buildUserVisibilityWhere(actor: UserWithRelations) {
     if (this.isPlatformAdmin(actor)) {
-      return undefined;
+      return {
+        deletedAt: 0,
+      };
     }
 
     if (actor.userType === 'company' && actor.companyId) {
       return {
         userType: 'company',
         companyId: actor.companyId,
+        deletedAt: 0,
       };
     }
 
@@ -1464,7 +1765,10 @@ export class UsersService {
     );
   }
 
-  private canManageUser(actor: UserWithRelations, targetUser: UserWithRelations) {
+  private canManageUser(
+    actor: UserWithRelations,
+    targetUser: UserWithRelations,
+  ) {
     if (this.isPlatformAdmin(actor)) {
       return true;
     }
@@ -1499,7 +1803,10 @@ export class UsersService {
       };
     }
 
-    const companyRole = await this.findCompanyRoleByCode(user.companyId, user.role);
+    const companyRole = await this.findCompanyRoleByCode(
+      user.companyId,
+      user.role,
+    );
     const resolvedRole =
       companyRole ?? this.toFallbackCompanyRole(user.companyId, user.role);
 
@@ -1537,7 +1844,9 @@ export class UsersService {
     value: unknown,
   ) {
     if (!companyId) {
-      throw new BadRequestException('company_id is required for company user role');
+      throw new BadRequestException(
+        'company_id is required for company user role',
+      );
     }
 
     await this.ensureDefaultCompanyRoles(companyId);
@@ -1555,7 +1864,9 @@ export class UsersService {
   }
 
   private resolvePlatformRoleCode(value: unknown, field: string) {
-    const normalizedValue = this.requireString(value, field).trim().toLowerCase();
+    const normalizedValue = this.requireString(value, field)
+      .trim()
+      .toLowerCase();
     const roleById = DEFAULT_PLATFORM_ROLES.find(
       (role) => role.code === normalizedValue,
     );
@@ -1570,7 +1881,10 @@ export class UsersService {
   private normalizePlatformRole(value: unknown, field: string) {
     const role = this.requireString(value, field).trim().toLowerCase();
 
-    if (!ROLE_DEFINITIONS[role] || !['platform_admin', 'support', 'superadmin'].includes(role)) {
+    if (
+      !ROLE_DEFINITIONS[role] ||
+      !['platform_admin', 'support', 'superadmin'].includes(role)
+    ) {
       throw new BadRequestException(`${field} has an invalid platform role`);
     }
 
@@ -1593,7 +1907,11 @@ export class UsersService {
     this.assertCompanyRoleStorageAvailable();
 
     const baseCode = this.normalizeCompanyRoleCode(
-      name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'role',
+      name
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'role',
       'code',
     );
     const existingRoles = await this.db.companyRole.findMany({
@@ -1628,7 +1946,9 @@ export class UsersService {
     await this.ensureDefaultCompanyRoles(companyId);
 
     if (!this.hasCompanyRoleStorage()) {
-      return DEFAULT_COMPANY_ROLES.some((role) => role.code === code.trim().toLowerCase())
+      return DEFAULT_COMPANY_ROLES.some(
+        (role) => role.code === code.trim().toLowerCase(),
+      )
         ? this.toFallbackCompanyRole(companyId, code.trim().toLowerCase())
         : null;
     }
@@ -1652,7 +1972,8 @@ export class UsersService {
 
     if (!this.hasCompanyRoleStorage()) {
       const defaultRole = DEFAULT_COMPANY_ROLES.find(
-        (role) => this.getFallbackCompanyRolePublicId(role.code) === normalizedRoleId,
+        (role) =>
+          this.getFallbackCompanyRolePublicId(role.code) === normalizedRoleId,
       );
 
       return defaultRole
@@ -1723,7 +2044,10 @@ export class UsersService {
     };
   }
 
-  private toFallbackCompanyRole(companyId: string, roleCode: string): CompanyRoleRecord {
+  private toFallbackCompanyRole(
+    companyId: string,
+    roleCode: string,
+  ): CompanyRoleRecord {
     const fallbackName = this.getCompanyRoleDisplayName(roleCode, roleCode);
 
     return {
@@ -1898,18 +2222,18 @@ export class UsersService {
       ]),
     );
     const primaryRole =
-      companyRoleLookup.get(normalizedRole) ?? this.toFallbackCompanyRole(companyId, normalizedRole);
+      companyRoleLookup.get(normalizedRole) ??
+      this.toFallbackCompanyRole(companyId, normalizedRole);
 
     if (COMPANY_ADMIN_ROLES.has(normalizedRole)) {
       const managementRoles = ['store_manager', 'cashier']
         .map((roleCode) => companyRoleLookup.get(roleCode))
         .filter(Boolean)
-        .map((companyRole: CompanyRoleRecord) => this.toCompanyRoleOption(companyRole));
+        .map((companyRole: CompanyRoleRecord) =>
+          this.toCompanyRoleOption(companyRole),
+        );
 
-      return [
-        this.toCompanyRoleOption(primaryRole),
-        ...managementRoles,
-      ];
+      return [this.toCompanyRoleOption(primaryRole), ...managementRoles];
     }
 
     return [this.toCompanyRoleOption(primaryRole)];
@@ -1969,7 +2293,10 @@ export class UsersService {
     };
   }
 
-  private async resolveCompanyIdForActor(value: unknown, actor?: UserWithRelations) {
+  private async resolveCompanyIdForActor(
+    value: unknown,
+    actor?: UserWithRelations,
+  ) {
     if (actor?.userType === 'company') {
       const companyActor = actor;
 
@@ -1979,7 +2306,9 @@ export class UsersService {
 
       const requestedCompanyId = this.optionalString(value);
       if (requestedCompanyId && requestedCompanyId !== companyActor.companyId) {
-        throw new ForbiddenException('You cannot create users for another company');
+        throw new ForbiddenException(
+          'You cannot create users for another company',
+        );
       }
 
       return companyActor.companyId;
@@ -2076,7 +2405,8 @@ export class UsersService {
     );
 
     return shops.filter(
-      (shop, index, array) => array.findIndex((item) => item.id === shop.id) === index,
+      (shop, index, array) =>
+        array.findIndex((item) => item.id === shop.id) === index,
     );
   }
 
@@ -2378,7 +2708,10 @@ export class UsersService {
       return;
     }
 
-    const companyRole = await this.findCompanyRoleByCode(user.companyId, user.role);
+    const companyRole = await this.findCompanyRoleByCode(
+      user.companyId,
+      user.role,
+    );
 
     if (!companyRole || !companyRole.isActive) {
       throw new UnauthorizedException('Company role is inactive');

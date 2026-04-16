@@ -9,6 +9,7 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -28,6 +29,22 @@ export class UsersController {
   @Get('users')
   findAll(@Headers('authorization') authorization?: string) {
     return this.usersService.findAll(authorization);
+  }
+
+  @Get('user')
+  findBillzUsers(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.usersService.findBillzUsers(query, authorization);
+  }
+
+  @Get('v1/user')
+  findBillzV1Users(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.usersService.findBillzUsers(query, authorization);
   }
 
   @Post('users/add')
