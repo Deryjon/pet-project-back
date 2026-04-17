@@ -441,6 +441,7 @@ const DEFAULT_PRICE_TAGS: PriceTagProfile[] = [
 export class CompanySettingsService {
   private companyPaymentTypesStore?: CompanyPaymentType[];
   private priceTagsStore?: PriceTagProfile[];
+  private chequesStore?: ChequeProfile[];
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -762,15 +763,635 @@ export class CompanySettingsService {
     };
   }
 
-  getCheque(limit?: number) {
-    const cheques = this.parseJsonArray<ChequeProfile>(
-      process.env.CHEQUES_JSON,
-      DEFAULT_CHEQUES,
-    );
+  getCheque(query?: { name?: string; limit?: number; page?: number }) {
+    const cheques = this.getStoredCheques();
+    const normalizedName = (query?.name ?? '').trim().toLowerCase();
+    const prepared = cheques
+      .filter(
+        (cheque) =>
+          !normalizedName ||
+          this.stringOrDefault(cheque.name, '')
+            .toLowerCase()
+            .includes(normalizedName),
+      )
+      .map((cheque, index) => this.toChequeResponse(cheque, index));
+    const safeLimit = this.normalizeLimit(query?.limit, 100);
+    const safePage = Math.max(1, Number(query?.page) || 1);
 
     return {
-      count: cheques.length,
-      cheques: cheques.slice(0, this.normalizeLimit(limit, 1000)),
+      cheques: prepared.slice((safePage - 1) * safeLimit, safePage * safeLimit),
+      count: prepared.length,
+    };
+  }
+
+  getChequeById(id: string) {
+    const chequeId = this.requireString(id, 'id');
+    const cheques = this.getStoredCheques();
+    const index = cheques.findIndex(
+      (cheque) => this.stringOrDefault(cheque.id, '') === chequeId,
+    );
+
+    if (index === -1) {
+      throw new NotFoundException('Cheque not found');
+    }
+
+    return this.toChequeResponse(cheques[index], index);
+  }
+
+  createCheque(body: Record<string, unknown>) {
+    const cheques = this.getStoredCheques();
+    const chequeId = randomUUID();
+    const created: ChequeProfile = {
+      id: chequeId,
+      name: this.optionalString(body.name) ?? 'Новый чек',
+      company_id: this.optionalString(body.company_id) ?? DEFAULT_COMPANY_ID,
+      has_logo: this.optionalBoolean(body.has_logo) ?? false,
+      logo_image: this.objectOrDefault(body.logo_image, {
+        id: '',
+        file_name: '',
+        file_url: '',
+        container_height: 0,
+        height: 0,
+        width: 0,
+        rotation: 0,
+        x_axis: 0,
+        y_axis: 0,
+      }),
+      has_information_block:
+        this.optionalBoolean(body.has_information_block) ?? true,
+      has_additional_info:
+        this.optionalBoolean(body.has_additional_info) ?? true,
+      has_lower_block: this.optionalBoolean(body.has_lower_block) ?? true,
+      display_text:
+        this.optionalString(body.display_text) ?? 'Спасибо за вашу покупку!',
+      cheque_items: this.normalizeChequeItems(body.cheque_items, chequeId),
+      has_bar_code: this.optionalBoolean(body.has_bar_code) ?? false,
+      is_default: this.optionalBoolean(body.is_default) ?? cheques.length === 0,
+      type: this.optionalString(body.type) ?? 'cheque',
+      has_additional_image:
+        this.optionalBoolean(body.has_additional_image) ?? false,
+      additional_image: this.objectOrDefault(body.additional_image, {
+        id: '',
+        file_name: '',
+        file_url: '',
+        container_height: 0,
+        height: 0,
+        width: 0,
+        rotation: 0,
+        x_axis: 0,
+        y_axis: 0,
+      }),
+      has_customer_debt: this.optionalBoolean(body.has_customer_debt) ?? false,
+      has_customer_balance:
+        this.optionalBoolean(body.has_customer_balance) ?? false,
+      printed_with_billz: this.optionalBoolean(body.printed_with_billz) ?? true,
+      logo_url: this.optionalString(body.logo_url) ?? '',
+      width: this.toNumber(body.width) ?? 0,
+      length: this.toNumber(body.length) ?? 0,
+      x_axis: this.toNumber(body.x_axis) ?? 0,
+      y_axis: this.toNumber(body.y_axis) ?? 0,
+      rotation: this.toNumber(body.rotation) ?? 0,
+      logo: this.optionalString(body.logo) ?? '',
+      compact: this.optionalBoolean(body.compact) ?? false,
+    };
+
+    if (created.is_default) {
+      for (const cheque of cheques) {
+        cheque.is_default = false;
+      }
+    }
+
+    cheques.unshift(created);
+    return this.toChequeResponse(created, 0);
+  }
+
+  updateCheque(id: string, body: Record<string, unknown>) {
+    const chequeId = this.requireString(id, 'id');
+    const cheques = this.getStoredCheques();
+    const index = cheques.findIndex(
+      (cheque) => this.stringOrDefault(cheque.id, '') === chequeId,
+    );
+
+    if (index === -1) {
+      throw new NotFoundException('Cheque not found');
+    }
+
+    const cheque = cheques[index];
+    this.applyChequePatch(cheque, body);
+
+    if (cheque.is_default) {
+      for (const item of cheques) {
+        if (item !== cheque) {
+          item.is_default = false;
+        }
+      }
+    }
+
+    return this.toChequeResponse(cheque, index);
+  }
+
+  deleteCheque(id: string) {
+    const chequeId = this.requireString(id, 'id');
+    const cheques = this.getStoredCheques();
+    const index = cheques.findIndex(
+      (cheque) => this.stringOrDefault(cheque.id, '') === chequeId,
+    );
+
+    if (index === -1) {
+      throw new NotFoundException('Cheque not found');
+    }
+
+    const [deleted] = cheques.splice(index, 1);
+
+    if (deleted.is_default && cheques.length > 0) {
+      cheques[0].is_default = true;
+    }
+
+    return {
+      success: true,
+      cheque: this.toChequeResponse(deleted, index),
+    };
+  }
+
+  private toChequeResponse(cheque: ChequeProfile, index: number) {
+    const chequeId = this.stringOrDefault(
+      cheque.id,
+      '00291d1d-9abe-41f5-8398-f05c12771735',
+    );
+    const name = this.stringOrDefault(cheque.name, 'Konkurent Cases');
+    const logoUrl = this.stringOrDefault(cheque.logo_url, '');
+    const logo = this.stringOrDefault(cheque.logo, '');
+
+    return {
+      id: chequeId,
+      name,
+      company_id: this.stringOrDefault(cheque.company_id, DEFAULT_COMPANY_ID),
+      has_logo: Boolean(cheque.has_logo ?? logoUrl),
+      logo_image: this.objectOrDefault(cheque.logo_image, {
+        id: '',
+        file_name: logo,
+        file_url: logoUrl,
+        container_height: 0,
+        height: Number(cheque.length) || 0,
+        width: Number(cheque.width) || 0,
+        rotation: Number(cheque.rotation) || 0,
+        x_axis: Number(cheque.x_axis) || 0,
+        y_axis: Number(cheque.y_axis) || 0,
+      }),
+      has_information_block: cheque.has_information_block ?? true,
+      has_additional_info: cheque.has_additional_info ?? true,
+      has_lower_block: cheque.has_lower_block ?? true,
+      display_text:
+        this.stringOrDefault(cheque.display_text, '') ||
+        'Спасибо за вашу покупку!',
+      cheque_items: Array.isArray(cheque.cheque_items)
+        ? cheque.cheque_items
+        : this.buildDefaultChequeItems(chequeId),
+      has_bar_code: cheque.has_bar_code ?? false,
+      is_default: cheque.is_default ?? index === 0,
+      type: this.stringOrDefault(cheque.type, 'cheque'),
+      has_additional_image: cheque.has_additional_image ?? false,
+      additional_image: this.objectOrDefault(cheque.additional_image, {
+        id: '',
+        file_name: '',
+        file_url: '',
+        container_height: 0,
+        height: 0,
+        width: 0,
+        rotation: 0,
+        x_axis: 0,
+        y_axis: 0,
+      }),
+      has_customer_debt: cheque.has_customer_debt ?? false,
+      has_customer_balance: cheque.has_customer_balance ?? false,
+      printed_with_billz: cheque.printed_with_billz ?? true,
+      logo_url: logoUrl,
+      width: Number(cheque.width) || 0,
+      length: Number(cheque.length) || 0,
+      x_axis: Number(cheque.x_axis) || 0,
+      y_axis: Number(cheque.y_axis) || 0,
+      rotation: Number(cheque.rotation) || 0,
+      logo,
+      compact: cheque.compact ?? false,
+    };
+  }
+
+  private buildDefaultChequeItems(chequeId: string) {
+    const options = [
+      ['', '', '', 1, true],
+      [
+        '7ab57cd3-eae8-4ef8-ac76-87306421f908',
+        'information_block',
+        'Название магазина',
+        1,
+        true,
+      ],
+      [
+        '4dbc9d80-45b7-4abe-8726-61f736bd55d2',
+        'information_block',
+        'Дата',
+        2,
+        true,
+      ],
+      [
+        'fe9b1a27-f46f-4f04-8758-b2a47f952e69',
+        'information_block',
+        'Режим работы',
+        3,
+        true,
+      ],
+      [
+        'cff3f41d-0661-4623-a97e-851a8dfef40d',
+        'information_block',
+        'Продавец',
+        4,
+        true,
+      ],
+      [
+        '10375cd3-73af-414f-92c8-4bff64503b9d',
+        'information_block',
+        'Кассир',
+        5,
+        true,
+      ],
+      [
+        'c4183629-4073-4f73-8f10-bddd45bbce82',
+        'information_block',
+        'Клиент',
+        6,
+        false,
+      ],
+      [
+        '1abb2244-b4f3-48a6-8e3a-aa85da72d775',
+        'information_block',
+        'отображение товаров',
+        17,
+        true,
+      ],
+      [
+        'a9944ae2-1893-45ef-ab0c-c1445b5db917',
+        'information_block',
+        'включение / выключение скидок на товарах',
+        18,
+        true,
+      ],
+      [
+        '30e14632-dc10-40a1-b97a-1be73a53054a',
+        'information_block',
+        'включение / выключение сумм на товарах',
+        19,
+        true,
+      ],
+      [
+        '8f610bdf-f875-4f14-aac7-2ffa0eb5f267',
+        'information_block',
+        'включение / выключение скидок на чеках',
+        20,
+        true,
+      ],
+      [
+        'bf55661b-b18c-4c15-a806-3bffb50b9001',
+        'information_block',
+        'включение / выключение сумм на чеках',
+        21,
+        true,
+      ],
+    ] as const;
+
+    return options.map(
+      ([optionId, blockType, name, optionSequence, isActive], index) => ({
+        id: randomUUID(),
+        cheque_id: chequeId,
+        cheque_option_id: optionId,
+        product_characteristic_id:
+          index === 0 ? '133f817b-ecd8-412d-a626-72f5c94a8b1f' : '',
+        cheque_option: {
+          id: optionId,
+          block_type: blockType,
+          name,
+          sequence_number: optionSequence,
+        },
+        sequence_number: index,
+        is_active: isActive,
+        attribute_id: '',
+      }),
+    );
+  }
+
+  private normalizeChequeItems(value: unknown, chequeId: string) {
+    if (!Array.isArray(value)) {
+      return this.buildDefaultChequeItems(chequeId);
+    }
+
+    return value.map((rawItem, index) => {
+      const item =
+        rawItem && typeof rawItem === 'object' && !Array.isArray(rawItem)
+          ? (rawItem as Record<string, unknown>)
+          : {};
+      const chequeOptionId = this.optionalString(item.cheque_option_id) ?? '';
+      const sequenceNumber = this.toNumber(item.sequence_number) ?? index;
+      const chequeOption = this.resolveChequeOption(
+        chequeOptionId,
+        sequenceNumber,
+      );
+
+      return {
+        id: this.optionalString(item.id) ?? randomUUID(),
+        cheque_id: chequeId,
+        cheque_option_id: chequeOptionId,
+        product_characteristic_id:
+          this.optionalString(item.product_characteristic_id) ?? '',
+        cheque_option: this.objectOrDefault(item.cheque_option, chequeOption),
+        sequence_number: sequenceNumber,
+        is_active: this.optionalBoolean(item.is_active) ?? true,
+        attribute_id: this.optionalString(item.attribute_id) ?? '',
+      };
+    });
+  }
+
+  private applyChequePatch(
+    cheque: ChequeProfile,
+    body: Record<string, unknown>,
+  ) {
+    if (body.name !== undefined) {
+      cheque.name = this.requireString(body.name, 'name');
+    }
+
+    if (body.company_id !== undefined) {
+      cheque.company_id = this.requireString(body.company_id, 'company_id');
+    }
+
+    if (body.has_logo !== undefined) {
+      cheque.has_logo = this.optionalBoolean(body.has_logo) ?? false;
+    }
+
+    if (body.logo_image !== undefined) {
+      cheque.logo_image = this.objectOrDefault(body.logo_image, {});
+    }
+
+    if (body.has_information_block !== undefined) {
+      cheque.has_information_block =
+        this.optionalBoolean(body.has_information_block) ?? false;
+    }
+
+    if (body.has_additional_info !== undefined) {
+      cheque.has_additional_info =
+        this.optionalBoolean(body.has_additional_info) ?? false;
+    }
+
+    if (body.has_lower_block !== undefined) {
+      cheque.has_lower_block =
+        this.optionalBoolean(body.has_lower_block) ?? false;
+    }
+
+    if (body.display_text !== undefined) {
+      cheque.display_text = this.optionalString(body.display_text) ?? '';
+    }
+
+    if (body.cheque_items !== undefined) {
+      cheque.cheque_items = this.normalizeChequeItems(
+        body.cheque_items,
+        this.stringOrDefault(cheque.id, ''),
+      );
+    }
+
+    if (body.has_bar_code !== undefined) {
+      cheque.has_bar_code = this.optionalBoolean(body.has_bar_code) ?? false;
+    }
+
+    if (body.is_default !== undefined) {
+      cheque.is_default = this.optionalBoolean(body.is_default) ?? false;
+    }
+
+    if (body.type !== undefined) {
+      cheque.type = this.optionalString(body.type) ?? 'cheque';
+    }
+
+    if (body.has_additional_image !== undefined) {
+      cheque.has_additional_image =
+        this.optionalBoolean(body.has_additional_image) ?? false;
+    }
+
+    if (body.additional_image !== undefined) {
+      cheque.additional_image = this.objectOrDefault(body.additional_image, {});
+    }
+
+    if (body.has_customer_debt !== undefined) {
+      cheque.has_customer_debt =
+        this.optionalBoolean(body.has_customer_debt) ?? false;
+    }
+
+    if (body.has_customer_balance !== undefined) {
+      cheque.has_customer_balance =
+        this.optionalBoolean(body.has_customer_balance) ?? false;
+    }
+
+    if (body.printed_with_billz !== undefined) {
+      cheque.printed_with_billz =
+        this.optionalBoolean(body.printed_with_billz) ?? false;
+    }
+
+    if (body.logo_url !== undefined) {
+      cheque.logo_url = this.optionalString(body.logo_url) ?? '';
+    }
+
+    if (body.width !== undefined) {
+      cheque.width = this.toNumber(body.width) ?? 0;
+    }
+
+    if (body.length !== undefined) {
+      cheque.length = this.toNumber(body.length) ?? 0;
+    }
+
+    if (body.x_axis !== undefined) {
+      cheque.x_axis = this.toNumber(body.x_axis) ?? 0;
+    }
+
+    if (body.y_axis !== undefined) {
+      cheque.y_axis = this.toNumber(body.y_axis) ?? 0;
+    }
+
+    if (body.rotation !== undefined) {
+      cheque.rotation = this.toNumber(body.rotation) ?? 0;
+    }
+
+    if (body.logo !== undefined) {
+      cheque.logo = this.optionalString(body.logo) ?? '';
+    }
+
+    if (body.compact !== undefined) {
+      cheque.compact = this.optionalBoolean(body.compact) ?? false;
+    }
+  }
+
+  private resolveChequeOption(chequeOptionId: string, sequenceNumber: number) {
+    const optionsById: Record<
+      string,
+      { block_type: string; name: string; sequence_number: number }
+    > = {
+      '7ab57cd3-eae8-4ef8-ac76-87306421f908': {
+        block_type: 'information_block',
+        name: 'Название магазина',
+        sequence_number: 1,
+      },
+      '4dbc9d80-45b7-4abe-8726-61f736bd55d2': {
+        block_type: 'information_block',
+        name: 'Дата',
+        sequence_number: 2,
+      },
+      'fe9b1a27-f46f-4f04-8758-b2a47f952e69': {
+        block_type: 'information_block',
+        name: 'Режим работы',
+        sequence_number: 3,
+      },
+      'cff3f41d-0661-4623-a97e-851a8dfef40d': {
+        block_type: 'information_block',
+        name: 'Продавец',
+        sequence_number: 4,
+      },
+      '10375cd3-73af-414f-92c8-4bff64503b9d': {
+        block_type: 'information_block',
+        name: 'Кассир',
+        sequence_number: 5,
+      },
+      'c4183629-4073-4f73-8f10-bddd45bbce82': {
+        block_type: 'information_block',
+        name: 'Клиент',
+        sequence_number: 6,
+      },
+      'c8a08dea-f4cc-45fa-81ef-b71f3968e11f': {
+        block_type: 'information_block',
+        name: 'контакты магазина',
+        sequence_number: 7,
+      },
+      'e28e3891-191f-4bfc-9d43-e7a15aad6a43': {
+        block_type: 'lower_block',
+        name: 'Facebook',
+        sequence_number: 11,
+      },
+      '5236c6a1-91c6-4e01-872d-50259588532c': {
+        block_type: 'lower_block',
+        name: 'Instagram',
+        sequence_number: 12,
+      },
+      'f6c04db8-c20d-4c5f-a2cf-7ca35c9a5f25': {
+        block_type: 'lower_block',
+        name: 'Telegram',
+        sequence_number: 13,
+      },
+      '72407314-caa7-45bc-95d0-f197280d6955': {
+        block_type: 'lower_block',
+        name: 'Сайт',
+        sequence_number: 14,
+      },
+      'd78d4444-d388-405a-b521-b6683a7fe087': {
+        block_type: 'lower_block',
+        name: 'Баркод транзакции',
+        sequence_number: 15,
+      },
+      '07b41bb3-2aee-4d3e-b4c1-e145d48dd65c': {
+        block_type: 'information_block',
+        name: 'ИНН',
+        sequence_number: 16,
+      },
+      '1abb2244-b4f3-48a6-8e3a-aa85da72d775': {
+        block_type: 'information_block',
+        name: 'отображение товаров',
+        sequence_number: 17,
+      },
+      'a9944ae2-1893-45ef-ab0c-c1445b5db917': {
+        block_type: 'information_block',
+        name: 'включение / выключение скидок на товарах',
+        sequence_number: 18,
+      },
+      '30e14632-dc10-40a1-b97a-1be73a53054a': {
+        block_type: 'information_block',
+        name: 'включение / выключение сумм на товарах',
+        sequence_number: 19,
+      },
+      '8f610bdf-f875-4f14-aac7-2ffa0eb5f267': {
+        block_type: 'information_block',
+        name: 'включение / выключение скидок на чеках',
+        sequence_number: 20,
+      },
+      'bf55661b-b18c-4c15-a806-3bffb50b9001': {
+        block_type: 'information_block',
+        name: 'включение / выключение сумм на чеках',
+        sequence_number: 21,
+      },
+      'b3c8e708-abf7-4412-a00f-004f674a4f00': {
+        block_type: 'information_block',
+        name: 'Название юридического лица',
+        sequence_number: 22,
+      },
+      'bae89b69-82d7-4b52-bfbf-b481ade8cf26': {
+        block_type: 'information_block',
+        name: 'Адрес',
+        sequence_number: 23,
+      },
+      '8322a0d3-454d-44c3-9a4a-80f904d36300': {
+        block_type: 'information_block',
+        name: 'Номер телефона клиента',
+        sequence_number: 24,
+      },
+      'b6c8827b-4fe8-498d-9a87-0f6972ba2fb6': {
+        block_type: 'information_block',
+        name: 'Количество продуктов в чеке',
+        sequence_number: 25,
+      },
+      '0c3ac2d4-a71e-4757-9ae5-1e5155dbb1ec': {
+        block_type: 'information_block',
+        name: 'Заметка',
+        sequence_number: 26,
+      },
+      '7036655a-edc7-48c6-94a8-73c1a57c4615': {
+        block_type: 'customer_balance',
+        name: 'Баланс перед покупкой',
+        sequence_number: 27,
+      },
+      'e0f7e786-639d-4412-aaff-d41519973263': {
+        block_type: 'customer_balance',
+        name: 'Добавлено на баланс',
+        sequence_number: 28,
+      },
+      '825988ca-5f9b-495a-b5fa-5d9da1d5efb6': {
+        block_type: 'customer_balance',
+        name: 'Списано с баланса',
+        sequence_number: 29,
+      },
+      '835988ca-5f9b-495a-b5fa-5d9da1d5efb6': {
+        block_type: 'customer_balance',
+        name: 'Баланс после покупки',
+        sequence_number: 30,
+      },
+      '845988ca-5f9b-495a-b5fa-5d9da1d5efb6': {
+        block_type: 'customer_debt',
+        name: 'Долг перед покупкой',
+        sequence_number: 31,
+      },
+      '855988ca-5f9b-495a-b5fa-5d9da1d5efb6': {
+        block_type: 'customer_debt',
+        name: 'Добавлено к долгу',
+        sequence_number: 32,
+      },
+      'b14fe890-7ce4-4cd9-a27f-2afb4ad9be86': {
+        block_type: 'customer_debt',
+        name: 'Списано с долга',
+        sequence_number: 33,
+      },
+      '865988ca-5f9b-495a-b5fa-5d9da1d5efb6': {
+        block_type: 'customer_debt',
+        name: 'Долг после покупки',
+        sequence_number: 34,
+      },
+    };
+    const option = optionsById[chequeOptionId];
+
+    return {
+      id: chequeOptionId,
+      block_type: option?.block_type ?? '',
+      name: option?.name ?? '',
+      sequence_number: option?.sequence_number ?? sequenceNumber,
     };
   }
 
@@ -1056,6 +1677,17 @@ export class CompanySettingsService {
     return this.priceTagsStore;
   }
 
+  private getStoredCheques() {
+    if (!this.chequesStore) {
+      this.chequesStore = this.parseJsonArray<ChequeProfile>(
+        process.env.CHEQUES_JSON,
+        DEFAULT_CHEQUES,
+      ).map((item) => ({ ...item }));
+    }
+
+    return this.chequesStore;
+  }
+
   private parseJsonObject(raw?: string): Record<string, unknown> {
     const parsed = this.parseJsonValue(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -1079,6 +1711,17 @@ export class CompanySettingsService {
 
   private stringOrDefault(value: unknown, fallback: string): string {
     return typeof value === 'string' ? value : fallback;
+  }
+
+  private objectOrDefault(
+    value: unknown,
+    fallback: Record<string, unknown>,
+  ): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return fallback;
+    }
+
+    return value as Record<string, unknown>;
   }
 
   private optionalString(value: unknown) {

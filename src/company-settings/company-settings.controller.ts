@@ -129,10 +129,42 @@ export class CompanySettingsController {
     return this.companySettingsService.deletePriceTag(id);
   }
 
+  @Post('cheque')
+  @Post('v1/cheque')
+  createCheque(@Body() body: Record<string, unknown>) {
+    return this.companySettingsService.createCheque(body);
+  }
+
+  @Put('cheque/:id')
+  @Put('v1/cheque/:id')
+  updateCheque(@Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.companySettingsService.updateCheque(id, body);
+  }
+
+  @Delete('cheque/:id')
+  @Delete('v1/cheque/:id')
+  deleteCheque(@Param('id') id: string) {
+    return this.companySettingsService.deleteCheque(id);
+  }
+
+  @Get('cheque/:id')
+  @Get('v1/cheque/:id')
+  getChequeById(@Param('id') id: string) {
+    return this.companySettingsService.getChequeById(id);
+  }
+
   @Get('cheque')
   @Get('v1/cheque')
-  getCheque(@Query('limit') limit?: string) {
-    return this.companySettingsService.getCheque(Number(limit));
+  getCheque(
+    @Query('name') name?: string,
+    @Query('limit') limit?: string,
+    @Query('page') page?: string,
+  ) {
+    return this.companySettingsService.getCheque({
+      name,
+      limit: Number(limit),
+      page: Number(page),
+    });
   }
 
   @Get('company-payment-type')

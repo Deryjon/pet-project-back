@@ -436,15 +436,43 @@ export class ProductsService {
       throw new BadRequestException('limit must be a positive number');
     }
 
+    const billzCharacteristics = PRODUCT_CHARACTERISTICS.filter(
+      (item) => item.system_name !== 'supplier_name',
+    ).map((item) => {
+      const namesBySystemName: Record<string, string> = {
+        variation_id: 'variation_id',
+        quantity: 'Кол-во',
+        photo: 'Фото',
+        brand_name: 'Бренд',
+        category_name: 'Категория',
+        discount_price: 'Оптовая цена',
+        supply_price: 'Цена поставки',
+        retail_price: 'Цена продажи',
+        sku: 'Артикул',
+        barcode: 'Баркод',
+        name: 'Наименование',
+      };
+      const systemName =
+        item.system_name === 'discount_price'
+          ? 'wholesale_price'
+          : item.system_name;
+
+      return {
+        ...item,
+        name: namesBySystemName[item.system_name] ?? item.name,
+        system_name: systemName,
+      };
+    });
+
     const safeLimit = Math.min(
       Math.trunc(parsedLimit),
-      PRODUCT_CHARACTERISTICS.length,
+      billzCharacteristics.length,
     );
 
     return {
-      active_count: PRODUCT_CHARACTERISTICS.length,
+      active_count: billzCharacteristics.length,
       deleted_count: 2,
-      product_characteristics: PRODUCT_CHARACTERISTICS.slice(0, safeLimit),
+      product_characteristics: billzCharacteristics.slice(0, safeLimit),
     };
   }
 
@@ -470,11 +498,15 @@ export class ProductsService {
     const writeContext = this.requireCatalogWriteContext(context);
     const companyId = this.resolveImportCompanyId(body, writeContext);
     const shopId = this.requireString(body.shop_id, 'shop_id');
-    const branchCode = await this.resolveBranchCodeForWrite(shopId, writeContext);
+    const branchCode = await this.resolveBranchCodeForWrite(
+      shopId,
+      writeContext,
+    );
     const rows = this.extractImportRows(body);
     const fields = this.extractImportFields(body);
     const onMatchPolicy =
-      this.extractImportOnMatchPolicy(body) ?? this.defaultImportOnMatchPolicy();
+      this.extractImportOnMatchPolicy(body) ??
+      this.defaultImportOnMatchPolicy();
     const now = this.formatDateTime(new Date());
     const importId = randomUUID();
     const mode = this.parseImportMode(body.mode);
@@ -565,14 +597,19 @@ export class ProductsService {
       existingSession
         ? {
             ...body,
-            company_id: this.optionalString(body.company_id) ?? existingSession.companyId,
+            company_id:
+              this.optionalString(body.company_id) ?? existingSession.companyId,
           }
         : body,
       writeContext,
     );
-    const branchCode = await this.resolveBranchCodeForWrite(shopId, writeContext);
-    const rows =
-      Array.isArray(body.rows) ? this.extractImportRows(body) : existingSession?.rows ?? [];
+    const branchCode = await this.resolveBranchCodeForWrite(
+      shopId,
+      writeContext,
+    );
+    const rows = Array.isArray(body.rows)
+      ? this.extractImportRows(body)
+      : (existingSession?.rows ?? []);
 
     if (!rows.length) {
       throw new BadRequestException('rows must be an array');
@@ -652,7 +689,7 @@ export class ProductsService {
   getImportProgress(id: string) {
     const resolvedJobId = IMPORT_JOBS.has(id)
       ? id
-      : this.resolveImportSession(id)?.jobId ?? '';
+      : (this.resolveImportSession(id)?.jobId ?? '');
     const job = resolvedJobId ? IMPORT_JOBS.get(resolvedJobId) : undefined;
     if (!job) {
       throw new NotFoundException('Import job not found');
@@ -724,7 +761,8 @@ export class ProductsService {
         0,
       ),
       fields: session.fields,
-      dry_run_summary: session.dryRunSummary ?? this.buildImportDryRunSummary(session.items),
+      dry_run_summary:
+        session.dryRunSummary ?? this.buildImportDryRunSummary(session.items),
     };
   }
 
@@ -736,10 +774,14 @@ export class ProductsService {
     const writeContext = this.requireCatalogWriteContext(context);
     const companyId = this.resolveImportCompanyId(body, writeContext);
     const shopId = this.requireString(body.shop_id, 'shop_id');
-    const branchCode = await this.resolveBranchCodeForWrite(shopId, writeContext);
+    const branchCode = await this.resolveBranchCodeForWrite(
+      shopId,
+      writeContext,
+    );
     const rows = this.extractImportRows(body);
     const onMatchPolicy =
-      this.extractImportOnMatchPolicy(body) ?? this.defaultImportOnMatchPolicy();
+      this.extractImportOnMatchPolicy(body) ??
+      this.defaultImportOnMatchPolicy();
     const now = this.formatDateTime(new Date());
     const importId = randomUUID();
     const result = await this.applyImportRows(
@@ -940,7 +982,11 @@ export class ProductsService {
     return {
       name: this.parseImportFieldResolution(policy.name, 'name', strict),
       brand: this.parseImportFieldResolution(policy.brand, 'brand', strict),
-      category: this.parseImportFieldResolution(policy.category, 'category', strict),
+      category: this.parseImportFieldResolution(
+        policy.category,
+        'category',
+        strict,
+      ),
       description: this.parseImportFieldResolution(
         policy.description,
         'description',
@@ -951,7 +997,11 @@ export class ProductsService {
         'measurement_unit',
         strict,
       ),
-      supplier: this.parseImportFieldResolution(policy.supplier, 'supplier', strict),
+      supplier: this.parseImportFieldResolution(
+        policy.supplier,
+        'supplier',
+        strict,
+      ),
     };
   }
 
@@ -959,7 +1009,9 @@ export class ProductsService {
     return value === 'from_file';
   }
 
-  private buildImportDryRunSummary(items: PreparedImportItem[]): ImportDryRunSummary {
+  private buildImportDryRunSummary(
+    items: PreparedImportItem[],
+  ): ImportDryRunSummary {
     const summary: ImportDryRunSummary = {
       create_count: 0,
       update_count: 0,
@@ -977,7 +1029,8 @@ export class ProductsService {
       }
 
       for (const field of item.different_fields) {
-        summary.conflict_fields[field] = (summary.conflict_fields[field] ?? 0) + 1;
+        summary.conflict_fields[field] =
+          (summary.conflict_fields[field] ?? 0) + 1;
       }
     }
 
@@ -1017,7 +1070,9 @@ export class ProductsService {
     const actor = this.resolveLegacyImportActor(session, context);
     const finishedActor =
       session.status === 'completed' ? actor : { id: '', name: '' };
-    const processJob = session.jobId ? IMPORT_JOBS.get(session.jobId) : undefined;
+    const processJob = session.jobId
+      ? IMPORT_JOBS.get(session.jobId)
+      : undefined;
     const processPercentage =
       processJob?.percent ??
       (session.status === 'completed'
@@ -1164,8 +1219,10 @@ export class ProductsService {
     return requestedCompanyId;
   }
 
-
-  async findAll({ page, limit, search }: FindProductsArgs, authorization?: string) {
+  async findAll(
+    { page, limit, search }: FindProductsArgs,
+    authorization?: string,
+  ) {
     const context = await this.getRequestContext(authorization);
     const safePage = Math.max(1, page);
     const safeLimit = Math.min(Math.max(1, limit), 100);
@@ -1242,7 +1299,9 @@ export class ProductsService {
       }),
     ]);
     const shopLookup = await this.buildShopLookupByBranchCodes(
-      products.flatMap((product) => product.stocks.map((stock) => stock.branchCode)),
+      products.flatMap((product) =>
+        product.stocks.map((stock) => stock.branchCode),
+      ),
     );
 
     return {
@@ -1254,41 +1313,15 @@ export class ProductsService {
     };
   }
 
-  async findAllV2Extended({
-    page,
-    limit,
-    search,
-    statistics,
-    status,
-    archivedList,
-    shopIds,
-    categoryIds,
-    sku,
-    measurementType,
-    supplyPriceFrom,
-    supplyPriceTo,
-    retailPriceFrom,
-    retailPriceTo,
-    wholesalePrice,
-    freePrice,
-    brandIds,
-    supplierIds,
-    order,
-  }: FindProductsArgs, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
-    const safePage = Math.max(1, page);
-    const safeLimit = Math.min(Math.max(1, limit), 1000);
-    const resolvedShopBranchCodes = await this.resolveBranchCodesForFilter(
-      shopIds,
-      context,
-    );
-    const where = this.applyProductScope(this.buildProductWhere(
+  async findAllV2Extended(
+    {
+      page,
+      limit,
       search,
-      brandIds,
-      supplierIds,
+      statistics,
       status,
       archivedList,
-      resolvedShopBranchCodes,
+      shopIds,
       categoryIds,
       sku,
       measurementType,
@@ -1298,7 +1331,39 @@ export class ProductsService {
       retailPriceTo,
       wholesalePrice,
       freePrice,
-    ), context);
+      brandIds,
+      supplierIds,
+      order,
+    }: FindProductsArgs,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const safePage = Math.max(1, page);
+    const safeLimit = Math.min(Math.max(1, limit), 1000);
+    const resolvedShopBranchCodes = await this.resolveBranchCodesForFilter(
+      shopIds,
+      context,
+    );
+    const where = this.applyProductScope(
+      this.buildProductWhere(
+        search,
+        brandIds,
+        supplierIds,
+        status,
+        archivedList,
+        resolvedShopBranchCodes,
+        categoryIds,
+        sku,
+        measurementType,
+        supplyPriceFrom,
+        supplyPriceTo,
+        retailPriceFrom,
+        retailPriceTo,
+        wholesalePrice,
+        freePrice,
+      ),
+      context,
+    );
     const orderBy = this.buildProductOrderBy(order);
 
     const [count, products] = await this.prisma.$transaction([
@@ -1321,7 +1386,9 @@ export class ProductsService {
       }),
     ]);
     const shopLookup = await this.buildShopLookupByBranchCodes(
-      products.flatMap((product) => product.stocks.map((stock) => stock.branchCode)),
+      products.flatMap((product) =>
+        product.stocks.map((stock) => stock.branchCode),
+      ),
       context?.companyId,
     );
 
@@ -1377,35 +1444,14 @@ export class ProductsService {
     return response;
   }
 
-  async getCatalogStatistics({
-    search,
-    brandIds,
-    supplierIds,
-    status,
-    archivedList,
-    shopIds,
-    categoryIds,
-    sku,
-    measurementType,
-    supplyPriceFrom,
-    supplyPriceTo,
-    retailPriceFrom,
-    retailPriceTo,
-    wholesalePrice,
-    freePrice,
-  }: Omit<FindProductsArgs, 'page' | 'limit' | 'statistics' | 'order'>, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
-    const resolvedShopBranchCodes = await this.resolveBranchCodesForFilter(
-      shopIds,
-      context,
-    );
-    const where = this.applyProductScope(this.buildProductWhere(
+  async getCatalogStatistics(
+    {
       search,
       brandIds,
       supplierIds,
       status,
       archivedList,
-      resolvedShopBranchCodes,
+      shopIds,
       categoryIds,
       sku,
       measurementType,
@@ -1415,7 +1461,34 @@ export class ProductsService {
       retailPriceTo,
       wholesalePrice,
       freePrice,
-    ), context);
+    }: Omit<FindProductsArgs, 'page' | 'limit' | 'statistics' | 'order'>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const resolvedShopBranchCodes = await this.resolveBranchCodesForFilter(
+      shopIds,
+      context,
+    );
+    const where = this.applyProductScope(
+      this.buildProductWhere(
+        search,
+        brandIds,
+        supplierIds,
+        status,
+        archivedList,
+        resolvedShopBranchCodes,
+        categoryIds,
+        sku,
+        measurementType,
+        supplyPriceFrom,
+        supplyPriceTo,
+        retailPriceFrom,
+        retailPriceTo,
+        wholesalePrice,
+        freePrice,
+      ),
+      context,
+    );
 
     const productsForStatistics = await this.prisma.product.findMany({
       where,
@@ -1477,7 +1550,9 @@ export class ProductsService {
       : [];
 
     const metadataObject =
-      body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
+      body.metadata &&
+      typeof body.metadata === 'object' &&
+      !Array.isArray(body.metadata)
         ? (body.metadata as Record<string, unknown>)
         : undefined;
 
@@ -1717,11 +1792,16 @@ export class ProductsService {
         markupPercent,
         salePrice,
         quantity: totalQuantity,
-        metadata: this.buildCatalogMetadata(body, description, {
-          isVariative,
-          selectedAttributes,
-          variants,
-        }, writeContext),
+        metadata: this.buildCatalogMetadata(
+          body,
+          description,
+          {
+            isVariative,
+            selectedAttributes,
+            variants,
+          },
+          writeContext,
+        ),
         brand: brandName
           ? {
               connectOrCreate: {
@@ -1979,11 +2059,16 @@ export class ProductsService {
               )
             : existingProduct.quantity
           : 0,
-        metadata: this.buildCatalogMetadata(body, description, {
-          isVariative,
-          selectedAttributes,
-          variants,
-        }, writeContext),
+        metadata: this.buildCatalogMetadata(
+          body,
+          description,
+          {
+            isVariative,
+            selectedAttributes,
+            variants,
+          },
+          writeContext,
+        ),
         suppliers:
           body.supplier_ids !== undefined
             ? {
@@ -2215,7 +2300,8 @@ export class ProductsService {
         (sum, stock) => sum + stock.quantity,
         0,
       ),
-      imported: visibleStocks.reduce((sum, stock) => sum + stock.quantity, 0) +
+      imported:
+        visibleStocks.reduce((sum, stock) => sum + stock.quantity, 0) +
         salesSummary.sold,
       sold: salesSummary.sold,
       transfer_arrived: 0,
@@ -2315,31 +2401,35 @@ export class ProductsService {
     };
   }
 
-  private toProductResponseV2(product: {
-    id: number;
-    name: string;
-    sku: string | null;
-    barcode: string | null;
-    photo: string | null;
-    quantity: number;
-    purchasePrice: number | null;
-    salePrice: number | null;
-    productType: string | null;
-    createdAt: Date;
-    updatedAt: Date;
-    archivedAt?: Date | null;
-    archivedByUserId?: number | null;
-    archivedByName?: string | null;
-    category: { name: string } | null;
-    brand: { name: string } | null;
-    suppliers: { supplier: { id: number; name: string } }[];
-    stocks: {
-      branchCode: string;
+  private toProductResponseV2(
+    product: {
+      id: number;
+      name: string;
+      sku: string | null;
+      barcode: string | null;
+      photo: string | null;
       quantity: number;
       purchasePrice: number | null;
       salePrice: number | null;
-    }[];
-  }, shopLookup?: Map<string, ResolvedShop>, visibleBranchCodes?: string[]) {
+      productType: string | null;
+      createdAt: Date;
+      updatedAt: Date;
+      archivedAt?: Date | null;
+      archivedByUserId?: number | null;
+      archivedByName?: string | null;
+      category: { name: string } | null;
+      brand: { name: string } | null;
+      suppliers: { supplier: { id: number; name: string } }[];
+      stocks: {
+        branchCode: string;
+        quantity: number;
+        purchasePrice: number | null;
+        salePrice: number | null;
+      }[];
+    },
+    shopLookup?: Map<string, ResolvedShop>,
+    visibleBranchCodes?: string[],
+  ) {
     const currencyCode =
       this.companySettingsService.getDefaultCurrencyIsoCode();
     const filteredStocks = this.filterStocksByBranchCodes(
@@ -2526,10 +2616,9 @@ export class ProductsService {
       companyId?: string | null;
     } | null,
   ) {
-    const currencyCode =
-      this.companySettingsService.getDefaultCurrencyIsoCode(
-        product.companyId ?? context?.companyId ?? undefined,
-      );
+    const currencyCode = this.companySettingsService.getDefaultCurrencyIsoCode(
+      product.companyId ?? context?.companyId ?? undefined,
+    );
     const metadata =
       product.metadata &&
       typeof product.metadata === 'object' &&
@@ -2542,7 +2631,10 @@ export class ProductsService {
     const description = this.optionalString(metadata.description) ?? '';
     const freePrice = this.toBooleanValue(metadata.free_price);
     const isVariative = this.toBooleanValue(metadata.is_variative);
-    const totalMeasurementValue = product.stocks.reduce((sum, stock) => sum + stock.quantity, 0);
+    const totalMeasurementValue = product.stocks.reduce(
+      (sum, stock) => sum + stock.quantity,
+      0,
+    );
     const allBranchCodes = [
       ...new Set([
         ...product.stocks.map((stock) => stock.branchCode),
@@ -2623,12 +2715,8 @@ export class ProductsService {
         has_trigger: false,
         shop_id: item.shop.shop_id,
         total_measurement_value: item.measurementValue,
-        total_min_supply_price: item.measurementValue
-          ? item.supplyPrice
-          : null,
-        total_max_supply_price: item.measurementValue
-          ? item.supplyPrice
-          : null,
+        total_min_supply_price: item.measurementValue ? item.supplyPrice : null,
+        total_max_supply_price: item.measurementValue ? item.supplyPrice : null,
         total_supply_sum: item.supplySum,
         total_active_measurement_value: item.measurementValue,
         total_active_min_supply_price: item.measurementValue
@@ -2798,10 +2886,9 @@ export class ProductsService {
       companyId?: string | null;
     },
   ) {
-    const currencyCode =
-      this.companySettingsService.getDefaultCurrencyIsoCode(
-        context.companyId ?? undefined,
-      );
+    const currencyCode = this.companySettingsService.getDefaultCurrencyIsoCode(
+      context.companyId ?? undefined,
+    );
     const shopPrices = this.extractShopPrices(
       body,
       shipments,
@@ -2819,7 +2906,10 @@ export class ProductsService {
     const measurementType = this.optionalString(body.measurement_type);
     const supportsStock = !this.isServiceProductType(productType);
     const stockSummaries = shipments.map((shipment) => {
-      const shop = this.resolveShopByBranchCode(shipment.branchCode, shopLookup);
+      const shop = this.resolveShopByBranchCode(
+        shipment.branchCode,
+        shopLookup,
+      );
       const supplySum = shipment.quantity * shipment.supplyPrice;
       const retailSum = shipment.quantity * shipment.retailPrice;
       const supplierId = shipment.supplierId ?? DEFAULT_EMPTY_SUPPLIER_ID;
@@ -3364,7 +3454,7 @@ export class ProductsService {
       'sku',
       'barcode',
       'category_name',
-      'supplier_name',  
+      'supplier_name',
       'quantity',
       'supply_price',
       'retail_price',
@@ -3374,9 +3464,13 @@ export class ProductsService {
 
     return orderedSystemNames
       .map((systemName) =>
-        PRODUCT_CHARACTERISTICS.find((field) => field.system_name === systemName),
+        PRODUCT_CHARACTERISTICS.find(
+          (field) => field.system_name === systemName,
+        ),
       )
-      .filter((field): field is (typeof PRODUCT_CHARACTERISTICS)[number] => !!field)
+      .filter(
+        (field): field is (typeof PRODUCT_CHARACTERISTICS)[number] => !!field,
+      )
       .map((field, index) => ({
         id: '',
         name: fieldNamesBySystemName[field.system_name] ?? field.name,
@@ -3539,56 +3633,58 @@ export class ProductsService {
     shopLookup: Map<string, ResolvedShop>,
     companyId?: string | null,
   ) {
-    const currencyCode =
-      this.companySettingsService.getDefaultCurrencyIsoCode(
-        companyId ?? undefined,
-      );
+    const currencyCode = this.companySettingsService.getDefaultCurrencyIsoCode(
+      companyId ?? undefined,
+    );
 
     return shipments.map((shipment) => {
-      const shop = this.resolveShopByBranchCode(shipment.branchCode, shopLookup);
+      const shop = this.resolveShopByBranchCode(
+        shipment.branchCode,
+        shopLookup,
+      );
 
-      return ({
-      comment: '',
-      company_id: companyId ?? COMPANY_ID,
-      created_at: this.formatDateTime(new Date()),
-      id: randomUUID(),
-      items: [
-        {
-          currency_id: '',
-          has_trigger: shipment.hasTrigger,
-          id: randomUUID(),
-          max_price: 0,
-          measurement_type: '',
-          measurement_value_credit: shipment.quantity,
-          measurement_value_debit: 0,
-          min_price: 0,
-          prec: 0,
-          price_id: '',
-          product_barcode: '',
-          product_condition_id: '',
-          product_id: String(productId),
-          product_name: '',
-          product_sku: '',
-          retail_currency: currencyCode,
-          retail_price: shipment.retailPrice,
-          serial_number: '',
-          shipment_status_id: '',
-          small_left_measurement_value: shipment.smallLeftMeasurementValue,
-          supplier_id: shipment.supplierId ?? '',
-          supply_currency: currencyCode,
-          supply_price: shipment.supplyPrice,
-          user: null,
-          wholesale_price: 0,
-        },
-      ],
-      order_id: '',
-      process_id: '',
-      process_type: 0,
-      shipment_status_id: '31cd30a7-46ae-460c-9530-7c2df1356b62',
-      shipment_type_id: 'a230b02b-46f8-42f4-885e-d81813c297d6',
-      shop_id: shop.shop_id,
-      total_loaded_items_measurement_value: 0,
-    });
+      return {
+        comment: '',
+        company_id: companyId ?? COMPANY_ID,
+        created_at: this.formatDateTime(new Date()),
+        id: randomUUID(),
+        items: [
+          {
+            currency_id: '',
+            has_trigger: shipment.hasTrigger,
+            id: randomUUID(),
+            max_price: 0,
+            measurement_type: '',
+            measurement_value_credit: shipment.quantity,
+            measurement_value_debit: 0,
+            min_price: 0,
+            prec: 0,
+            price_id: '',
+            product_barcode: '',
+            product_condition_id: '',
+            product_id: String(productId),
+            product_name: '',
+            product_sku: '',
+            retail_currency: currencyCode,
+            retail_price: shipment.retailPrice,
+            serial_number: '',
+            shipment_status_id: '',
+            small_left_measurement_value: shipment.smallLeftMeasurementValue,
+            supplier_id: shipment.supplierId ?? '',
+            supply_currency: currencyCode,
+            supply_price: shipment.supplyPrice,
+            user: null,
+            wholesale_price: 0,
+          },
+        ],
+        order_id: '',
+        process_id: '',
+        process_type: 0,
+        shipment_status_id: '31cd30a7-46ae-460c-9530-7c2df1356b62',
+        shipment_type_id: 'a230b02b-46f8-42f4-885e-d81813c297d6',
+        shop_id: shop.shop_id,
+        total_loaded_items_measurement_value: 0,
+      };
     });
   }
 
@@ -3608,20 +3704,22 @@ export class ProductsService {
       const retailPrice = this.toNumber(item.retail_price) ?? 0;
       const name = this.optionalString(item.name);
 
-      return [{
-        name: name ?? '',
-        sku: this.optionalString(item.sku),
-        barcode: this.optionalString(item.barcode),
-        quantity,
-        supplyPrice,
-        retailPrice,
-        categoryName: this.optionalString(item.category_name),
-        brandName: this.optionalString(item.brand_name),
-        measurementUnit: this.optionalString(item.measurement_unit),
-        supplier: this.optionalString(item.supplier),
-        description: this.optionalString(item.description),
-        rowNumber: index + 1,
-      }].map(({ rowNumber, ...prepared }) => {
+      return [
+        {
+          name: name ?? '',
+          sku: this.optionalString(item.sku),
+          barcode: this.optionalString(item.barcode),
+          quantity,
+          supplyPrice,
+          retailPrice,
+          categoryName: this.optionalString(item.category_name),
+          brandName: this.optionalString(item.brand_name),
+          measurementUnit: this.optionalString(item.measurement_unit),
+          supplier: this.optionalString(item.supplier),
+          description: this.optionalString(item.description),
+          rowNumber: index + 1,
+        },
+      ].map(({ rowNumber, ...prepared }) => {
         if (!prepared.name && !prepared.sku && !prepared.barcode) {
           throw new BadRequestException(
             `Row ${rowNumber} must contain at least name, sku, or barcode`,
@@ -3661,10 +3759,9 @@ export class ProductsService {
     branchCode: string,
     contextCompanyId?: string | null,
   ) {
-    const currencyCode =
-      this.companySettingsService.getDefaultCurrencyIsoCode(
-        contextCompanyId ?? companyId,
-      );
+    const currencyCode = this.companySettingsService.getDefaultCurrencyIsoCode(
+      contextCompanyId ?? companyId,
+    );
 
     const items: PreparedImportItem[] = [];
     for (let index = 0; index < rows.length; index += 1) {
@@ -3740,7 +3837,10 @@ export class ProductsService {
     return null;
   }
 
-  private async findImportMatchedProduct(companyId: string, row: ImportRowInput) {
+  private async findImportMatchedProduct(
+    companyId: string,
+    row: ImportRowInput,
+  ) {
     const sku = row.sku?.trim();
     const barcode = row.barcode?.trim();
 
@@ -3962,7 +4062,10 @@ export class ProductsService {
         const actionResult = await this.withImportProductLock(
           productLockKey,
           async () => {
-            const matchedProduct = await this.findImportMatchedProduct(companyId, row);
+            const matchedProduct = await this.findImportMatchedProduct(
+              companyId,
+              row,
+            );
             if (matchedProduct) {
               const changedFields = await this.applyImportUpdate(
                 matchedProduct.id,
@@ -3979,7 +4082,11 @@ export class ProductsService {
               };
             }
 
-            const createdProduct = await this.applyImportCreate(row, companyId, branchCode);
+            const createdProduct = await this.applyImportCreate(
+              row,
+              companyId,
+              branchCode,
+            );
             return {
               action: 'create' as const,
               productId: createdProduct.id,
@@ -4042,7 +4149,10 @@ export class ProductsService {
     companyId: string,
     branchCode: string,
   ) {
-    const identifiers = await this.resolveIdentifiersForImportCreate(row, companyId);
+    const identifiers = await this.resolveIdentifiersForImportCreate(
+      row,
+      companyId,
+    );
     const createdProduct = await this.prisma.product.create({
       data: {
         company: {
@@ -4225,7 +4335,7 @@ export class ProductsService {
           metadata: this.buildImportMetadata(
             companyId,
             this.shouldUseFileValue(onMatchPolicy.description)
-              ? row.description ?? ''
+              ? (row.description ?? '')
               : this.resolveDescriptionFromMetadata(existingProduct.metadata),
           ),
           category:
@@ -4306,7 +4416,10 @@ export class ProductsService {
         reason: 'updated_from_file_by_policy',
       });
     }
-    if (this.shouldUseFileValue(onMatchPolicy.measurementUnit) && row.measurementUnit) {
+    if (
+      this.shouldUseFileValue(onMatchPolicy.measurementUnit) &&
+      row.measurementUnit
+    ) {
       changedFields.push({
         field: 'measurementUnit',
         reason: 'updated_from_file_by_policy',
@@ -4385,7 +4498,9 @@ export class ProductsService {
       }
     }
 
-    throw new BadRequestException(`Unable to generate unique ${field} for import`);
+    throw new BadRequestException(
+      `Unable to generate unique ${field} for import`,
+    );
   }
 
   private resolveImportProductLockKey(companyId: string, row: ImportRowInput) {
@@ -4419,8 +4534,8 @@ export class ProductsService {
       options?.toCreatedAt,
     );
     const visibleBranchCodes = context?.allowedBranchCodes?.length
-        ? context.allowedBranchCodes
-        : undefined;
+      ? context.allowedBranchCodes
+      : undefined;
     const saleItems = await this.prisma.saleItem.findMany({
       where: {
         productId,
@@ -4534,7 +4649,10 @@ export class ProductsService {
     return parsed;
   }
 
-  private async withImportProductLock<T>(key: string, callback: () => Promise<T>) {
+  private async withImportProductLock<T>(
+    key: string,
+    callback: () => Promise<T>,
+  ) {
     while (PRODUCT_IMPORT_LOCKS.has(key)) {
       await new Promise((resolve) => {
         setTimeout(resolve, 10);
@@ -4600,7 +4718,10 @@ export class ProductsService {
     });
   }
 
-  private applyProductScope(where: Prisma.ProductWhereInput | undefined, context: any) {
+  private applyProductScope(
+    where: Prisma.ProductWhereInput | undefined,
+    context: any,
+  ) {
     if (!context || context.userType !== 'company') {
       return where;
     }
@@ -4813,11 +4934,13 @@ export class ProductsService {
     }>,
     context: any,
   ) {
-    const normalizedIdentifiers = [...new Set(
-      shipments
-        .map((shipment) => shipment.shopId.trim())
-        .filter((identifier) => identifier.length > 0),
-    )];
+    const normalizedIdentifiers = [
+      ...new Set(
+        shipments
+          .map((shipment) => shipment.shopId.trim())
+          .filter((identifier) => identifier.length > 0),
+      ),
+    ];
 
     const resolvedBranchCodes = new Map<string, string>();
 
@@ -4904,7 +5027,10 @@ export class ProductsService {
     ).trim();
   }
 
-  private async resolveBranchCodeForWrite(shopIdentifier: string, context: any) {
+  private async resolveBranchCodeForWrite(
+    shopIdentifier: string,
+    context: any,
+  ) {
     const normalizedIdentifier = shopIdentifier.trim();
 
     if (!normalizedIdentifier) {
@@ -4978,7 +5104,8 @@ export class ProductsService {
       return directoryBranchCode;
     }
 
-    const legacyBranchCode = this.resolveBranchCodeByShopId(normalizedIdentifier);
+    const legacyBranchCode =
+      this.resolveBranchCodeByShopId(normalizedIdentifier);
     if (legacyBranchCode) {
       const legacyShop = await this.prisma.shop.findFirst({
         where: {
@@ -5055,7 +5182,9 @@ export class ProductsService {
     } as unknown as Prisma.ProductWhereInput;
   }
 
-  private buildBulkProductIdentifierWhere(ids: string[]): Prisma.ProductWhereInput {
+  private buildBulkProductIdentifierWhere(
+    ids: string[],
+  ): Prisma.ProductWhereInput {
     const normalizedIds = ids.map((id) => id.trim()).filter(Boolean);
     const numericIds = normalizedIds
       .map((id) => Number(id))
@@ -5083,7 +5212,9 @@ export class ProductsService {
         } as Prisma.ProductWhereInput);
   }
 
-  private getProductPublicId(product: { id: number } & Record<string, unknown>) {
+  private getProductPublicId(
+    product: { id: number } & Record<string, unknown>,
+  ) {
     const publicId =
       typeof (product as Record<string, unknown>).publicId === 'string'
         ? ((product as Record<string, unknown>).publicId as string).trim()
@@ -5330,9 +5461,11 @@ export class ProductsService {
     branchCodes: string[],
     companyId?: string | null,
   ) {
-    const normalizedBranchCodes = [...new Set(
-      branchCodes.map((branchCode) => branchCode.trim()).filter(Boolean),
-    )];
+    const normalizedBranchCodes = [
+      ...new Set(
+        branchCodes.map((branchCode) => branchCode.trim()).filter(Boolean),
+      ),
+    ];
     const shopLookup = new Map<string, ResolvedShop>();
 
     if (!normalizedBranchCodes.length) {
