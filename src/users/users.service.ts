@@ -584,11 +584,16 @@ export class UsersService {
     }
   }
 
-  async findByIdOrThrow(id: number) {
+  async findByIdOrThrow(
+    id: number,
+    options?: {
+      includeDeleted?: boolean;
+    },
+  ) {
     const user = await this.db.user.findFirst({
       where: {
         id,
-        deletedAt: 0,
+        ...(options?.includeDeleted ? {} : { deletedAt: 0 }),
       },
       include: this.userRelationsInclude(),
     });
@@ -875,6 +880,10 @@ export class UsersService {
         this.optionalBoolean(body.can_switch_shops) ?? false;
     }
 
+    if (body.is_active !== undefined) {
+      data.isActive = this.requireBoolean(body.is_active, 'is_active');
+    }
+
     if (targetUser.userType === 'company' && companyId) {
       const crmRole =
         body.crm_role_id !== undefined
@@ -991,6 +1000,33 @@ export class UsersService {
     return this.findOneResponse(id);
   }
 
+  async updateStatus(
+    id: number,
+    body: Record<string, unknown>,
+    actor?: UserWithRelations,
+  ) {
+    const targetUser = await this.findByIdOrThrow(id);
+
+    if (actor && !this.canManageUser(actor, targetUser)) {
+      throw new ForbiddenException('You cannot manage this user');
+    }
+
+    const isActive = this.requireBoolean(body.is_active, 'is_active');
+
+    const updatedUser = await this.db.user.update({
+      where: { id },
+      data: {
+        isActive,
+      },
+      include: this.userRelationsInclude(),
+    });
+
+    return {
+      message: isActive ? 'User activated' : 'User blocked',
+      user: await this.toListItem(updatedUser),
+    };
+  }
+
   async remove(id: number, actor?: UserWithRelations) {
     const targetUser = await this.findByIdOrThrow(id);
 
@@ -1011,6 +1047,28 @@ export class UsersService {
     return {
       message: 'User deleted',
       user_id: id,
+    };
+  }
+
+  async restore(id: number, actor?: UserWithRelations) {
+    const targetUser = await this.findByIdOrThrow(id, { includeDeleted: true });
+
+    if (actor && !this.canManageUser(actor, targetUser)) {
+      throw new ForbiddenException('You cannot manage this user');
+    }
+
+    const updatedUser = await this.db.user.update({
+      where: { id },
+      data: {
+        deletedAt: 0,
+        isActive: true,
+      },
+      include: this.userRelationsInclude(),
+    });
+
+    return {
+      message: 'User restored',
+      user: await this.toListItem(updatedUser),
     };
   }
 

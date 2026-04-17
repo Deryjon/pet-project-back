@@ -83,6 +83,31 @@ export class UsersController {
     );
   }
 
+  @Patch('users/:id/status')
+  async updateStatus(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: UpdateUserDto,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const actor = await this.usersService.assertAdminAccess(authorization);
+
+    return this.usersService.updateStatus(
+      id,
+      body as unknown as Record<string, unknown>,
+      actor,
+    );
+  }
+
+  @Patch('users/:id/restore')
+  async restore(
+    @Param('id', ParseIntPipe) id: number,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const actor = await this.usersService.assertAdminAccess(authorization);
+
+    return this.usersService.restore(id, actor);
+  }
+
   @Delete('users/:id')
   async remove(
     @Param('id', ParseIntPipe) id: number,
