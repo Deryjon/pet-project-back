@@ -42,6 +42,30 @@ export class SalesController {
     return this.salesService.findOrder(id, authorization);
   }
 
+  @Get('v1/order-draft-debt/:id')
+  findOrderDraftDebt(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.findOrderDraftDebt(id, authorization);
+  }
+
+  @Get('v3/order-search')
+  searchOrders(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.searchOrders(query, authorization);
+  }
+
+  @Get('v3/order-search-stats')
+  searchOrderStats(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.searchOrderStats(query, authorization);
+  }
+
   @Get('v2/new-sale/products')
   findProductsForNewSale(
     @Query('page') page?: string,

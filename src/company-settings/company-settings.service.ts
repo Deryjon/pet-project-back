@@ -621,6 +621,85 @@ export class CompanySettingsService {
     };
   }
 
+  async getShopById(id: string, companyId?: string) {
+    const shopId = this.requireString(id, 'id');
+    const targetCompanyId = companyId?.trim() || DEFAULT_COMPANY_ID;
+
+    const dbShop = await this.db.shop.findFirst({
+      where: {
+        companyId: targetCompanyId,
+        OR: [{ id: shopId }, { branchCode: shopId }],
+      },
+    });
+
+    if (dbShop) {
+      return {
+        id: dbShop.id,
+        company_id: dbShop.companyId,
+        name: dbShop.name,
+        branch_code: dbShop.branchCode,
+        address: '',
+        phone_numbers: [],
+        facebook: '',
+        instagram: '',
+        telegram: '',
+        website: '',
+        working_hours: null,
+        cash_boxes_count: 0,
+        cash_boxes: [],
+        is_active: dbShop.isActive,
+      };
+    }
+
+    const shop = this.parseJsonArray<ShopProfile>(
+      process.env.SHOPS_JSON,
+      DEFAULT_SHOPS,
+    ).find(
+      (item) =>
+        this.stringOrDefault(item.id, '') === shopId &&
+        this.stringOrDefault(item.company_id, DEFAULT_COMPANY_ID) ===
+          targetCompanyId,
+    );
+
+    if (!shop) {
+      throw new NotFoundException('Shop not found');
+    }
+
+    return {
+      ...shop,
+      company_id: targetCompanyId,
+      facebook: this.stringOrDefault(shop.facebook, ''),
+      instagram: this.stringOrDefault(shop.instagram, ''),
+      telegram: this.stringOrDefault(shop.telegram, ''),
+      website: this.stringOrDefault(shop.website, ''),
+      working_hours: shop.working_hours ?? null,
+    };
+  }
+
+  getCompanyCurrencies(companyId?: string) {
+    const defaultCurrency = this.getDefaultCurrency(companyId);
+
+    return {
+      company_currencies: [defaultCurrency],
+      count: 1,
+    };
+  }
+
+  getLoyaltyProgram(companyId?: string) {
+    return {
+      id: '',
+      company_id: companyId?.trim() || DEFAULT_COMPANY_ID,
+      is_active: false,
+      name: '',
+      type: '',
+      cashback_percent: 0,
+      bonus_percent: 0,
+      levels: [],
+      has_customer_balance: false,
+      has_customer_debt: false,
+    };
+  }
+
   getMeasurementUnitById(id: string, companyId?: string) {
     const measurementUnitId = this.requireString(id, 'id');
     const targetCompanyId = companyId?.trim() || DEFAULT_COMPANY_ID;

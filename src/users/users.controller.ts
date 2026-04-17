@@ -21,6 +21,7 @@ import { UpdatePasswordDto } from './dto/update-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UsersService } from './users.service';
+import { ROLE_PERMISSIONS_PAYLOAD } from '../roles/roles.permissions';
 
 @Controller()
 export class UsersController {
@@ -45,6 +46,26 @@ export class UsersController {
     @Headers('authorization') authorization?: string,
   ) {
     return this.usersService.findBillzUsers(query, authorization);
+  }
+
+  @Get('v2/user/:id/permissions')
+  getV2UserPermissions(@Param('id') id: string) {
+    const sections = ROLE_PERMISSIONS_PAYLOAD.sections.map((section) => ({
+      ...section,
+      permissions: section.permissions.map((permission) => ({
+        ...permission,
+        is_active: true,
+        children: permission.children.map((child) => ({
+          ...child,
+          is_active: true,
+        })),
+      })),
+    }));
+
+    return {
+      user_id: id,
+      sections,
+    };
   }
 
   @Post('users/add')

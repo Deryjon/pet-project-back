@@ -52,7 +52,6 @@ export class CompanySettingsController {
   }
 
   @Get('shop')
-  @Get('v1/shop')
   async getShops(
     @Query('limit') limit?: string,
     @Query('page') page?: string,
@@ -75,6 +74,41 @@ export class CompanySettingsController {
         ? (context?.allowedShopIds ?? [])
         : undefined,
     });
+  }
+
+  @Get('v1/shop')
+  async getV1Shops(
+    @Query('limit') limit?: string,
+    @Query('page') page?: string,
+    @Query('name') name?: string,
+    @Query('company_id') companyId?: string,
+    @Query('only_allowed') onlyAllowed?: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.getShops(
+      limit,
+      page,
+      name,
+      companyId,
+      onlyAllowed,
+      authorization,
+    );
+  }
+
+  @Get('v1/shop/:id')
+  async getV1ShopById(
+    @Param('id') id: string,
+    @Query('company_id') companyId?: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const context = authorization
+      ? await this.usersService.getRequestContext(authorization)
+      : null;
+
+    return this.companySettingsService.getShopById(
+      id,
+      companyId || context?.companyId || undefined,
+    );
   }
 
   @Get('v2/measurement-unit/:id')
@@ -199,8 +233,18 @@ export class CompanySettingsController {
   }
 
   @Get('company-payment-type')
-  @Get('v1/company-payment-type')
   getCompanyPaymentTypes(
+    @Query('limit') limit?: string,
+    @Query('company_id') companyId?: string,
+  ) {
+    return this.companySettingsService.getCompanyPaymentTypes(
+      Number(limit),
+      companyId,
+    );
+  }
+
+  @Get('v1/company-payment-type')
+  getV1CompanyPaymentTypes(
     @Query('limit') limit?: string,
     @Query('company_id') companyId?: string,
   ) {
@@ -229,7 +273,6 @@ export class CompanySettingsController {
   }
 
   @Get('cash-box')
-  @Get('v1/cash-box')
   getCashBoxes(
     @Query('limit') limit?: string,
     @Query('page') page?: string,
@@ -242,5 +285,30 @@ export class CompanySettingsController {
       name,
       companyId,
     });
+  }
+
+  @Get('v1/cash-box')
+  getV1CashBoxes(
+    @Query('limit') limit?: string,
+    @Query('page') page?: string,
+    @Query('name') name?: string,
+    @Query('company_id') companyId?: string,
+  ) {
+    return this.companySettingsService.getCashBoxes({
+      limit: Number(limit),
+      page: Number(page),
+      name,
+      companyId,
+    });
+  }
+
+  @Get('v1/loyalty-program')
+  getV1LoyaltyProgram(@Query('company_id') companyId?: string) {
+    return this.companySettingsService.getLoyaltyProgram(companyId);
+  }
+
+  @Get('v2/company-currencies')
+  getV2CompanyCurrencies(@Query('company_id') companyId?: string) {
+    return this.companySettingsService.getCompanyCurrencies(companyId);
   }
 }

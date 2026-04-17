@@ -156,6 +156,188 @@ export class SalesService {
     return this.toV2OrderResponse(sale, context, shopLookup);
   }
 
+  async findOrderDraftDebt(id: string, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
+    const saleId = this.parseOptionalEntityId(id);
+
+    if (!saleId) {
+      return this.emptyOrderDraftDebt(id);
+    }
+
+    const sale = await this.prisma.sale.findUnique({
+      where: { id: saleId },
+      select: {
+        id: true,
+        companyId: true,
+        branchCode: true,
+        payableTotal: true,
+        total: true,
+        isDraft: true,
+      },
+    });
+
+    if (!sale) {
+      return this.emptyOrderDraftDebt(id);
+    }
+
+    this.assertSaleAccess(sale, context);
+    return this.emptyOrderDraftDebt(String(sale.id), sale.payableTotal || sale.total);
+  }
+
+  async searchOrders(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const safePage = Math.max(1, Number(query.page) || 1);
+    const safeLimit = Math.min(Math.max(1, Number(query.limit) || 50), 100);
+    const onlyDeleted = query.only_deleted === 'true';
+    const where = this.buildOrderSearchWhere(query, context);
+
+    if (onlyDeleted) {
+      return {
+        count: 0,
+        orders_sorted_by_date_list: [],
+      };
+    }
+
+    const [count, sales] = await this.prisma.$transaction([
+      this.prisma.sale.count({ where }),
+      this.prisma.sale.findMany({
+        where,
+        include: {
+          user: true,
+          items: {
+            include: {
+              product: {
+                include: {
+                  category: true,
+                  brand: true,
+                  stocks: true,
+                },
+              },
+            },
+          },
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
+        skip: (safePage - 1) * safeLimit,
+        take: safeLimit,
+      }),
+    ]);
+
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      sales
+        .map((sale) => sale.branchCode)
+        .filter((value): value is string => !!value),
+      context?.companyId,
+    );
+
+    const grouped = new Map<string, unknown[]>();
+    for (const sale of sales) {
+      const date = this.formatDate(sale.createdAt);
+      const orders = grouped.get(date) ?? [];
+      orders.push(this.toV2OrderResponse(sale, context, shopLookup));
+      grouped.set(date, orders);
+    }
+
+    return {
+      count,
+      orders_sorted_by_date_list: [...grouped.entries()].map(
+        ([date, orders]) => ({
+          date,
+          orders,
+        }),
+      ),
+    };
+  }
+
+  async searchOrderStats(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const onlyDeleted = query.only_deleted === 'true';
+    const where = this.buildOrderSearchWhere(query, context);
+
+    if (onlyDeleted) {
+      return this.emptyOrderSearchStats();
+    }
+
+    const sales = await this.prisma.sale.findMany({
+      where,
+      include: {
+        items: {
+          include: {
+            product: true,
+          },
+        },
+      },
+    });
+
+    const paymentTypeLookup = this.buildPaymentTypeLookup(context?.companyId);
+    const paymentStats = new Map<
+      string,
+      {
+        company_payment_type_id: string;
+        company_payment_type: {
+          id: string;
+          name: string;
+          payment_type_id: string;
+        };
+        sum: number;
+      }
+    >();
+    let totalProducts = 0;
+    let totalServices = 0;
+    let totalTransactionsSum = 0;
+
+    for (const sale of sales) {
+      totalTransactionsSum += sale.payableTotal || sale.total || 0;
+
+      for (const item of sale.items) {
+        if (item.product?.productType === '5a0e556a-15f8-47ac-ae07-46972f3c6ab4') {
+          totalServices += item.quantity;
+        } else {
+          totalProducts += item.quantity;
+        }
+      }
+
+      const paymentTypeId = sale.paymentMethod ?? '';
+      if (!paymentTypeId) {
+        continue;
+      }
+
+      const paymentType = paymentTypeLookup.get(paymentTypeId);
+      const existing = paymentStats.get(paymentTypeId);
+      const sum = sale.payableTotal || sale.total || 0;
+
+      if (existing) {
+        existing.sum += sum;
+      } else {
+        paymentStats.set(paymentTypeId, {
+          company_payment_type_id: paymentTypeId,
+          company_payment_type: {
+            id: paymentTypeId,
+            name: paymentType?.name ?? paymentTypeId,
+            payment_type_id: paymentType?.payment_type_id ?? '',
+          },
+          sum,
+        });
+      }
+    }
+
+    return {
+      ...this.emptyOrderSearchStats(),
+      total_products_measurement_value: totalProducts,
+      total_services_measurement_value: totalServices,
+      total_transactions_sum: totalTransactionsSum,
+      payment_types_stats: [...paymentStats.values()],
+      count: sales.length,
+    };
+  }
+
   async findProductsForNewSale(args: {
     page: number;
     limit: number;
@@ -775,7 +957,9 @@ export class SalesService {
     updatedAt: Date;
     isDraft: boolean;
     total: number;
+    payableTotal: number;
     discountAmount: number;
+    paymentMethod: string | null;
     user: { id: number; firstName: string; lastName: string } | null;
     items: {
       id: number;
@@ -806,6 +990,11 @@ export class SalesService {
     }[];
   }, context?: any, shopLookup?: Map<string, { shop_id: string; shop_name: string }>) {
     const shop = this.resolveShopByBranchCode(sale.branchCode ?? '', shopLookup);
+    const paymentTypeLookup = this.buildPaymentTypeLookup(context?.companyId);
+    const payment = sale.paymentMethod
+      ? paymentTypeLookup.get(sale.paymentMethod)
+      : undefined;
+    const paidAmount = sale.payableTotal || sale.total || 0;
 
     return {
       id: String(sale.id),
@@ -903,6 +1092,39 @@ export class SalesService {
           order_product_id: 0,
           sale_order_item_id: '',
         })),
+        order_payments:
+          !sale.isDraft && sale.paymentMethod
+            ? [
+                {
+                  id: randomUUID(),
+                  company_payment_type_id: sale.paymentMethod,
+                  payment_sub_type_id: '',
+                  payment_sub_type_name: '',
+                  company_payment_type: {
+                    id: sale.paymentMethod,
+                    name: payment?.name ?? sale.paymentMethod,
+                    payment_type_id: payment?.payment_type_id ?? '',
+                  },
+                  paid_amount: paidAmount,
+                  returned_amount: 0,
+                  gift_card_id: 0,
+                  is_certificate: false,
+                  is_voucher: false,
+                  is_ingenico: false,
+                  card_type: '',
+                  card_rrn: '',
+                  card_number: '',
+                  document_number: '',
+                  operation_id: '',
+                  stan: '',
+                  approval_code: '',
+                  ref_number: '',
+                  hash_low: null,
+                  hash_high: null,
+                  trx_status: '',
+                },
+              ]
+            : [],
         with_cashback: 0,
         returned_cashback: 0,
         loyalty_balance_income: 0,
@@ -1224,6 +1446,115 @@ export class SalesService {
     return parsed;
   }
 
+  private parseOptionalEntityId(value: string) {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) ? parsed : undefined;
+  }
+
+  private emptyOrderDraftDebt(orderId: string, amount = 0) {
+    return {
+      order_id: orderId,
+      total_debt_amount: 0,
+      total_paid_debt_amount: 0,
+      total_unpaid_debt_amount: 0,
+      total_remaining_debt_in_chain: 0,
+      order_debt_payments: [],
+      debt: null,
+      amount,
+    };
+  }
+
+  private emptyOrderSearchStats() {
+    return {
+      total_products_measurement_value: 0,
+      total_services_measurement_value: 0,
+      total_sets_measurement_value: 0,
+      total_returned_measurement_value: 0,
+      total_exchange_measurement_value: 0,
+      total_returnals_count: 0,
+      total_exchanges_count: 0,
+      total_returnals_sum: 0,
+      total_exchanges_sum: 0,
+      total_transactions_sum: 0,
+      payment_types_stats: [],
+      total_with_cashback: 0,
+      total_loyalty_balance_income: 0,
+      total_returned_cashback: 0,
+      total_debt_amount: 0,
+      total_paid_debt_amount: 0,
+      total_unpaid_debt_amount: 0,
+      total_returned_debt_amount: 0,
+      debt_payment_stats: null,
+      insurance_payment_stats: null,
+      count: 0,
+      total_certificate_amount: 0,
+      total_certificate_count: 0,
+    };
+  }
+
+  private buildOrderSearchWhere(
+    query: Record<string, string | undefined>,
+    context: any,
+  ) {
+    const andFilters: Record<string, unknown>[] = [];
+    const scope = this.buildSaleScope(context);
+
+    if (scope) {
+      andFilters.push(scope);
+    } else if (query.company_id) {
+      andFilters.push({
+        companyId: query.company_id,
+      });
+    }
+
+    const startDate = this.parseDateOnly(query.start_date);
+    if (startDate) {
+      const endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + 1);
+      andFilters.push({
+        createdAt: {
+          gte: startDate,
+          lt: endDate,
+        },
+      });
+    }
+
+    const search = query.search?.trim();
+    if (search) {
+      andFilters.push({
+        OR: [
+          {
+            number: {
+              contains: search,
+              mode: 'insensitive' as const,
+            },
+          },
+          {
+            clientName: {
+              contains: search,
+              mode: 'insensitive' as const,
+            },
+          },
+        ],
+      });
+    }
+
+    return andFilters.length ? { AND: andFilters } : undefined;
+  }
+
+  private parseDateOnly(value?: string) {
+    if (!value) {
+      return undefined;
+    }
+
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (!match) {
+      return undefined;
+    }
+
+    return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  }
+
   private resolveShopByBranchCode(
     branchCode: string,
     shopLookup?: Map<string, { shop_id: string; shop_name: string }>,
@@ -1485,5 +1816,13 @@ export class SalesService {
     const seconds = String(value.getSeconds()).padStart(2, '0');
 
     return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  }
+
+  private formatDate(value: Date) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
   }
 }
