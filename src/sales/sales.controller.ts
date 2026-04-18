@@ -26,6 +26,7 @@ export class SalesController {
     return this.salesService.createDraft(authorization);
   }
 
+  @Post('order')
   @Post('v2/order')
   createOrder(
     @Body() body: Record<string, unknown>,
@@ -34,6 +35,7 @@ export class SalesController {
     return this.salesService.createOrder(body, authorization);
   }
 
+  @Get('order/:id')
   @Get('v2/order/:id')
   findOrder(
     @Param('id') id: string,
@@ -42,6 +44,7 @@ export class SalesController {
     return this.salesService.findOrder(id, authorization);
   }
 
+  @Get('order-draft-debt/:id')
   @Get('v1/order-draft-debt/:id')
   findOrderDraftDebt(
     @Param('id') id: string,
@@ -50,6 +53,7 @@ export class SalesController {
     return this.salesService.findOrderDraftDebt(id, authorization);
   }
 
+  @Get('order-search')
   @Get('v3/order-search')
   searchOrders(
     @Query() query: Record<string, string | undefined>,
@@ -58,6 +62,7 @@ export class SalesController {
     return this.salesService.searchOrders(query, authorization);
   }
 
+  @Get('order-search-stats')
   @Get('v3/order-search-stats')
   searchOrderStats(
     @Query() query: Record<string, string | undefined>,
@@ -66,6 +71,7 @@ export class SalesController {
     return this.salesService.searchOrderStats(query, authorization);
   }
 
+  @Get('new-sale/products')
   @Get('v2/new-sale/products')
   findProductsForNewSale(
     @Query('page') page?: string,
@@ -74,14 +80,18 @@ export class SalesController {
     @Query('shop_id') shopId?: string,
     @Headers('authorization') authorization?: string,
   ) {
-    return this.salesService.findProductsForNewSale({
-      page: Number(page) || 1,
-      limit: Number(limit) || 10,
-      search: search?.trim(),
-      shopId: shopId?.trim(),
-    }, authorization);
+    return this.salesService.findProductsForNewSale(
+      {
+        page: Number(page) || 1,
+        limit: Number(limit) || 10,
+        search: search?.trim(),
+        shopId: shopId?.trim(),
+      },
+      authorization,
+    );
   }
 
+  @Post('order-payment/:id')
   @Post('v2/order-payment/:id')
   payOrder(
     @Param('id') id: string,

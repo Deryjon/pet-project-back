@@ -232,6 +232,7 @@ export class CompanySettingsController {
     });
   }
 
+  @Get('company-payment-type')
   @Get('v1/company-payment-type')
   getV1CompanyPaymentTypes(
     @Query('limit') limit?: string,
