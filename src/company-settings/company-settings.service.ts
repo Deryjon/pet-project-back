@@ -1640,12 +1640,10 @@ export class CompanySettingsService {
       process.env.SHOPS_JSON,
       DEFAULT_SHOPS,
     );
-    const companyPaymentTypes = this.parseJsonArray<CompanyPaymentType>(
-      process.env.COMPANY_PAYMENT_TYPES_JSON,
-      DEFAULT_COMPANY_PAYMENT_TYPES,
-    );
-
     const targetCompanyId = query.companyId?.trim() || DEFAULT_COMPANY_ID;
+    const companyPaymentTypes = this.getStoredCompanyPaymentTypes().filter(
+      (item) => this.stringOrDefault(item.company_id, '') === targetCompanyId,
+    );
     const safeLimit = this.normalizeLimit(query.limit, 10);
     const safePage = Math.max(1, Number(query.page) || 1);
     const normalizedName = (query.name ?? '').trim().toLowerCase();
@@ -1686,7 +1684,7 @@ export class CompanySettingsService {
               ...type,
               company_id: '',
             },
-            is_active: !Boolean(type.dont_show_in_make_payment),
+            is_active: !type.dont_show_in_make_payment,
           })),
           tariff_limits: {
             company_tariff: '',

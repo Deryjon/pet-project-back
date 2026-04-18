@@ -232,17 +232,6 @@ export class CompanySettingsController {
     });
   }
 
-  @Get('company-payment-type')
-  getCompanyPaymentTypes(
-    @Query('limit') limit?: string,
-    @Query('company_id') companyId?: string,
-  ) {
-    return this.companySettingsService.getCompanyPaymentTypes(
-      Number(limit),
-      companyId,
-    );
-  }
-
   @Get('v1/company-payment-type')
   getV1CompanyPaymentTypes(
     @Query('limit') limit?: string,
