@@ -63,7 +63,9 @@ export class SalesService {
       },
     });
     const shopLookup = await this.buildShopLookupByBranchCodes(
-      sales.map((sale) => sale.branchCode).filter((value): value is string => !!value),
+      sales
+        .map((sale) => sale.branchCode)
+        .filter((value): value is string => !!value),
       context?.companyId,
     );
     const paymentTypeLookup = this.buildPaymentTypeLookup(context?.companyId);
@@ -78,7 +80,9 @@ export class SalesService {
     const sale = await this.prisma.sale.create({
       data: {
         companyId:
-          context?.userType === 'company' ? context.companyId ?? undefined : undefined,
+          context?.userType === 'company'
+            ? (context.companyId ?? undefined)
+            : undefined,
         number: this.generateSaleNumber(),
         branchCode: context?.currentBranchCode ?? undefined,
         userId: context?.userId ?? undefined,
@@ -96,7 +100,9 @@ export class SalesService {
     const sale = await this.prisma.sale.create({
       data: {
         companyId:
-          context?.userType === 'company' ? context.companyId ?? undefined : undefined,
+          context?.userType === 'company'
+            ? (context.companyId ?? undefined)
+            : undefined,
         number: this.generateOrderNumber(),
         status: 'draft',
         isDraft: true,
@@ -181,7 +187,10 @@ export class SalesService {
     }
 
     this.assertSaleAccess(sale, context);
-    return this.emptyOrderDraftDebt(String(sale.id), sale.payableTotal || sale.total);
+    return this.emptyOrderDraftDebt(
+      String(sale.id),
+      sale.payableTotal || sale.total,
+    );
   }
 
   async searchOrders(
@@ -297,7 +306,9 @@ export class SalesService {
       totalTransactionsSum += sale.payableTotal || sale.total || 0;
 
       for (const item of sale.items) {
-        if (item.product?.productType === '5a0e556a-15f8-47ac-ae07-46972f3c6ab4') {
+        if (
+          item.product?.productType === '5a0e556a-15f8-47ac-ae07-46972f3c6ab4'
+        ) {
           totalServices += item.quantity;
         } else {
           totalProducts += item.quantity;
@@ -338,12 +349,15 @@ export class SalesService {
     };
   }
 
-  async findProductsForNewSale(args: {
-    page: number;
-    limit: number;
-    search?: string;
-    shopId?: string;
-  }, authorization?: string) {
+  async findProductsForNewSale(
+    args: {
+      page: number;
+      limit: number;
+      search?: string;
+      shopId?: string;
+    },
+    authorization?: string,
+  ) {
     const context = await this.getRequestContext(authorization);
     const safePage = Math.max(1, args.page);
     const safeLimit = Math.min(Math.max(1, args.limit), 100);
@@ -480,7 +494,11 @@ export class SalesService {
     };
   }
 
-  async payOrder(id: string, body: Record<string, unknown>, authorization?: string) {
+  async payOrder(
+    id: string,
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
     const context = await this.getRequestContext(authorization);
     const saleId = this.parseEntityId(id, 'order id');
     const sale = await this.prisma.sale.findUnique({
@@ -589,7 +607,7 @@ export class SalesService {
       });
     }
 
-    const paymentMethod =
+    const requestedPaymentMethod =
       this.optionalString(
         Array.isArray(body.payments) &&
           body.payments[0] &&
@@ -597,7 +615,11 @@ export class SalesService {
           ? (body.payments[0] as Record<string, unknown>)
               .company_payment_type_id
           : undefined,
-      ) ?? 'cash';
+      ) ?? this.optionalString(body.payment_method);
+    const paymentMethod = this.resolvePaymentMethod(
+      requestedPaymentMethod,
+      context?.companyId,
+    );
 
     await this.prisma.sale.update({
       where: { id: sale.id },
@@ -620,7 +642,11 @@ export class SalesService {
     return this.toDraftResponse(sale);
   }
 
-  async addItem(id: number, body: Record<string, unknown>, authorization?: string) {
+  async addItem(
+    id: number,
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
     const context = await this.getRequestContext(authorization);
     const productId = this.toInt(body.product_id);
     const quantity = this.toInt(body.quantity) ?? 1;
@@ -726,7 +752,10 @@ export class SalesService {
       data: {
         status: 'paid',
         isDraft: false,
-        paymentMethod: this.optionalString(body.payment_method) ?? 'cash',
+        paymentMethod: this.resolvePaymentMethod(
+          this.optionalString(body.payment_method),
+          context?.companyId,
+        ),
         clientName: this.optionalString(body.client_name),
         branchCode: this.optionalString(body.branch_code),
         paidAt: new Date(),
@@ -795,13 +824,16 @@ export class SalesService {
     return sale;
   }
 
-  private toDraftSummary(sale: {
-    id: number;
-    number: string;
-    discountPercent: number;
-    discountAmount: number;
-    payableTotal: number;
-  }, context?: any) {
+  private toDraftSummary(
+    sale: {
+      id: number;
+      number: string;
+      discountPercent: number;
+      discountAmount: number;
+      payableTotal: number;
+    },
+    context?: any,
+  ) {
     return {
       id: sale.id,
       sid: sale.number,
@@ -812,24 +844,27 @@ export class SalesService {
     };
   }
 
-  private toDraftResponse(sale: {
-    id: number;
-    number: string;
-    status: string;
-    discountPercent: number;
-    discountAmount: number;
-    payableTotal: number;
-    total: number;
-    items: {
+  private toDraftResponse(
+    sale: {
       id: number;
-      productId: number | null;
-      name: string;
-      salePrice: number;
-      barcode: string | null;
-      sku: string | null;
-      quantity: number;
-    }[];
-  }, context?: any) {
+      number: string;
+      status: string;
+      discountPercent: number;
+      discountAmount: number;
+      payableTotal: number;
+      total: number;
+      items: {
+        id: number;
+        productId: number | null;
+        name: string;
+        salePrice: number;
+        barcode: string | null;
+        sku: string | null;
+        quantity: number;
+      }[];
+    },
+    context?: any,
+  ) {
     return {
       id: sale.id,
       sid: sale.number,
@@ -852,39 +887,40 @@ export class SalesService {
     };
   }
 
-  private toSaleListItem(sale: {
-    id: number;
-    number: string;
-    createdAt: Date;
-    status: string;
-    payableTotal: number;
-    total: number;
-    discountAmount: number;
-    paymentMethod: string | null;
-    clientName: string | null;
-    branchCode: string | null;
-    user: { firstName: string; lastName: string } | null;
-    items: {
+  private toSaleListItem(
+    sale: {
       id: number;
-      productId: number | null;
-      name: string;
-      salePrice: number;
-      quantity: number;
-      barcode: string | null;
-      sku: string | null;
-    }[];
-  },
-  context?: any,
-  shopLookup?: Map<string, { shop_id: string; shop_name: string }>,
-  paymentTypeLookup?: Map<
-    string,
-    {
-      id: string;
-      name: string;
-      payment_type_id: string;
-      payment_type_name: string;
-    }
-  >,
+      number: string;
+      createdAt: Date;
+      status: string;
+      payableTotal: number;
+      total: number;
+      discountAmount: number;
+      paymentMethod: string | null;
+      clientName: string | null;
+      branchCode: string | null;
+      user: { firstName: string; lastName: string } | null;
+      items: {
+        id: number;
+        productId: number | null;
+        name: string;
+        salePrice: number;
+        quantity: number;
+        barcode: string | null;
+        sku: string | null;
+      }[];
+    },
+    context?: any,
+    shopLookup?: Map<string, { shop_id: string; shop_name: string }>,
+    paymentTypeLookup?: Map<
+      string,
+      {
+        id: string;
+        name: string;
+        payment_type_id: string;
+        payment_type_name: string;
+      }
+    >,
   ) {
     const sellerName = sale.user
       ? `${sale.user.firstName} ${sale.user.lastName}`.trim()
@@ -948,48 +984,55 @@ export class SalesService {
     };
   }
 
-  private toV2OrderResponse(sale: {
-    id: number;
-    number: string;
-    status: string;
-    branchCode: string | null;
-    createdAt: Date;
-    updatedAt: Date;
-    isDraft: boolean;
-    total: number;
-    payableTotal: number;
-    discountAmount: number;
-    paymentMethod: string | null;
-    user: { id: number; firstName: string; lastName: string } | null;
-    items: {
+  private toV2OrderResponse(
+    sale: {
       id: number;
-      productId: number | null;
-      name: string;
-      sku: string | null;
-      barcode: string | null;
-      quantity: number;
-      salePrice: number;
-      lineTotal: number;
-      product: {
+      number: string;
+      status: string;
+      branchCode: string | null;
+      createdAt: Date;
+      updatedAt: Date;
+      isDraft: boolean;
+      total: number;
+      payableTotal: number;
+      discountAmount: number;
+      paymentMethod: string | null;
+      user: { id: number; firstName: string; lastName: string } | null;
+      items: {
         id: number;
+        productId: number | null;
         name: string;
         sku: string | null;
         barcode: string | null;
-        productType: string | null;
-        purchasePrice: number | null;
-        salePrice: number | null;
-        category: { id: number; name: string } | null;
-        brand: { id: number; name: string } | null;
-        stocks: {
-          branchCode: string;
-          quantity: number;
+        quantity: number;
+        salePrice: number;
+        lineTotal: number;
+        product: {
+          id: number;
+          name: string;
+          sku: string | null;
+          barcode: string | null;
+          productType: string | null;
           purchasePrice: number | null;
           salePrice: number | null;
-        }[];
-      } | null;
-    }[];
-  }, context?: any, shopLookup?: Map<string, { shop_id: string; shop_name: string }>) {
-    const shop = this.resolveShopByBranchCode(sale.branchCode ?? '', shopLookup);
+          category: { id: number; name: string } | null;
+          brand: { id: number; name: string } | null;
+          stocks: {
+            branchCode: string;
+            quantity: number;
+            purchasePrice: number | null;
+            salePrice: number | null;
+          }[];
+        } | null;
+      }[];
+    },
+    context?: any,
+    shopLookup?: Map<string, { shop_id: string; shop_name: string }>,
+  ) {
+    const shop = this.resolveShopByBranchCode(
+      sale.branchCode ?? '',
+      shopLookup,
+    );
     const paymentTypeLookup = this.buildPaymentTypeLookup(context?.companyId);
     const payment = sale.paymentMethod
       ? paymentTypeLookup.get(sale.paymentMethod)
@@ -1261,10 +1304,9 @@ export class SalesService {
     branchCode?: string,
     context?: any,
   ) {
-    const currencyCode =
-      this.companySettingsService.getDefaultCurrencyIsoCode(
-        context?.companyId,
-      );
+    const currencyCode = this.companySettingsService.getDefaultCurrencyIsoCode(
+      context?.companyId,
+    );
     const relevantStocks = branchCode
       ? product.stocks.filter((stock) => stock.branchCode === branchCode)
       : product.stocks;
@@ -1437,6 +1479,42 @@ export class SalesService {
     return trimmed.length > 0 ? trimmed : undefined;
   }
 
+  private resolvePaymentMethod(
+    requestedPaymentMethod?: string,
+    companyId?: string | null,
+  ) {
+    if (requestedPaymentMethod && requestedPaymentMethod !== 'cash') {
+      return requestedPaymentMethod;
+    }
+
+    return (
+      this.findDefaultPaymentMethod(companyId) ?? requestedPaymentMethod ?? null
+    );
+  }
+
+  private findDefaultPaymentMethod(companyId?: string | null) {
+    const companyPaymentTypes =
+      this.companySettingsService.getCompanyPaymentTypes(
+        undefined,
+        companyId ?? undefined,
+      );
+    const paymentTypes = companyPaymentTypes.company_payment_types as Array<
+      Record<string, unknown>
+    >;
+    const cashPaymentType =
+      paymentTypes.find(
+        (paymentType) => paymentType.is_cash_payment_type === true,
+      ) ??
+      paymentTypes.find(
+        (paymentType) => paymentType.dont_show_in_make_payment !== true,
+      ) ??
+      paymentTypes[0];
+
+    return typeof cashPaymentType?.id === 'string'
+      ? cashPaymentType.id
+      : undefined;
+  }
+
   private parseEntityId(value: string, fieldName: string) {
     const parsed = Number(value);
     if (!Number.isInteger(parsed)) {
@@ -1586,10 +1664,15 @@ export class SalesService {
     branchCodes: string[],
     companyId?: string | null,
   ) {
-    const normalizedBranchCodes = [...new Set(
-      branchCodes.map((branchCode) => branchCode.trim()).filter(Boolean),
-    )];
-    const shopLookup = new Map<string, { shop_id: string; shop_name: string }>();
+    const normalizedBranchCodes = [
+      ...new Set(
+        branchCodes.map((branchCode) => branchCode.trim()).filter(Boolean),
+      ),
+    ];
+    const shopLookup = new Map<
+      string,
+      { shop_id: string; shop_name: string }
+    >();
 
     if (!normalizedBranchCodes.length) {
       return shopLookup;
@@ -1621,7 +1704,10 @@ export class SalesService {
 
   private buildPaymentTypeLookup(companyId?: string | null) {
     const companyPaymentTypes =
-      this.companySettingsService.getCompanyPaymentTypes(undefined, companyId ?? undefined);
+      this.companySettingsService.getCompanyPaymentTypes(
+        undefined,
+        companyId ?? undefined,
+      );
     const lookup = new Map<
       string,
       {
@@ -1783,7 +1869,11 @@ export class SalesService {
       return;
     }
 
-    if (context.companyId && sale.companyId && context.companyId !== sale.companyId) {
+    if (
+      context.companyId &&
+      sale.companyId &&
+      context.companyId !== sale.companyId
+    ) {
       throw new NotFoundException('Order not found');
     }
 
