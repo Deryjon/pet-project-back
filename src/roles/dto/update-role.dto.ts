@@ -12,4 +12,8 @@ export class UpdateRoleDto {
   @IsOptional()
   @IsBoolean()
   is_admin?: boolean;
+
+  @IsOptional()
+  @IsString()
+  company_id?: string;
 }
