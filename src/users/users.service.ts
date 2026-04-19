@@ -663,6 +663,10 @@ export class UsersService {
     const userType = this.parseUserType(body.user_type);
     const birthDate = this.parseBirthDate(this.optionalString(body.birth_date));
     const normalizedRoleInput = this.optionalString(body.role);
+    const isActive =
+      body.is_active !== undefined
+        ? this.requireBoolean(body.is_active, 'is_active')
+        : true;
 
     if (userType === 'platform') {
       const role = this.resolvePlatformRoleCode(
@@ -697,6 +701,7 @@ export class UsersService {
           password: await bcrypt.hash(password, 10),
           userType: 'platform',
           role,
+          isActive,
           canSwitchShops: false,
           birthDate,
         },
@@ -759,6 +764,7 @@ export class UsersService {
         role: crmRole?.name ?? role,
         crmRoleId: crmRole?.id ?? null,
         companyId,
+        isActive,
         branchCode: currentShop?.branchCode ?? null,
         currentShopId: currentShop?.id ?? null,
         canSwitchShops,

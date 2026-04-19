@@ -54,6 +54,10 @@ export class CreateUserDto {
   can_switch_shops?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  is_active?: boolean;
+
+  @IsOptional()
   @IsArray()
   allowed_shop_ids?: string[];
 
