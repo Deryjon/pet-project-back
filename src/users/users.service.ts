@@ -13,6 +13,7 @@ import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
 import { extname, join } from 'path';
+import { extractAccessToken } from '../auth/access-token.util';
 import { PrismaService } from '../prisma/prisma.service';
 
 const ROLE_DEFINITIONS: Record<
@@ -2629,22 +2630,6 @@ export class UsersService {
     );
   }
 
-  private extractToken(authorization?: string) {
-    const match = authorization?.match(/^Bearer\s+(.+)$/i);
-
-    if (!match) {
-      throw new UnauthorizedException('Missing bearer token');
-    }
-
-    const token = match[1]?.trim();
-
-    if (!token) {
-      throw new UnauthorizedException('Missing bearer token');
-    }
-
-    return token;
-  }
-
   private formatIsoDate(value: Date | null) {
     if (!value) {
       return null;
@@ -2654,7 +2639,7 @@ export class UsersService {
   }
 
   private async getAuthenticatedUser(authorization?: string) {
-    const token = this.extractToken(authorization);
+    const token = extractAccessToken(authorization);
 
     try {
       const payload = await this.jwtService.verifyAsync<{

@@ -5,6 +5,44 @@ import { join } from 'path';
 import { AppModule } from './app.module';
 import { PrismaService } from './prisma/prisma.service';
 
+function firstHeaderValue(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function readHeader(req: express.Request, headerName: string) {
+  const normalizedName = headerName.toLowerCase();
+  const header = firstHeaderValue(req.headers[normalizedName]);
+
+  if (header) {
+    return header;
+  }
+
+  if (!Array.isArray(req.rawHeaders)) {
+    return undefined;
+  }
+
+  for (let index = 0; index < req.rawHeaders.length; index += 2) {
+    if (req.rawHeaders[index]?.toLowerCase() === normalizedName) {
+      return req.rawHeaders[index + 1];
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeAuthorizationHeader(req: express.Request) {
+  const authorization =
+    readHeader(req, 'authorization') ??
+    readHeader(req, 'x-authorization') ??
+    readHeader(req, 'x-access-token');
+
+  if (!authorization?.trim()) {
+    return;
+  }
+
+  req.headers.authorization = authorization.trim();
+}
+
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule);
@@ -15,6 +53,17 @@ async function bootstrap() {
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
+
+  app.use(
+    (
+      req: express.Request,
+      _res: express.Response,
+      next: express.NextFunction,
+    ) => {
+      normalizeAuthorizationHeader(req);
+      next();
+    },
+  );
 
   app.setGlobalPrefix('api');
   app.enableCors({

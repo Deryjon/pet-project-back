@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
 import { UsersService } from '../users/users.service';
+import { extractAccessToken } from './access-token.util';
 import { CompanyLoginDto } from './dto/company-login.dto';
 import { LoginDto } from './dto/login.dto';
 import { PlatformLoginDto } from './dto/platform-login.dto';
@@ -127,24 +128,8 @@ export class AuthService {
     return this.usersService.setCurrentShop(payload.sub, shopId);
   }
 
-  private extractToken(authorization?: string) {
-    const match = authorization?.match(/^Bearer\s+(.+)$/i);
-
-    if (!match) {
-      throw new UnauthorizedException('Missing bearer token');
-    }
-
-    const token = match[1]?.trim();
-
-    if (!token) {
-      throw new UnauthorizedException('Missing bearer token');
-    }
-
-    return token;
-  }
-
   private async verifyAccessToken(authorization?: string) {
-    const token = this.extractToken(authorization);
+    const token = extractAccessToken(authorization);
 
     try {
       return await this.jwtService.verifyAsync<{
