@@ -110,17 +110,6 @@ export class RolesService {
       data,
     });
 
-    if (data.name !== undefined) {
-      await this.db.user.updateMany({
-        where: {
-          crmRoleId: role.id,
-        },
-        data: {
-          role: String(data.name),
-        },
-      });
-    }
-
     return this.findOne(id, authorization, companyId);
   }
 

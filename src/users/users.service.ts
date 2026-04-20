@@ -762,7 +762,7 @@ export class UsersService {
         phoneNumber,
         password: await bcrypt.hash(password, 10),
         userType: 'company',
-        role: crmRole?.name ?? role,
+        role,
         crmRoleId: crmRole?.id ?? null,
         companyId,
         isActive,
@@ -914,13 +914,6 @@ export class UsersService {
         : body.crm_role_id !== undefined
           ? { disconnect: true }
           : undefined;
-      if (body.crm_role_id !== undefined) {
-        data.role =
-          crmRole?.name ??
-          this.optionalString(body.role) ??
-          targetUser.role ??
-          'employee';
-      }
 
       const allowedShops =
         body.allowed_shop_ids !== undefined ||
@@ -2762,8 +2755,36 @@ export class UsersService {
       user.role,
     );
 
-    if (!companyRole || !companyRole.isActive) {
+    if (companyRole?.isActive) {
+      return;
+    }
+
+    if (companyRole && !companyRole.isActive) {
       throw new UnauthorizedException('Company role is inactive');
     }
+
+    if (!user.crmRoleId) {
+      throw new UnauthorizedException('Company role is inactive');
+    }
+
+    const fallbackCode = user.crmRole?.isAdmin ? 'admin' : 'employee';
+    const fallbackRole = await this.findCompanyRoleByCode(
+      user.companyId,
+      fallbackCode,
+    );
+
+    if (!fallbackRole?.isActive) {
+      throw new UnauthorizedException('Company role is inactive');
+    }
+
+    await this.db.user.updateMany({
+      where: {
+        id: user.id,
+        role: user.role,
+      },
+      data: {
+        role: fallbackRole.code,
+      },
+    });
   }
 }
