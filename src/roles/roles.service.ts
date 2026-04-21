@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -156,11 +157,16 @@ export class RolesService {
     authorization?: string,
     companyIdInput?: string,
   ) {
-    const companyId = await this.resolveManagedCompanyId(
+    const access = await this.resolveReadableCompanyRolePermissions(
       authorization,
       companyIdInput,
     );
-    const role = await this.findRoleForCompany(id, companyId);
+
+    if (!access.canReadAnyCompanyRole && access.actorRoleId !== id) {
+      throw new ForbiddenException('You cannot view this role permissions');
+    }
+
+    const role = await this.findRoleForCompany(id, access.companyId);
     const activePermissionIds = await this.getActivePermissionMap(role.id);
 
     return {
@@ -250,6 +256,59 @@ export class RolesService {
     }
 
     return company.id;
+  }
+
+  private async resolveReadableCompanyRolePermissions(
+    authorization?: string,
+    companyIdInput?: unknown,
+  ) {
+    const access =
+      await this.usersService.assertRolePermissionsReadAccess(authorization);
+    const actor = access.user;
+
+    if (actor.userType === 'company') {
+      if (!actor.companyId) {
+        throw new BadRequestException('Company user is missing company');
+      }
+
+      const requestedCompanyId = this.optionalString(companyIdInput);
+      if (requestedCompanyId && requestedCompanyId !== actor.companyId) {
+        throw new BadRequestException('Company user cannot view another company');
+      }
+
+      return {
+        companyId: actor.companyId,
+        actorRoleId: actor.crmRoleId ?? null,
+        canReadAnyCompanyRole: access.canReadAnyCompanyRole,
+      };
+    }
+
+    const companyId = this.optionalString(companyIdInput);
+    if (!companyId) {
+      throw new BadRequestException(
+        'company_id is required for platform role permissions',
+      );
+    }
+
+    const company = await this.db.company.findFirst({
+      where: {
+        OR: [{ id: companyId }, { login: companyId.toLowerCase() }],
+      },
+    });
+
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    if (!company.isActive) {
+      throw new BadRequestException('Company is inactive');
+    }
+
+    return {
+      companyId: company.id,
+      actorRoleId: actor.crmRoleId ?? null,
+      canReadAnyCompanyRole: true,
+    };
   }
 
   private async findRoleForCompany(id: string, companyId: string) {

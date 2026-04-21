@@ -822,6 +822,28 @@ export class UsersService {
     return user;
   }
 
+  async assertRolePermissionsReadAccess(authorization?: string) {
+    const user = await this.getAuthenticatedUser(authorization);
+    const isPlatformAdmin = this.isPlatformAdmin(user);
+    const isCompanyAdmin = this.isCompanyAdmin(user);
+
+    if (isPlatformAdmin || isCompanyAdmin) {
+      return {
+        user,
+        canReadAnyCompanyRole: true,
+      };
+    }
+
+    if (user.userType === 'company' && user.companyId) {
+      return {
+        user,
+        canReadAnyCompanyRole: false,
+      };
+    }
+
+    throw new ForbiddenException('You cannot view role permissions');
+  }
+
   async update(
     id: number,
     body: Record<string, unknown>,
