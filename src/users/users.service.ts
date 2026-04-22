@@ -13,6 +13,7 @@ import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
 import { extname, join } from 'path';
+import { extractAccessToken } from '../auth/access-token.util';
 import { PrismaService } from '../prisma/prisma.service';
 
 const ROLE_DEFINITIONS: Record<
@@ -663,6 +664,10 @@ export class UsersService {
     const userType = this.parseUserType(body.user_type);
     const birthDate = this.parseBirthDate(this.optionalString(body.birth_date));
     const normalizedRoleInput = this.optionalString(body.role);
+    const isActive =
+      body.is_active !== undefined
+        ? this.requireBoolean(body.is_active, 'is_active')
+        : true;
 
     if (userType === 'platform') {
       const role = this.resolvePlatformRoleCode(
@@ -697,6 +702,7 @@ export class UsersService {
           password: await bcrypt.hash(password, 10),
           userType: 'platform',
           role,
+          isActive,
           canSwitchShops: false,
           birthDate,
         },
@@ -756,9 +762,10 @@ export class UsersService {
         phoneNumber,
         password: await bcrypt.hash(password, 10),
         userType: 'company',
-        role: crmRole?.name ?? role,
+        role,
         crmRoleId: crmRole?.id ?? null,
         companyId,
+        isActive,
         branchCode: currentShop?.branchCode ?? null,
         currentShopId: currentShop?.id ?? null,
         canSwitchShops,
@@ -813,6 +820,28 @@ export class UsersService {
     }
 
     return user;
+  }
+
+  async assertRolePermissionsReadAccess(authorization?: string) {
+    const user = await this.getAuthenticatedUser(authorization);
+    const isPlatformAdmin = this.isPlatformAdmin(user);
+    const isCompanyAdmin = this.isCompanyAdmin(user);
+
+    if (isPlatformAdmin || isCompanyAdmin) {
+      return {
+        user,
+        canReadAnyCompanyRole: true,
+      };
+    }
+
+    if (user.userType === 'company' && user.companyId) {
+      return {
+        user,
+        canReadAnyCompanyRole: false,
+      };
+    }
+
+    throw new ForbiddenException('You cannot view role permissions');
   }
 
   async update(
@@ -907,13 +936,6 @@ export class UsersService {
         : body.crm_role_id !== undefined
           ? { disconnect: true }
           : undefined;
-      if (body.crm_role_id !== undefined) {
-        data.role =
-          crmRole?.name ??
-          this.optionalString(body.role) ??
-          targetUser.role ??
-          'employee';
-      }
 
       const allowedShops =
         body.allowed_shop_ids !== undefined ||
@@ -2623,22 +2645,6 @@ export class UsersService {
     );
   }
 
-  private extractToken(authorization?: string) {
-    const match = authorization?.match(/^Bearer\s+(.+)$/i);
-
-    if (!match) {
-      throw new UnauthorizedException('Missing bearer token');
-    }
-
-    const token = match[1]?.trim();
-
-    if (!token) {
-      throw new UnauthorizedException('Missing bearer token');
-    }
-
-    return token;
-  }
-
   private formatIsoDate(value: Date | null) {
     if (!value) {
       return null;
@@ -2648,7 +2654,7 @@ export class UsersService {
   }
 
   private async getAuthenticatedUser(authorization?: string) {
-    const token = this.extractToken(authorization);
+    const token = extractAccessToken(authorization);
 
     try {
       const payload = await this.jwtService.verifyAsync<{
@@ -2771,8 +2777,36 @@ export class UsersService {
       user.role,
     );
 
-    if (!companyRole || !companyRole.isActive) {
+    if (companyRole?.isActive) {
+      return;
+    }
+
+    if (companyRole && !companyRole.isActive) {
       throw new UnauthorizedException('Company role is inactive');
     }
+
+    if (!user.crmRoleId) {
+      throw new UnauthorizedException('Company role is inactive');
+    }
+
+    const fallbackCode = user.crmRole?.isAdmin ? 'admin' : 'employee';
+    const fallbackRole = await this.findCompanyRoleByCode(
+      user.companyId,
+      fallbackCode,
+    );
+
+    if (!fallbackRole?.isActive) {
+      throw new UnauthorizedException('Company role is inactive');
+    }
+
+    await this.db.user.updateMany({
+      where: {
+        id: user.id,
+        role: user.role,
+      },
+      data: {
+        role: fallbackRole.code,
+      },
+    });
   }
 }

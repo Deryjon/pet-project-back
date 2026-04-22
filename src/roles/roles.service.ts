@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -22,17 +23,20 @@ export class RolesService {
   }
 
   async create(body: Record<string, unknown>, authorization?: string) {
-    const actor = await this.requireCompanyAdmin(authorization);
+    const companyId = await this.resolveManagedCompanyId(
+      authorization,
+      body.company_id,
+    );
     const name = this.requireString(body.name, 'name');
     const description = this.optionalString(body.description) ?? '';
     const isAdmin = this.optionalBoolean(body.is_admin) ?? false;
 
-    await this.ensureRoleNameIsUnique(actor.companyId, name);
+    await this.ensureRoleNameIsUnique(companyId, name);
     const externalId = await this.getNextExternalId();
 
     const role = await this.db.role.create({
       data: {
-        companyId: actor.companyId,
+        companyId,
         name,
         description,
         isAdmin,
@@ -45,11 +49,14 @@ export class RolesService {
     };
   }
 
-  async findAll(authorization?: string) {
-    const actor = await this.requireCompanyAdmin(authorization);
+  async findAll(authorization?: string, companyIdInput?: string) {
+    const companyId = await this.resolveManagedCompanyId(
+      authorization,
+      companyIdInput,
+    );
     const roles = await this.db.role.findMany({
       where: {
-        companyId: actor.companyId,
+        companyId,
         deletedAt: 0,
       },
       orderBy: [{ isAdmin: 'desc' }, { name: 'asc' }],
@@ -61,9 +68,12 @@ export class RolesService {
     };
   }
 
-  async findOne(id: string, authorization?: string) {
-    const actor = await this.requireCompanyAdmin(authorization);
-    const role = await this.findRoleForCompany(id, actor.companyId);
+  async findOne(id: string, authorization?: string, companyIdInput?: string) {
+    const companyId = await this.resolveManagedCompanyId(
+      authorization,
+      companyIdInput,
+    );
+    const role = await this.findRoleForCompany(id, companyId);
     return this.toRoleResponse(role);
   }
 
@@ -71,15 +81,19 @@ export class RolesService {
     id: string,
     body: Record<string, unknown>,
     authorization?: string,
+    companyIdInput?: string,
   ) {
-    const actor = await this.requireCompanyAdmin(authorization);
-    const role = await this.findRoleForCompany(id, actor.companyId);
+    const companyId = await this.resolveManagedCompanyId(
+      authorization,
+      body.company_id ?? companyIdInput,
+    );
+    const role = await this.findRoleForCompany(id, companyId);
     const data: Record<string, unknown> = {};
 
     if (body.name !== undefined) {
       const name = this.requireString(body.name, 'name');
       if (name !== role.name) {
-        await this.ensureRoleNameIsUnique(actor.companyId, name, role.id);
+        await this.ensureRoleNameIsUnique(companyId, name, role.id);
         data.name = name;
       }
     }
@@ -97,23 +111,15 @@ export class RolesService {
       data,
     });
 
-    if (data.name !== undefined) {
-      await this.db.user.updateMany({
-        where: {
-          crmRoleId: role.id,
-        },
-        data: {
-          role: String(data.name),
-        },
-      });
-    }
-
-    return this.findOne(id, authorization);
+    return this.findOne(id, authorization, companyId);
   }
 
-  async remove(id: string, authorization?: string) {
-    const actor = await this.requireCompanyAdmin(authorization);
-    const role = await this.findRoleForCompany(id, actor.companyId);
+  async remove(id: string, authorization?: string, companyIdInput?: string) {
+    const companyId = await this.resolveManagedCompanyId(
+      authorization,
+      companyIdInput,
+    );
+    const role = await this.findRoleForCompany(id, companyId);
 
     await this.db.$transaction(async (tx: any) => {
       await tx.user.updateMany({
@@ -146,9 +152,21 @@ export class RolesService {
     };
   }
 
-  async getPermissions(id: string, authorization?: string) {
-    const actor = await this.requireCompanyAdmin(authorization);
-    const role = await this.findRoleForCompany(id, actor.companyId);
+  async getPermissions(
+    id: string,
+    authorization?: string,
+    companyIdInput?: string,
+  ) {
+    const access = await this.resolveReadableCompanyRolePermissions(
+      authorization,
+      companyIdInput,
+    );
+
+    if (!access.canReadAnyCompanyRole && access.actorRoleId !== id) {
+      throw new ForbiddenException('You cannot view this role permissions');
+    }
+
+    const role = await this.findRoleForCompany(id, access.companyId);
     const activePermissionIds = await this.getActivePermissionMap(role.id);
 
     return {
@@ -161,9 +179,13 @@ export class RolesService {
     id: string,
     body: Record<string, unknown>,
     authorization?: string,
+    companyIdInput?: string,
   ) {
-    const actor = await this.requireCompanyAdmin(authorization);
-    const role = await this.findRoleForCompany(id, actor.companyId);
+    const companyId = await this.resolveManagedCompanyId(
+      authorization,
+      body.company_id ?? companyIdInput,
+    );
+    const role = await this.findRoleForCompany(id, companyId);
     const permissionIds = this.extractActivePermissionIds(body);
     const knownPermissionIds = new Set(this.getAllPermissionIds());
 
@@ -192,19 +214,101 @@ export class RolesService {
       }
     });
 
-    return this.getPermissions(id, authorization);
+    return this.getPermissions(id, authorization, companyId);
   }
 
-  private async requireCompanyAdmin(authorization?: string) {
-    const actor = await this.usersService.assertCompanyAdminAccess(
-      authorization,
-    );
+  private async resolveManagedCompanyId(
+    authorization?: string,
+    companyIdInput?: unknown,
+  ) {
+    const actor = await this.usersService.assertAdminAccess(authorization);
 
-    if (!actor.companyId) {
-      throw new BadRequestException('Company admin is missing company');
+    if (actor.userType === 'company') {
+      if (!actor.companyId) {
+        throw new BadRequestException('Company admin is missing company');
+      }
+
+      const requestedCompanyId = this.optionalString(companyIdInput);
+      if (requestedCompanyId && requestedCompanyId !== actor.companyId) {
+        throw new BadRequestException('Company admin cannot manage another company');
+      }
+
+      return actor.companyId;
     }
 
-    return actor;
+    const companyId = this.optionalString(companyIdInput);
+    if (!companyId) {
+      throw new BadRequestException('company_id is required for platform role management');
+    }
+
+    const company = await this.db.company.findFirst({
+      where: {
+        OR: [{ id: companyId }, { login: companyId.toLowerCase() }],
+      },
+    });
+
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    if (!company.isActive) {
+      throw new BadRequestException('Company is inactive');
+    }
+
+    return company.id;
+  }
+
+  private async resolveReadableCompanyRolePermissions(
+    authorization?: string,
+    companyIdInput?: unknown,
+  ) {
+    const access =
+      await this.usersService.assertRolePermissionsReadAccess(authorization);
+    const actor = access.user;
+
+    if (actor.userType === 'company') {
+      if (!actor.companyId) {
+        throw new BadRequestException('Company user is missing company');
+      }
+
+      const requestedCompanyId = this.optionalString(companyIdInput);
+      if (requestedCompanyId && requestedCompanyId !== actor.companyId) {
+        throw new BadRequestException('Company user cannot view another company');
+      }
+
+      return {
+        companyId: actor.companyId,
+        actorRoleId: actor.crmRoleId ?? null,
+        canReadAnyCompanyRole: access.canReadAnyCompanyRole,
+      };
+    }
+
+    const companyId = this.optionalString(companyIdInput);
+    if (!companyId) {
+      throw new BadRequestException(
+        'company_id is required for platform role permissions',
+      );
+    }
+
+    const company = await this.db.company.findFirst({
+      where: {
+        OR: [{ id: companyId }, { login: companyId.toLowerCase() }],
+      },
+    });
+
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    if (!company.isActive) {
+      throw new BadRequestException('Company is inactive');
+    }
+
+    return {
+      companyId: company.id,
+      actorRoleId: actor.crmRoleId ?? null,
+      canReadAnyCompanyRole: true,
+    };
   }
 
   private async findRoleForCompany(id: string, companyId: string) {
