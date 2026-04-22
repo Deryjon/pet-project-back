@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   Headers,
   Param,
   ParseIntPipe,
@@ -21,7 +22,6 @@ import { UpdatePasswordDto } from './dto/update-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UsersService } from './users.service';
-import { ROLE_PERMISSIONS_PAYLOAD } from '../roles/roles.permissions';
 
 @Controller()
 export class UsersController {
@@ -49,11 +49,13 @@ export class UsersController {
   }
 
   @Get('v2/user/:id/permissions')
-  getV2UserPermissions(@Param('id') id: string) {
-    return {
-      user_id: id,
-      sections: ROLE_PERMISSIONS_PAYLOAD.sections,
-    };
+  @Header('Cache-Control', 'no-store')
+  @Header('Pragma', 'no-cache')
+  getV2UserPermissions(
+    @Param('id', ParseIntPipe) id: number,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.usersService.getPermissionsResponse(id, authorization);
   }
 
   @Post('users/add')

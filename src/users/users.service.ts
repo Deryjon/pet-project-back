@@ -15,6 +15,7 @@ import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
 import { extname, join } from 'path';
 import { extractAccessToken } from '../auth/access-token.util';
 import { PrismaService } from '../prisma/prisma.service';
+import { ROLE_PERMISSION_SECTIONS } from '../roles/roles.permissions';
 
 const ROLE_DEFINITIONS: Record<
   string,
@@ -639,6 +640,45 @@ export class UsersService {
       allowed_shop_ids: user.shopAccesses.map((access) => access.shopId),
       can_switch_shops: Boolean(user.canSwitchShops),
       is_active: user.isActive,
+    };
+  }
+
+  async getPermissionsResponse(id: number, authorization?: string) {
+    const actor = await this.getAuthenticatedUser(authorization);
+    const user = await this.findByIdOrThrow(id);
+
+    this.assertUserVisibleToActor(actor, user);
+
+    if (!user.crmRoleId || !user.companyId) {
+      return {
+        user_id: String(id),
+        sections: this.buildPermissionTree(new Map<string, boolean>()),
+      };
+    }
+
+    const role = await this.db.role.findFirst({
+      where: {
+        id: user.crmRoleId,
+        companyId: user.companyId,
+        deletedAt: 0,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!role) {
+      return {
+        user_id: String(id),
+        sections: this.buildPermissionTree(new Map<string, boolean>()),
+      };
+    }
+
+    const activePermissionIds = await this.getActivePermissionMap(role.id);
+
+    return {
+      user_id: String(id),
+      sections: this.buildPermissionTree(activePermissionIds),
     };
   }
 
@@ -1709,6 +1749,39 @@ export class UsersService {
     }
 
     throw new NotFoundException('User not found');
+  }
+
+  private async getActivePermissionMap(roleId: string) {
+    const rolePermissions = await this.db.rolePermission.findMany({
+      where: {
+        roleId,
+      },
+      select: {
+        permissionId: true,
+        isActive: true,
+      },
+    });
+
+    return new Map<string, boolean>(
+      rolePermissions.map((item) => [
+        item.permissionId,
+        Boolean(item.isActive),
+      ]),
+    );
+  }
+
+  private buildPermissionTree(activePermissionIds: Map<string, boolean>) {
+    return ROLE_PERMISSION_SECTIONS.map((section) => ({
+      ...section,
+      permissions: section.permissions.map((permission) => ({
+        ...permission,
+        is_active: activePermissionIds.get(permission.id) ?? false,
+        children: permission.children.map((child) => ({
+          ...child,
+          is_active: activePermissionIds.get(child.id) ?? false,
+        })),
+      })),
+    }));
   }
 
   private requireString(value: unknown, field: string) {
