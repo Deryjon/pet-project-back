@@ -50,21 +50,9 @@ export class UsersController {
 
   @Get('v2/user/:id/permissions')
   getV2UserPermissions(@Param('id') id: string) {
-    const sections = ROLE_PERMISSIONS_PAYLOAD.sections.map((section) => ({
-      ...section,
-      permissions: section.permissions.map((permission) => ({
-        ...permission,
-        is_active: true,
-        children: permission.children.map((child) => ({
-          ...child,
-          is_active: true,
-        })),
-      })),
-    }));
-
     return {
       user_id: id,
-      sections,
+      sections: ROLE_PERMISSIONS_PAYLOAD.sections,
     };
   }
 
