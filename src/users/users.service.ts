@@ -1340,8 +1340,10 @@ export class UsersService {
       userId: user.id,
       fullName: `${user.firstName} ${user.lastName}`.trim(),
       userType: user.userType,
-      role: user.role,
+      role:
+        user.userType === 'company' ? (user.crmRoleId ?? user.role) : user.role,
       crmRoleId: user.crmRoleId,
+      crmRoleName: user.crmRole?.name ?? null,
       companyId: user.companyId,
       currentShopId: user.currentShopId,
       currentBranchCode: user.branchCode,
@@ -1353,13 +1355,14 @@ export class UsersService {
 
   async toAuthProfile(userInput: UserWithRelations) {
     const user = await this.prepareAuthenticatedUser(userInput.id);
-    const roles = await this.resolveRoles(
-      user.role,
-      user.userType,
-      user.companyId,
-    );
 
     if (user.userType === 'platform') {
+      const roles = await this.resolveRoles(
+        user.role,
+        user.userType,
+        user.companyId,
+      );
+
       return {
         id: user.id,
         user_type: user.userType,
@@ -1372,6 +1375,8 @@ export class UsersService {
         avatar_url: user.avatarUrl,
         is_active: user.isActive,
         role: roles[0]?.role ?? null,
+        role_code: user.role,
+        role_name: roles[0]?.role?.name ?? user.role,
         roles,
         crm_role_id: null,
         crm_role: null,
@@ -1385,6 +1390,7 @@ export class UsersService {
     }
 
     const shops = await this.resolveAvailableShopsForUser(user);
+    const roles = await this.toBillzUserRoles(user);
 
     return {
       id: user.id,
@@ -1398,6 +1404,8 @@ export class UsersService {
       avatar_url: user.avatarUrl,
       is_active: user.isActive,
       role: roles[0]?.role ?? null,
+      role_code: user.crmRoleId ?? user.role,
+      role_name: user.crmRole?.name ?? roles[0]?.role?.name ?? user.role,
       roles,
       crm_role_id: user.crmRoleId,
       crm_role: user.crmRole
@@ -1944,6 +1952,16 @@ export class UsersService {
         role: roleItem.role,
         role_code: user.role,
         role_name: roleItem.role.name,
+      };
+    }
+
+    if (user.crmRole) {
+      return {
+        role: {
+          name: user.crmRole.name,
+        },
+        role_code: user.crmRole.id,
+        role_name: user.crmRole.name,
       };
     }
 
@@ -2751,6 +2769,16 @@ export class UsersService {
   }
 
   private toProfileResponse(user: UserWithRelations) {
+    const crmRolePayload = user.crmRole
+      ? {
+          role: {
+            name: user.crmRole.name,
+          },
+          roleCode: user.crmRole.id,
+          roleName: user.crmRole.name,
+        }
+      : null;
+
     return {
       id: user.id,
       user_type: user.userType,
@@ -2759,7 +2787,9 @@ export class UsersService {
       full_name: `${user.firstName} ${user.lastName}`.trim(),
       phone_number: user.phoneNumber,
       avatar_url: user.avatarUrl,
-      role: user.role,
+      role: crmRolePayload?.role ?? user.role,
+      role_code: crmRolePayload?.roleCode ?? user.role,
+      role_name: crmRolePayload?.roleName ?? user.role,
       crm_role_id: user.crmRoleId,
       crm_role: user.crmRole
         ? {
@@ -2845,6 +2875,25 @@ export class UsersService {
       return;
     }
 
+    if (user.crmRoleId) {
+      const crmRole = await this.db.role.findFirst({
+        where: {
+          id: user.crmRoleId,
+          companyId: user.companyId,
+          deletedAt: 0,
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      if (!crmRole) {
+        throw new UnauthorizedException('CRM role is inactive');
+      }
+
+      return;
+    }
+
     const companyRole = await this.findCompanyRoleByCode(
       user.companyId,
       user.role,
@@ -2858,28 +2907,6 @@ export class UsersService {
       throw new UnauthorizedException('Company role is inactive');
     }
 
-    if (!user.crmRoleId) {
-      throw new UnauthorizedException('Company role is inactive');
-    }
-
-    const fallbackCode = user.crmRole?.isAdmin ? 'admin' : 'employee';
-    const fallbackRole = await this.findCompanyRoleByCode(
-      user.companyId,
-      fallbackCode,
-    );
-
-    if (!fallbackRole?.isActive) {
-      throw new UnauthorizedException('Company role is inactive');
-    }
-
-    await this.db.user.updateMany({
-      where: {
-        id: user.id,
-        role: user.role,
-      },
-      data: {
-        role: fallbackRole.code,
-      },
-    });
+    throw new UnauthorizedException('Company role is inactive');
   }
 }
