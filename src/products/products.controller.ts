@@ -313,13 +313,19 @@ export class ProductsController {
   }
 
   @Post('v2/product/generate-sku')
-  generateSku(@Body() body: Record<string, unknown>) {
-    return this.productsService.generateSku(body);
+  generateSku(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.generateSku(body, authorization);
   }
 
   @Post('v2/product/generate-barcode')
-  generateBarcode() {
-    return this.productsService.generateBarcode();
+  generateBarcode(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.generateBarcode(body, authorization);
   }
 
   @Get('v2/product-movement/:id')

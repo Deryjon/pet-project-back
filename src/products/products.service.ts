@@ -356,8 +356,8 @@ const PRODUCT_TYPE_IDS = {
 } as const;
 const SKU_PREFIX_LENGTH = 3;
 const SKU_NUMBER_LENGTH = 5;
-const BARCODE_BASE = 2000000000000;
-const BARCODE_MAX = 2999999999999;
+const BARCODE_PAYLOAD_BASE = 200000000000;
+const BARCODE_PAYLOAD_MAX = 299999999999;
 const DEFAULT_MEASUREMENT_UNIT = {
   id: '12a69bc0-c575-4586-9f0f-76e8295d4139',
   name: 'Штука',
@@ -2223,20 +2223,28 @@ export class ProductsService {
     };
   }
 
-  async generateSku(body: Record<string, unknown>) {
+  async generateSku(body: Record<string, unknown>, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
+    const companyId = this.resolveProductCompanyId(body, context);
     const requestedPrefix = this.optionalString(body.prefix);
     const name = this.optionalString(body.name);
-    const prefix = (requestedPrefix ?? this.buildSkuPrefix(name) ?? 'SKU')
-      .replace(/[^A-Za-z0-9]/g, '')
-      .toUpperCase()
-      .slice(0, SKU_PREFIX_LENGTH)
-      .padEnd(SKU_PREFIX_LENGTH, 'X');
+    const prefix = this.normalizeSkuPrefix(
+      requestedPrefix ?? this.buildSkuPrefix(name),
+    );
+    const nextSkuNumber = await this.getNextSkuNumber(companyId, prefix);
+    const maxSkuNumber = 10 ** SKU_NUMBER_LENGTH - 1;
 
-    for (let attempt = 0; attempt < 50; attempt += 1) {
-      const randomNumber = Math.floor(Math.random() * 10 ** SKU_NUMBER_LENGTH);
-      const candidate = `${prefix}-${String(randomNumber).padStart(SKU_NUMBER_LENGTH, '0')}`;
+    for (
+      let skuNumber = nextSkuNumber;
+      skuNumber <= maxSkuNumber;
+      skuNumber += 1
+    ) {
+      const candidate = this.formatSku(prefix, skuNumber);
       const existing = await this.prisma.product.findFirst({
-        where: { sku: candidate },
+        where: {
+          companyId,
+          sku: candidate,
+        },
         select: { id: true },
       });
 
@@ -2315,9 +2323,15 @@ export class ProductsService {
     };
   }
 
-  async generateBarcode() {
-    const latestBarcodeRecord = await this.prisma.product.findFirst({
+  async generateBarcode(
+    body: Record<string, unknown> = {},
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const companyId = this.resolveProductCompanyId(body, context);
+    const latestBarcodeRecords = await this.prisma.product.findMany({
       where: {
+        companyId,
         barcode: {
           startsWith: '2',
         },
@@ -2330,29 +2344,40 @@ export class ProductsService {
       },
     });
 
-    const latestValue = Number(latestBarcodeRecord?.barcode);
-    const nextValue =
-      Number.isFinite(latestValue) && latestValue >= BARCODE_BASE
-        ? latestValue + 1
-        : BARCODE_BASE;
+    const latestPayload = latestBarcodeRecords.reduce<number | null>(
+      (maxPayload, record) => {
+        const payload = this.extractEan13Payload(record.barcode);
+        if (payload === null) {
+          return maxPayload;
+        }
 
-    if (nextValue > BARCODE_MAX) {
-      throw new BadRequestException('Barcode range exceeded');
+        return maxPayload === null ? payload : Math.max(maxPayload, payload);
+      },
+      null,
+    );
+    let nextPayload =
+      latestPayload !== null ? latestPayload + 1 : BARCODE_PAYLOAD_BASE;
+
+    while (nextPayload <= BARCODE_PAYLOAD_MAX) {
+      const barcode = this.formatEan13Barcode(nextPayload);
+      const existing = await this.prisma.product.findFirst({
+        where: {
+          companyId,
+          barcode,
+        },
+        select: { id: true },
+      });
+
+      if (!existing) {
+        return {
+          barcode,
+        };
+      }
+
+      nextPayload += 1;
     }
 
-    const barcode = String(nextValue);
-    const existing = await this.prisma.product.findFirst({
-      where: { barcode },
-      select: { id: true },
-    });
-
-    if (existing) {
-      return this.generateBarcode();
-    }
-
-    return {
-      barcode,
-    };
+    throw new BadRequestException('Barcode range exceeded');
   }
 
   private toProductResponse(product: {
@@ -5150,6 +5175,94 @@ export class ProductsService {
     }
 
     return cleaned.slice(0, SKU_PREFIX_LENGTH);
+  }
+
+  private normalizeSkuPrefix(prefix?: string) {
+    const cleaned = prefix?.replace(/[^A-Za-z0-9]/g, '').toUpperCase() ?? '';
+    return (cleaned || 'SKU')
+      .slice(0, SKU_PREFIX_LENGTH)
+      .padEnd(SKU_PREFIX_LENGTH, 'X');
+  }
+
+  private formatSku(prefix: string, skuNumber: number) {
+    return `${prefix}-${String(skuNumber).padStart(SKU_NUMBER_LENGTH, '0')}`;
+  }
+
+  private async getNextSkuNumber(companyId: string, prefix: string) {
+    const latestSkuRecords = await this.prisma.product.findMany({
+      where: {
+        companyId,
+        sku: {
+          startsWith: `${prefix}-`,
+        },
+      },
+      orderBy: {
+        sku: 'desc',
+      },
+      select: {
+        sku: true,
+      },
+    });
+
+    const maxSkuNumber = latestSkuRecords.reduce((maxValue, record) => {
+      const parsed = this.extractSkuNumber(record.sku, prefix);
+      return parsed === null ? maxValue : Math.max(maxValue, parsed);
+    }, 0);
+
+    return maxSkuNumber + 1;
+  }
+
+  private extractSkuNumber(sku: string | null, prefix: string) {
+    if (!sku) {
+      return null;
+    }
+
+    const match = new RegExp(
+      `^${this.escapeRegExp(prefix)}-(\\d{${SKU_NUMBER_LENGTH}})$`,
+    ).exec(sku);
+    if (!match) {
+      return null;
+    }
+
+    const parsed = Number(match[1]);
+    return Number.isInteger(parsed) ? parsed : null;
+  }
+
+  private extractEan13Payload(barcode: string | null) {
+    if (!barcode || !/^\d{13}$/.test(barcode) || !barcode.startsWith('2')) {
+      return null;
+    }
+
+    if (!this.isValidEan13Barcode(barcode)) {
+      return null;
+    }
+
+    const payload = Number(barcode.slice(0, 12));
+    return Number.isInteger(payload) ? payload : null;
+  }
+
+  private formatEan13Barcode(payload: number) {
+    const payloadString = String(payload).padStart(12, '0');
+    return `${payloadString}${this.calculateEan13CheckDigit(payloadString)}`;
+  }
+
+  private isValidEan13Barcode(barcode: string) {
+    return (
+      this.calculateEan13CheckDigit(barcode.slice(0, 12)) === Number(barcode[12])
+    );
+  }
+
+  private calculateEan13CheckDigit(payload: string) {
+    const sum = payload.split('').reduce((total, digit, index) => {
+      const value = Number(digit);
+      return total + value * (index % 2 === 0 ? 1 : 3);
+    }, 0);
+
+    return (10 - (sum % 10)) % 10;
+  }
+
+  private escapeRegExp(value: string) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   private parseProductId(id: string) {
