@@ -12,22 +12,32 @@ enum UserType {
 }
 
 model Company {
-  id        String   @id @default(uuid())
-  login     String   @unique
-  name      String
-  subdomain String   @unique
-  isActive  Boolean  @default(true)
-  shops     Shop[]
-  products  Product[]
-  categories Category[]
-  brands    Brand[]
-  suppliers Supplier[]
-  roles     CompanyRole[]
-  users     User[]
-  crmRoles  Role[]
-  sales     Sale[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                 String              @id @default(uuid())
+  login              String              @unique
+  name               String
+  subdomain          String              @unique
+  ownerName          String?
+  ownerPhone         String?
+  ownerEmail         String?
+  status             String              @default("active")
+  blockReason        String?
+  isActive           Boolean             @default(true)
+  shops              Shop[]
+  products           Product[]
+  categories         Category[]
+  brands             Brand[]
+  suppliers          Supplier[]
+  roles              CompanyRole[]
+  users              User[]
+  crmRoles           Role[]
+  sales              Sale[]
+  subscriptions      Subscription[]
+  payments           Payment[]
+  platformActionLogs PlatformActionLog[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([status])
 }
 
 model CompanyRole {
@@ -46,48 +56,128 @@ model CompanyRole {
 }
 
 model Shop {
-  id          String           @id @default(uuid())
-  companyId   String
-  name        String
-  branchCode  String
-  isActive    Boolean          @default(true)
-  company     Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  currentUsers User[]          @relation("CurrentShop")
+  id           String           @id @default(uuid())
+  companyId    String
+  name         String
+  branchCode   String
+  isActive     Boolean          @default(true)
+  company      Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  currentUsers User[]           @relation("CurrentShop")
   userAccesses UserShopAccess[]
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
 
   @@unique([companyId, branchCode])
 }
 
 model User {
-  id          Int      @id @default(autoincrement())
-  firstName   String
-  lastName    String
-  birthDate   DateTime?
-  phoneNumber String
-  password    String
-  userType    UserType @default(company)
-  role        String
-  companyId   String?
-  crmRoleId   String?
-  branchCode  String?
-  currentShopId String?
-  canSwitchShops Boolean @default(false)
-  avatarUrl   String?
-  language    String   @default("ru")
-  theme       String   @default("auto")
-  isActive    Boolean  @default(true)
-  deletedAt   Int      @default(0)
-  company     Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  crmRole     Role?    @relation(fields: [crmRoleId], references: [id], onDelete: SetNull)
-  currentShop Shop?    @relation("CurrentShop", fields: [currentShopId], references: [id], onDelete: SetNull)
-  shopAccesses UserShopAccess[]
-  sales       Sale[]
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                 Int                 @id @default(autoincrement())
+  firstName          String
+  lastName           String
+  birthDate          DateTime?
+  phoneNumber        String
+  email              String?
+  password           String
+  passwordHash       String?
+  userType           UserType            @default(company)
+  role               String
+  companyId          String?
+  crmRoleId          String?
+  branchCode         String?
+  currentShopId      String?
+  canSwitchShops     Boolean             @default(false)
+  avatarUrl          String?
+  language           String              @default("ru")
+  theme              String              @default("auto")
+  status             String              @default("active")
+  isActive           Boolean             @default(true)
+  deletedAt          Int                 @default(0)
+  company            Company?            @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  crmRole            Role?               @relation(fields: [crmRoleId], references: [id], onDelete: SetNull)
+  currentShop        Shop?               @relation("CurrentShop", fields: [currentShopId], references: [id], onDelete: SetNull)
+  shopAccesses       UserShopAccess[]
+  sales              Sale[]
+  createdPayments    Payment[]           @relation("PaymentCreatedBy")
+  platformActionLogs PlatformActionLog[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
 
   @@unique([companyId, phoneNumber])
+  @@index([status])
+}
+
+model Plan {
+  id            String         @id @default(uuid())
+  name          String
+  priceMonthly  Decimal        @db.Decimal(12, 2)
+  maxShops      Int
+  maxUsers      Int
+  maxProducts   Int
+  status        String         @default("active")
+  subscriptions Subscription[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([status])
+}
+
+model Subscription {
+  id        String    @id @default(uuid())
+  companyId String
+  planId    String
+  status    String    @default("active")
+  startDate DateTime
+  endDate   DateTime
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  plan      Plan      @relation(fields: [planId], references: [id])
+  payments  Payment[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([companyId, status])
+  @@index([status, endDate])
+}
+
+model Payment {
+  id             String       @id @default(uuid())
+  companyId      String
+  subscriptionId String
+  amount         Decimal      @db.Decimal(12, 2)
+  method         String
+  paidAt         DateTime     @default(now())
+  periodStart    DateTime
+  periodEnd      DateTime
+  comment        String?
+  createdById    Int?
+  company        Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  createdBy      User?        @relation("PaymentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt      DateTime     @default(now())
+
+  @@index([companyId, paidAt])
+  @@index([subscriptionId])
+}
+
+model PlatformActionLog {
+  id          String   @id @default(uuid())
+  adminId     Int?
+  companyId   String?
+  action      String
+  description String?
+  admin       User?    @relation(fields: [adminId], references: [id], onDelete: SetNull)
+  company     Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+
+  @@index([adminId])
+  @@index([companyId])
+  @@index([createdAt])
+}
+
+model PlatformSetting {
+  id        String   @id @default("default")
+  data      Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model UserShopAccess {
@@ -141,47 +231,47 @@ model Supplier {
 }
 
 model Product {
-  id             Int               @id @default(autoincrement())
-  publicId       String            @default(uuid()) @unique
-  companyId      String?
-  photo          String?
-  name           String
-  sku            String?
-  barcode        String?
-  productType    String?
-  variantType    String?
-  unit           String?
-  purchasePrice  Float?
-  markupPercent  Float?
-  salePrice      Float?
-  discountPrice  Float?
-  quantity       Int               @default(0)
-  metadata       Json?
-  categoryId     Int?
-  brandId        Int?
-  archivedAt     DateTime?
+  id               Int               @id @default(autoincrement())
+  publicId         String            @unique @default(uuid())
+  companyId        String?
+  photo            String?
+  name             String
+  sku              String?
+  barcode          String?
+  productType      String?
+  variantType      String?
+  unit             String?
+  purchasePrice    Float?
+  markupPercent    Float?
+  salePrice        Float?
+  discountPrice    Float?
+  quantity         Int               @default(0)
+  metadata         Json?
+  categoryId       Int?
+  brandId          Int?
+  archivedAt       DateTime?
   archivedByUserId Int?
-  archivedByName String?
-  company        Company?          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  category       Category?         @relation(fields: [categoryId], references: [id])
-  brand          Brand?            @relation(fields: [brandId], references: [id])
-  suppliers      ProductSupplier[]
-  stocks         ProductStock[]
-  saleItems      SaleItem[]
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
+  archivedByName   String?
+  company          Company?          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  category         Category?         @relation(fields: [categoryId], references: [id])
+  brand            Brand?            @relation(fields: [brandId], references: [id])
+  suppliers        ProductSupplier[]
+  stocks           ProductStock[]
+  saleItems        SaleItem[]
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
 
-  @@index([companyId])
   @@unique([companyId, sku])
   @@unique([companyId, barcode])
+  @@index([companyId])
 }
 
 model ProductSupplier {
-  productId   Int
-  supplierId  Int
-  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  supplier    Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
-  createdAt   DateTime @default(now())
+  productId  Int
+  supplierId Int
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  supplier   Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
 
   @@id([productId, supplierId])
 }
@@ -223,19 +313,19 @@ model Sale {
 }
 
 model SaleItem {
-  id         Int      @id @default(autoincrement())
-  saleId      Int
-  productId   Int?
-  name        String
-  barcode     String?
-  sku         String?
-  quantity    Int
-  salePrice   Float
-  lineTotal   Float
-  sale        Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
-  product     Product? @relation(fields: [productId], references: [id])
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        Int      @id @default(autoincrement())
+  saleId    Int
+  productId Int?
+  name      String
+  barcode   String?
+  sku       String?
+  quantity  Int
+  salePrice Float
+  lineTotal Float
+  sale      Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product   Product? @relation(fields: [productId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Role {

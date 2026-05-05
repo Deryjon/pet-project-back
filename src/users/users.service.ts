@@ -469,7 +469,9 @@ export class UsersService {
     }
 
     if (body.is_active !== undefined) {
-      data.isActive = this.requireBoolean(body.is_active, 'is_active');
+      const isActive = this.requireBoolean(body.is_active, 'is_active');
+      data.isActive = isActive;
+      data.status = isActive ? 'active' : 'blocked';
     }
 
     if (body.code !== undefined) {
@@ -582,6 +584,7 @@ export class UsersService {
 
     if (user.userType === 'company') {
       this.assertCompanyMembershipIsActive(user);
+      await this.assertCompanySubscriptionIsActive(user);
       await this.assertCompanyRoleIsActive(user);
     }
   }
@@ -704,6 +707,8 @@ export class UsersService {
     const userType = this.parseUserType(body.user_type);
     const birthDate = this.parseBirthDate(this.optionalString(body.birth_date));
     const normalizedRoleInput = this.optionalString(body.role);
+    const email = this.optionalString(body.email);
+    const passwordHash = await bcrypt.hash(password, 10);
     const isActive =
       body.is_active !== undefined
         ? this.requireBoolean(body.is_active, 'is_active')
@@ -739,10 +744,13 @@ export class UsersService {
           firstName,
           lastName,
           phoneNumber,
-          password: await bcrypt.hash(password, 10),
+          email,
+          password: passwordHash,
+          passwordHash,
           userType: 'platform',
           role,
           isActive,
+          status: isActive ? 'active' : 'blocked',
           canSwitchShops: false,
           birthDate,
         },
@@ -800,12 +808,15 @@ export class UsersService {
         firstName,
         lastName,
         phoneNumber,
-        password: await bcrypt.hash(password, 10),
+        email,
+        password: passwordHash,
+        passwordHash,
         userType: 'company',
         role,
         crmRoleId: crmRole?.id ?? null,
         companyId,
         isActive,
+        status: isActive ? 'active' : 'blocked',
         branchCode: currentShop?.branchCode ?? null,
         currentShopId: currentShop?.id ?? null,
         canSwitchShops,
@@ -922,11 +933,17 @@ export class UsersService {
       );
     }
 
+    if (body.email !== undefined) {
+      data.email = this.optionalString(body.email);
+    }
+
     if (body.password !== undefined) {
-      data.password = await bcrypt.hash(
+      const passwordHash = await bcrypt.hash(
         this.requireString(body.password, 'password'),
         10,
       );
+      data.password = passwordHash;
+      data.passwordHash = passwordHash;
     }
 
     if (body.birth_date !== undefined) {
@@ -2851,7 +2868,7 @@ export class UsersService {
   }
 
   private assertUserIsActive(user: UserWithRelations) {
-    if (!user.isActive) {
+    if (!user.isActive || user.status === 'blocked') {
       throw new UnauthorizedException('User is inactive');
     }
   }
@@ -2865,8 +2882,41 @@ export class UsersService {
       throw new UnauthorizedException('Company user is missing company');
     }
 
-    if (!user.company.isActive) {
-      throw new UnauthorizedException('Company is inactive');
+    if (!user.company.isActive || user.company.status === 'blocked') {
+      throw new UnauthorizedException(
+        'Доступ к CRM заблокирован. Срок подписки истек.',
+      );
+    }
+  }
+
+  private async assertCompanySubscriptionIsActive(user: UserWithRelations) {
+    if (user.userType !== 'company' || !user.companyId) {
+      return;
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const subscription = await this.db.subscription.findFirst({
+      where: {
+        companyId: user.companyId,
+        status: 'active',
+        endDate: {
+          gte: today,
+        },
+      },
+      orderBy: {
+        endDate: 'desc',
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!subscription) {
+      throw new UnauthorizedException(
+        'Доступ к CRM заблокирован. Срок подписки истек.',
+      );
     }
   }
 

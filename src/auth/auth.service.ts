@@ -1,4 +1,8 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
@@ -120,6 +124,25 @@ export class AuthService {
     const payload = await this.verifyAccessToken(authorization);
     const user = await this.usersService.prepareAuthenticatedUser(payload.sub);
     return this.usersService.toAuthProfile(user);
+  }
+
+  async platformMe(authorization?: string) {
+    const profile = await this.me(authorization);
+
+    if (
+      profile.user_type !== 'platform' ||
+      !['platform_admin', 'superadmin'].includes(profile.role_code)
+    ) {
+      throw new ForbiddenException('Only platform admin can access platform');
+    }
+
+    return profile;
+  }
+
+  logout() {
+    return {
+      message: 'Logged out',
+    };
   }
 
   async setCurrentShop(shopId: string, authorization?: string) {

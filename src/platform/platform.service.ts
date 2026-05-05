@@ -45,6 +45,12 @@ export class PlatformService {
           login,
           name,
           subdomain,
+          ownerName: this.optionalString(body.owner_name ?? body.ownerName),
+          ownerPhone: this.optionalString(body.owner_phone ?? body.ownerPhone),
+          ownerEmail: this.optionalString(body.owner_email ?? body.ownerEmail),
+          status: 'active',
+          blockReason: null,
+          isActive: true,
         },
       });
 
@@ -57,6 +63,34 @@ export class PlatformService {
           isActive: true,
         })),
       });
+
+      const planId = this.optionalString(body.plan_id ?? body.planId);
+      if (planId) {
+        const plan = await tx.plan.findUnique({
+          where: { id: planId },
+        });
+
+        if (!plan || plan.status !== 'active') {
+          throw new BadRequestException('Active plan not found');
+        }
+
+        const startDate =
+          this.optionalDate(body.subscription_start_date) ??
+          this.startOfToday();
+        const endDate =
+          this.optionalDate(body.subscription_end_date) ??
+          this.addMonths(startDate, 1);
+
+        await tx.subscription.create({
+          data: {
+            companyId: createdCompany.id,
+            planId,
+            status: 'active',
+            startDate,
+            endDate,
+          },
+        });
+      }
 
       return createdCompany;
     });
@@ -79,6 +113,15 @@ export class PlatformService {
             name: 'asc',
           },
         },
+        subscriptions: {
+          include: {
+            plan: true,
+          },
+          orderBy: {
+            endDate: 'desc',
+          },
+          take: 1,
+        },
         _count: {
           select: {
             shops: true,
@@ -91,19 +134,7 @@ export class PlatformService {
       },
     });
 
-    return companies.map((company) => ({
-      id: company.id,
-      company_id: company.id,
-      login: company.login,
-      name: company.name,
-      subdomain: company.subdomain,
-      is_active: company.isActive,
-      shops_count: company._count.shops,
-      users_count: company._count.users,
-      shops: company.shops.map((shop) => this.toShopItem(shop)),
-      created_at: company.createdAt,
-      updated_at: company.updatedAt,
-    }));
+    return companies.map((company) => this.toCompanyItem(company));
   }
 
   async findCompany(companyId: string) {
@@ -113,6 +144,14 @@ export class PlatformService {
         shops: {
           orderBy: {
             name: 'asc',
+          },
+        },
+        subscriptions: {
+          include: {
+            plan: true,
+          },
+          orderBy: {
+            endDate: 'desc',
           },
         },
         _count: {
@@ -150,10 +189,7 @@ export class PlatformService {
         ? this.requireIdentifier(body.subdomain, 'subdomain')
         : company.subdomain;
 
-    if (
-      nextLogin !== company.login ||
-      nextSubdomain !== company.subdomain
-    ) {
+    if (nextLogin !== company.login || nextSubdomain !== company.subdomain) {
       const existing = await this.db.company.findFirst({
         where: {
           id: {
@@ -183,12 +219,124 @@ export class PlatformService {
     }
 
     if (body.is_active !== undefined) {
-      data.isActive = this.requireBoolean(body.is_active, 'is_active');
+      const isActive = this.requireBoolean(body.is_active, 'is_active');
+      data.isActive = isActive;
+      data.status = isActive ? 'active' : 'blocked';
+      data.blockReason = isActive ? null : (company.blockReason ?? 'manual');
+    }
+
+    if (body.owner_name !== undefined || body.ownerName !== undefined) {
+      data.ownerName = this.optionalString(body.owner_name ?? body.ownerName);
+    }
+
+    if (body.owner_phone !== undefined || body.ownerPhone !== undefined) {
+      data.ownerPhone = this.optionalString(
+        body.owner_phone ?? body.ownerPhone,
+      );
+    }
+
+    if (body.owner_email !== undefined || body.ownerEmail !== undefined) {
+      data.ownerEmail = this.optionalString(
+        body.owner_email ?? body.ownerEmail,
+      );
+    }
+
+    if (body.status !== undefined) {
+      const status = this.requireOneOf(body.status, 'status', [
+        'active',
+        'blocked',
+      ]);
+      data.status = status;
+      data.isActive = status === 'active';
+      data.blockReason =
+        status === 'blocked'
+          ? (this.optionalString(body.block_reason ?? body.blockReason) ??
+            company.blockReason ??
+            'manual')
+          : null;
     }
 
     await this.db.company.update({
       where: { id: companyId },
       data,
+    });
+
+    return this.findCompany(companyId);
+  }
+
+  async blockCompany(
+    companyId: string,
+    body: Record<string, unknown> = {},
+    adminId?: number,
+  ) {
+    const reason =
+      this.optionalString(body.block_reason ?? body.blockReason) ?? 'manual';
+
+    await this.db.$transaction(async (tx: any) => {
+      await tx.company.update({
+        where: { id: companyId },
+        data: {
+          status: 'blocked',
+          isActive: false,
+          blockReason: reason,
+        },
+      });
+
+      await tx.user.updateMany({
+        where: {
+          companyId,
+          userType: 'company',
+        },
+        data: {
+          status: 'blocked',
+          isActive: false,
+        },
+      });
+
+      await tx.platformActionLog.create({
+        data: {
+          adminId,
+          companyId,
+          action: 'company_blocked',
+          description: reason,
+        },
+      });
+    });
+
+    return this.findCompany(companyId);
+  }
+
+  async unblockCompany(companyId: string, adminId?: number) {
+    await this.db.$transaction(async (tx: any) => {
+      await tx.company.update({
+        where: { id: companyId },
+        data: {
+          status: 'active',
+          isActive: true,
+          blockReason: null,
+        },
+      });
+
+      await tx.user.updateMany({
+        where: {
+          companyId,
+          userType: 'company',
+          deletedAt: 0,
+        },
+        data: {
+          status: 'active',
+          isActive: true,
+        },
+      });
+
+      await tx.platformActionLog.create({
+        data: {
+          adminId,
+          companyId,
+          action: 'company_unblocked',
+          description: 'Company unblocked',
+        },
+      });
     });
 
     return this.findCompany(companyId);
@@ -422,6 +570,440 @@ export class PlatformService {
     return shops.map((shop) => this.toShopItem(shop));
   }
 
+  async getDashboardStats() {
+    const now = new Date();
+    const expiringSoonEnd = new Date(now);
+    expiringSoonEnd.setDate(expiringSoonEnd.getDate() + 7);
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+
+    const [
+      totalCompanies,
+      activeCompanies,
+      blockedCompanies,
+      activeSubscriptions,
+      expiredSubscriptions,
+      expiringSoonSubscriptions,
+      monthlyPayments,
+    ] = await this.db.$transaction([
+      this.db.company.count(),
+      this.db.company.count({
+        where: {
+          status: 'active',
+          isActive: true,
+        },
+      }),
+      this.db.company.count({
+        where: {
+          OR: [{ status: 'blocked' }, { isActive: false }],
+        },
+      }),
+      this.db.subscription.count({ where: { status: 'active' } }),
+      this.db.subscription.count({ where: { status: 'expired' } }),
+      this.db.subscription.count({
+        where: {
+          status: 'active',
+          endDate: {
+            gte: now,
+            lte: expiringSoonEnd,
+          },
+        },
+      }),
+      this.db.payment.findMany({
+        where: {
+          paidAt: {
+            gte: monthStart,
+            lt: nextMonthStart,
+          },
+        },
+        select: {
+          amount: true,
+        },
+      }),
+    ]);
+
+    return {
+      totalCompanies,
+      activeCompanies,
+      blockedCompanies,
+      activeSubscriptions,
+      expiredSubscriptions,
+      expiringSoonSubscriptions,
+      monthlyRevenue: monthlyPayments.reduce(
+        (sum, payment) => sum + Number(payment.amount),
+        0,
+      ),
+    };
+  }
+
+  async findPlans() {
+    const plans = await this.db.plan.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return plans.map((plan) => this.toPlanItem(plan));
+  }
+
+  async createPlan(body: Record<string, unknown>) {
+    const plan = await this.db.plan.create({
+      data: {
+        name: this.requireString(body.name, 'name'),
+        priceMonthly: this.requireNumber(
+          body.price_monthly ?? body.priceMonthly,
+          'price_monthly',
+        ),
+        maxShops: this.requireInteger(
+          body.max_shops ?? body.maxShops,
+          'max_shops',
+        ),
+        maxUsers: this.requireInteger(
+          body.max_users ?? body.maxUsers,
+          'max_users',
+        ),
+        maxProducts: this.requireInteger(
+          body.max_products ?? body.maxProducts,
+          'max_products',
+        ),
+        status:
+          this.optionalOneOf(body.status, ['active', 'inactive']) ?? 'active',
+      },
+    });
+
+    return this.toPlanItem(plan);
+  }
+
+  async updatePlan(planId: string, body: Record<string, unknown>) {
+    await this.findPlanOrThrow(planId);
+    const data: Record<string, unknown> = {};
+
+    if (body.name !== undefined)
+      data.name = this.requireString(body.name, 'name');
+    if (body.price_monthly !== undefined || body.priceMonthly !== undefined) {
+      data.priceMonthly = this.requireNumber(
+        body.price_monthly ?? body.priceMonthly,
+        'price_monthly',
+      );
+    }
+    if (body.max_shops !== undefined || body.maxShops !== undefined) {
+      data.maxShops = this.requireInteger(
+        body.max_shops ?? body.maxShops,
+        'max_shops',
+      );
+    }
+    if (body.max_users !== undefined || body.maxUsers !== undefined) {
+      data.maxUsers = this.requireInteger(
+        body.max_users ?? body.maxUsers,
+        'max_users',
+      );
+    }
+    if (body.max_products !== undefined || body.maxProducts !== undefined) {
+      data.maxProducts = this.requireInteger(
+        body.max_products ?? body.maxProducts,
+        'max_products',
+      );
+    }
+    if (body.status !== undefined) {
+      data.status = this.requireOneOf(body.status, 'status', [
+        'active',
+        'inactive',
+      ]);
+    }
+
+    const plan = await this.db.plan.update({
+      where: { id: planId },
+      data,
+    });
+
+    return this.toPlanItem(plan);
+  }
+
+  async removePlan(planId: string) {
+    await this.findPlanOrThrow(planId);
+    const subscriptionsCount = await this.db.subscription.count({
+      where: { planId },
+    });
+
+    if (subscriptionsCount) {
+      await this.db.plan.update({
+        where: { id: planId },
+        data: { status: 'inactive' },
+      });
+
+      return { message: 'Plan deactivated', plan_id: planId };
+    }
+
+    await this.db.plan.delete({ where: { id: planId } });
+    return { message: 'Plan deleted', plan_id: planId };
+  }
+
+  async findSubscriptions() {
+    const subscriptions = await this.db.subscription.findMany({
+      include: {
+        company: true,
+        plan: true,
+      },
+      orderBy: { endDate: 'asc' },
+    });
+
+    return subscriptions.map((subscription) =>
+      this.toSubscriptionItem(subscription),
+    );
+  }
+
+  async renewSubscription(
+    subscriptionId: string,
+    adminId?: number,
+    months = 1,
+  ) {
+    const subscription = await this.findSubscriptionOrThrow(subscriptionId);
+    const today = this.startOfToday();
+    const isActive =
+      subscription.status === 'active' && subscription.endDate >= today;
+    const startDate = isActive ? subscription.startDate : today;
+    const endDateBase = isActive ? subscription.endDate : today;
+    const endDate = this.addMonths(endDateBase, months);
+
+    const updated = await this.db.$transaction(async (tx: any) => {
+      const result = await tx.subscription.update({
+        where: { id: subscription.id },
+        data: {
+          status: 'active',
+          startDate,
+          endDate,
+        },
+        include: {
+          company: true,
+          plan: true,
+        },
+      });
+
+      await tx.company.update({
+        where: { id: subscription.companyId },
+        data: {
+          status: 'active',
+          isActive: true,
+          blockReason: null,
+        },
+      });
+
+      await tx.user.updateMany({
+        where: {
+          companyId: subscription.companyId,
+          userType: 'company',
+          deletedAt: 0,
+        },
+        data: {
+          status: 'active',
+          isActive: true,
+        },
+      });
+
+      await tx.platformActionLog.create({
+        data: {
+          adminId,
+          companyId: subscription.companyId,
+          action: 'subscription_renewed',
+          description: `Subscription renewed until ${endDate.toISOString()}`,
+        },
+      });
+
+      return result;
+    });
+
+    return this.toSubscriptionItem(updated);
+  }
+
+  async checkExpiredSubscriptions(adminId?: number) {
+    const today = this.startOfToday();
+    const subscriptions = await this.db.subscription.findMany({
+      where: {
+        status: 'active',
+        endDate: {
+          lt: today,
+        },
+      },
+      select: {
+        id: true,
+        companyId: true,
+      },
+    });
+
+    if (!subscriptions.length) {
+      return { expired_count: 0 };
+    }
+
+    await this.db.$transaction(async (tx: any) => {
+      for (const subscription of subscriptions) {
+        await tx.subscription.update({
+          where: { id: subscription.id },
+          data: { status: 'expired' },
+        });
+
+        await tx.company.update({
+          where: { id: subscription.companyId },
+          data: {
+            status: 'blocked',
+            isActive: false,
+            blockReason: 'subscription_expired',
+          },
+        });
+
+        await tx.user.updateMany({
+          where: {
+            companyId: subscription.companyId,
+            userType: 'company',
+          },
+          data: {
+            status: 'blocked',
+            isActive: false,
+          },
+        });
+
+        await tx.platformActionLog.create({
+          data: {
+            adminId,
+            companyId: subscription.companyId,
+            action: 'subscription_expired',
+            description: 'Subscription expired and company was blocked',
+          },
+        });
+      }
+    });
+
+    return { expired_count: subscriptions.length };
+  }
+
+  async findPayments() {
+    const payments = await this.db.payment.findMany({
+      include: {
+        company: true,
+        subscription: {
+          include: {
+            plan: true,
+          },
+        },
+        createdBy: true,
+      },
+      orderBy: { paidAt: 'desc' },
+    });
+
+    return payments.map((payment) => this.toPaymentItem(payment));
+  }
+
+  async createPayment(body: Record<string, unknown>, adminId: number) {
+    const subscription = await this.findSubscriptionOrThrow(
+      this.requireString(
+        body.subscription_id ?? body.subscriptionId,
+        'subscription_id',
+      ),
+    );
+    const amount = this.requireNumber(body.amount, 'amount');
+    const method = this.requireOneOf(body.method, 'method', [
+      'cash',
+      'card',
+      'click',
+      'payme',
+      'bank',
+      'other',
+    ]);
+    const paidAt = this.optionalDate(body.paid_at ?? body.paidAt) ?? new Date();
+    const today = this.startOfToday();
+    const periodStart =
+      subscription.status === 'active' && subscription.endDate >= today
+        ? subscription.endDate
+        : today;
+    const periodEnd = this.addMonths(periodStart, 1);
+
+    const payment = await this.db.$transaction(async (tx: any) => {
+      const created = await tx.payment.create({
+        data: {
+          companyId: subscription.companyId,
+          subscriptionId: subscription.id,
+          amount,
+          method,
+          paidAt,
+          periodStart,
+          periodEnd,
+          comment: this.optionalString(body.comment),
+          createdById: adminId,
+        },
+        include: {
+          company: true,
+          subscription: {
+            include: {
+              plan: true,
+            },
+          },
+          createdBy: true,
+        },
+      });
+
+      await tx.subscription.update({
+        where: { id: subscription.id },
+        data: {
+          status: 'active',
+          startDate:
+            subscription.status === 'active' && subscription.endDate >= today
+              ? subscription.startDate
+              : today,
+          endDate: periodEnd,
+        },
+      });
+
+      await tx.company.update({
+        where: { id: subscription.companyId },
+        data: {
+          status: 'active',
+          isActive: true,
+          blockReason: null,
+        },
+      });
+
+      await tx.user.updateMany({
+        where: {
+          companyId: subscription.companyId,
+          userType: 'company',
+          deletedAt: 0,
+        },
+        data: {
+          status: 'active',
+          isActive: true,
+        },
+      });
+
+      await tx.platformActionLog.create({
+        data: {
+          adminId,
+          companyId: subscription.companyId,
+          action: 'payment_created',
+          description: `Payment ${amount} created`,
+        },
+      });
+
+      return created;
+    });
+
+    return this.toPaymentItem(payment);
+  }
+
+  async getSettings() {
+    const settings = await this.db.platformSetting.findUnique({
+      where: { id: 'default' },
+    });
+
+    return settings?.data ?? {};
+  }
+
+  async updateSettings(body: Record<string, unknown>) {
+    const settings = await this.db.platformSetting.upsert({
+      where: { id: 'default' },
+      update: { data: body },
+      create: { id: 'default', data: body },
+    });
+
+    return settings.data;
+  }
+
   private async findShopByIdentifier(companyId: string, identifier: string) {
     const normalizedIdentifier = this.requireString(identifier, 'shopId');
 
@@ -464,11 +1046,219 @@ export class PlatformService {
     return value;
   }
 
+  private optionalString(value: unknown) {
+    if (value === undefined || value === null) {
+      return null;
+    }
+
+    if (typeof value !== 'string') {
+      throw new BadRequestException('value must be a string');
+    }
+
+    const normalized = value.trim();
+    return normalized.length ? normalized : null;
+  }
+
+  private requireNumber(value: unknown, field: string) {
+    const numberValue =
+      typeof value === 'number'
+        ? value
+        : typeof value === 'string'
+          ? Number(value)
+          : Number.NaN;
+
+    if (!Number.isFinite(numberValue) || numberValue < 0) {
+      throw new BadRequestException(`${field} must be a positive number`);
+    }
+
+    return numberValue;
+  }
+
+  private requireInteger(value: unknown, field: string) {
+    const numberValue = this.requireNumber(value, field);
+
+    if (!Number.isInteger(numberValue)) {
+      throw new BadRequestException(`${field} must be an integer`);
+    }
+
+    return numberValue;
+  }
+
+  private requireOneOf<T extends string>(
+    value: unknown,
+    field: string,
+    allowedValues: readonly T[],
+  ) {
+    const normalized = this.requireString(value, field).toLowerCase() as T;
+
+    if (!allowedValues.includes(normalized)) {
+      throw new BadRequestException(
+        `${field} must be one of: ${allowedValues.join(', ')}`,
+      );
+    }
+
+    return normalized;
+  }
+
+  private optionalOneOf<T extends string>(
+    value: unknown,
+    allowedValues: readonly T[],
+  ) {
+    if (value === undefined || value === null || value === '') {
+      return null;
+    }
+
+    return this.requireOneOf(value, 'status', allowedValues);
+  }
+
+  private optionalDate(value: unknown) {
+    if (value === undefined || value === null || value === '') {
+      return null;
+    }
+
+    const date = new Date(String(value));
+    if (Number.isNaN(date.getTime())) {
+      throw new BadRequestException('date must be a valid date');
+    }
+
+    return date;
+  }
+
+  private startOfToday() {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  }
+
+  private addMonths(value: Date, months: number) {
+    const nextDate = new Date(value);
+    nextDate.setMonth(nextDate.getMonth() + months);
+    return nextDate;
+  }
+
+  private async findPlanOrThrow(planId: string) {
+    const plan = await this.db.plan.findUnique({
+      where: { id: planId },
+    });
+
+    if (!plan) {
+      throw new NotFoundException('Plan not found');
+    }
+
+    return plan;
+  }
+
+  private async findSubscriptionOrThrow(subscriptionId: string) {
+    const subscription = await this.db.subscription.findUnique({
+      where: { id: subscriptionId },
+      include: {
+        company: true,
+        plan: true,
+      },
+    });
+
+    if (!subscription) {
+      throw new NotFoundException('Subscription not found');
+    }
+
+    return subscription;
+  }
+
+  private toPlanItem(plan: any) {
+    return {
+      id: plan.id,
+      name: plan.name,
+      priceMonthly: Number(plan.priceMonthly),
+      price_monthly: Number(plan.priceMonthly),
+      maxShops: plan.maxShops,
+      max_shops: plan.maxShops,
+      maxUsers: plan.maxUsers,
+      max_users: plan.maxUsers,
+      maxProducts: plan.maxProducts,
+      max_products: plan.maxProducts,
+      status: plan.status,
+      createdAt: plan.createdAt,
+      created_at: plan.createdAt,
+      updatedAt: plan.updatedAt,
+      updated_at: plan.updatedAt,
+    };
+  }
+
+  private toSubscriptionItem(subscription: any) {
+    return {
+      id: subscription.id,
+      companyId: subscription.companyId,
+      company_id: subscription.companyId,
+      planId: subscription.planId,
+      plan_id: subscription.planId,
+      status: subscription.status,
+      startDate: subscription.startDate,
+      start_date: subscription.startDate,
+      endDate: subscription.endDate,
+      end_date: subscription.endDate,
+      company: subscription.company
+        ? {
+            id: subscription.company.id,
+            name: subscription.company.name,
+            status: subscription.company.status,
+            is_active: subscription.company.isActive,
+          }
+        : null,
+      plan: subscription.plan ? this.toPlanItem(subscription.plan) : null,
+      createdAt: subscription.createdAt,
+      created_at: subscription.createdAt,
+      updatedAt: subscription.updatedAt,
+      updated_at: subscription.updatedAt,
+    };
+  }
+
+  private toPaymentItem(payment: any) {
+    return {
+      id: payment.id,
+      companyId: payment.companyId,
+      company_id: payment.companyId,
+      subscriptionId: payment.subscriptionId,
+      subscription_id: payment.subscriptionId,
+      amount: Number(payment.amount),
+      method: payment.method,
+      paidAt: payment.paidAt,
+      paid_at: payment.paidAt,
+      periodStart: payment.periodStart,
+      period_start: payment.periodStart,
+      periodEnd: payment.periodEnd,
+      period_end: payment.periodEnd,
+      comment: payment.comment,
+      createdById: payment.createdById,
+      created_by_id: payment.createdById,
+      company: payment.company
+        ? {
+            id: payment.company.id,
+            name: payment.company.name,
+          }
+        : null,
+      subscription: payment.subscription
+        ? this.toSubscriptionItem(payment.subscription)
+        : null,
+      created_by: payment.createdBy
+        ? {
+            id: payment.createdBy.id,
+            name: `${payment.createdBy.firstName} ${payment.createdBy.lastName}`.trim(),
+          }
+        : null,
+      createdAt: payment.createdAt,
+      created_at: payment.createdAt,
+    };
+  }
+
   private toCompanyItem(company: {
     id: string;
     login: string;
     name: string;
     subdomain: string;
+    ownerName?: string | null;
+    ownerPhone?: string | null;
+    ownerEmail?: string | null;
+    status?: string;
+    blockReason?: string | null;
     isActive: boolean;
     shops: Array<{
       id: string;
@@ -479,6 +1269,7 @@ export class PlatformService {
       createdAt: Date;
       updatedAt: Date;
     }>;
+    subscriptions?: any[];
     _count: {
       shops: number;
       users: number;
@@ -492,7 +1283,22 @@ export class PlatformService {
       login: company.login,
       name: company.name,
       subdomain: company.subdomain,
+      ownerName: company.ownerName ?? null,
+      owner_name: company.ownerName ?? null,
+      ownerPhone: company.ownerPhone ?? null,
+      owner_phone: company.ownerPhone ?? null,
+      ownerEmail: company.ownerEmail ?? null,
+      owner_email: company.ownerEmail ?? null,
+      status: company.status ?? (company.isActive ? 'active' : 'blocked'),
+      blockReason: company.blockReason ?? null,
+      block_reason: company.blockReason ?? null,
       is_active: company.isActive,
+      subscription: company.subscriptions?.[0]
+        ? this.toSubscriptionItem(company.subscriptions[0])
+        : null,
+      subscriptions: company.subscriptions?.map((subscription) =>
+        this.toSubscriptionItem(subscription),
+      ),
       shops_count: company._count.shops,
       users_count: company._count.users,
       shops: company.shops.map((shop) => this.toShopItem(shop)),

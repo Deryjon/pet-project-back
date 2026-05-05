@@ -26,6 +26,11 @@ export class AuthController {
     return this.authService.platformLogin(dto);
   }
 
+  @Post('platform/auth/login')
+  platformAuthLogin(@Body() dto: PlatformLoginDto) {
+    return this.authService.platformLogin(dto);
+  }
+
   @Post('auth/login')
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
@@ -34,6 +39,16 @@ export class AuthController {
   @Get('auth/me')
   me(@Headers('authorization') authorization?: string) {
     return this.authService.me(authorization);
+  }
+
+  @Get('platform/auth/me')
+  platformMe(@Headers('authorization') authorization?: string) {
+    return this.authService.platformMe(authorization);
+  }
+
+  @Post('platform/auth/logout')
+  platformLogout() {
+    return this.authService.logout();
   }
 
   @Patch('user/set-current-shop/:shopId')
