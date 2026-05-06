@@ -372,6 +372,88 @@ export class PlatformController {
     );
   }
 
+  @Put('platform/companies/:companyId/users/:id')
+  @Patch('platform/companies/:companyId/users/:id')
+  async updateCompanyUser(
+    @Param('companyId') companyId: string,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: UpdateUserDto,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const actor =
+      await this.usersService.assertPlatformAdminAccess(authorization);
+    await this.usersService.findCompanyManagedUserForPlatform(
+      companyId,
+      id,
+      authorization,
+    );
+
+    return this.usersService.update(
+      id,
+      {
+        ...body,
+        company_id: companyId,
+        user_type: 'company',
+      } as unknown as Record<string, unknown>,
+      actor,
+    );
+  }
+
+  @Post('platform/companies/:companyId/users/:id/block')
+  async blockCompanyUser(
+    @Param('companyId') companyId: string,
+    @Param('id', ParseIntPipe) id: number,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const actor =
+      await this.usersService.assertPlatformAdminAccess(authorization);
+    await this.usersService.findCompanyManagedUserForPlatform(
+      companyId,
+      id,
+      authorization,
+    );
+
+    return this.usersService.updateStatus(
+      id,
+      { is_active: false },
+      actor,
+    );
+  }
+
+  @Post('platform/companies/:companyId/users/:id/unblock')
+  async unblockCompanyUser(
+    @Param('companyId') companyId: string,
+    @Param('id', ParseIntPipe) id: number,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const actor =
+      await this.usersService.assertPlatformAdminAccess(authorization);
+    await this.usersService.findCompanyManagedUserForPlatform(
+      companyId,
+      id,
+      authorization,
+    );
+
+    return this.usersService.updateStatus(id, { is_active: true }, actor);
+  }
+
+  @Delete('platform/companies/:companyId/users/:id')
+  async removeCompanyUser(
+    @Param('companyId') companyId: string,
+    @Param('id', ParseIntPipe) id: number,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const actor =
+      await this.usersService.assertPlatformAdminAccess(authorization);
+    await this.usersService.findCompanyManagedUserForPlatform(
+      companyId,
+      id,
+      authorization,
+    );
+
+    return this.usersService.remove(id, actor);
+  }
+
   @Post('platform/companies/:companyId/users')
   async createCompanyUser(
     @Param('companyId') companyId: string,
