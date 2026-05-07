@@ -610,8 +610,14 @@ export class UsersService {
     return user;
   }
 
-  async findOneResponse(id: number, authorization?: string) {
-    const actor = await this.getAuthenticatedUser(authorization);
+  async findOneResponse(
+    id: number,
+    authorizationOrActor?: string | UserWithRelations,
+  ) {
+    const actor =
+      typeof authorizationOrActor === 'string' || !authorizationOrActor
+        ? await this.getAuthenticatedUser(authorizationOrActor)
+        : authorizationOrActor;
     const user = await this.findByIdOrThrow(id);
 
     this.assertUserVisibleToActor(actor, user);
@@ -1076,7 +1082,7 @@ export class UsersService {
       data,
     });
 
-    return this.findOneResponse(id);
+    return this.findOneResponse(id, actor);
   }
 
   async updateStatus(
