@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -428,6 +429,78 @@ export class ProductsService {
     return authorization
       ? this.usersService.getRequestContext(authorization)
       : null;
+  }
+
+  async searchForPos(
+    args: { q?: string; shopId?: string; limit?: number },
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    if (!context || context.userType !== 'company' || !context.companyId) {
+      throw new ForbiddenException(
+        'Only company users can search POS products',
+      );
+    }
+
+    const shopId = args.shopId?.trim() || context.currentShopId;
+    if (!shopId) {
+      throw new BadRequestException('shopId is required');
+    }
+
+    const branchCode = await this.resolveBranchCodeForWrite(shopId, context);
+    const search = args.q?.trim();
+    const limit = Math.min(Math.max(args.limit ?? 20, 1), 100);
+
+    const products = await this.prisma.product.findMany({
+      where: {
+        companyId: context.companyId,
+        archivedAt: null,
+        ...(search
+          ? {
+              OR: [
+                { name: { contains: search, mode: 'insensitive' as const } },
+                { sku: { contains: search, mode: 'insensitive' as const } },
+                {
+                  barcode: {
+                    contains: search,
+                    mode: 'insensitive' as const,
+                  },
+                },
+              ],
+            }
+          : {}),
+        stocks: {
+          some: {
+            branchCode,
+          },
+        },
+      },
+      include: {
+        stocks: {
+          where: {
+            branchCode,
+          },
+        },
+      },
+      orderBy: {
+        name: 'asc',
+      },
+      take: limit,
+    });
+
+    return products.map((product) => {
+      const stock = product.stocks[0];
+
+      return {
+        id: String(product.id),
+        publicId: product.publicId,
+        name: product.name,
+        sku: product.sku,
+        barcode: product.barcode,
+        sellPrice: stock?.salePrice ?? product.salePrice ?? 0,
+        stock: stock?.quantity ?? 0,
+      };
+    });
   }
 
   getProductCharacteristics(limit?: string) {
@@ -5248,7 +5321,8 @@ export class ProductsService {
 
   private isValidEan13Barcode(barcode: string) {
     return (
-      this.calculateEan13CheckDigit(barcode.slice(0, 12)) === Number(barcode[12])
+      this.calculateEan13CheckDigit(barcode.slice(0, 12)) ===
+      Number(barcode[12])
     );
   }
 
