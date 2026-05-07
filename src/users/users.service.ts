@@ -1506,6 +1506,7 @@ export class UsersService {
       user_type: user.userType,
       first_name: user.firstName,
       last_name: user.lastName,
+      birth_date: this.formatBirthDate(user.birthDate),
       phone_number: user.phoneNumber,
       role: rolePayload.role_code,
       role_code: rolePayload.role_code,
