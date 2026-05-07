@@ -83,7 +83,7 @@ export class SalesService {
           context?.userType === 'company'
             ? (context.companyId ?? undefined)
             : undefined,
-        number: this.generateSaleNumber(),
+        number: this.generateOrderNumber(),
         branchCode: context?.currentBranchCode ?? undefined,
         userId: context?.userId ?? undefined,
       },
@@ -531,81 +531,7 @@ export class SalesService {
 
     await this.recalculateSale(sale.id);
 
-    const branchCode = sale.branchCode;
-    if (branchCode) {
-      for (const item of sale.items) {
-        if (!item.productId) {
-          continue;
-        }
-
-        const stock = await this.prisma.productStock.findFirst({
-          where: {
-            productId: item.productId,
-            branchCode,
-          },
-        });
-
-        if (stock) {
-          await this.prisma.productStock.update({
-            where: { id: stock.id },
-            data: {
-              quantity: stock.quantity - item.quantity,
-            },
-          });
-        } else {
-          await this.prisma.productStock.create({
-            data: {
-              productId: item.productId,
-              branchCode,
-              quantity: -item.quantity,
-              purchasePrice: item.product?.purchasePrice ?? 0,
-              salePrice: item.salePrice,
-            },
-          });
-        }
-      }
-    }
-
-    await this.prisma.product.updateMany({
-      data: {},
-      where: {
-        id: {
-          in: sale.items
-            .map((item) => item.productId)
-            .filter((value): value is number => typeof value === 'number'),
-        },
-      },
-    });
-
-    for (const item of sale.items) {
-      if (!item.productId) {
-        continue;
-      }
-
-      const product = await this.prisma.product.findFirst({
-        where: this.buildProductScope(
-          {
-            id: item.productId,
-          },
-          context,
-        ),
-        include: { stocks: true },
-      });
-
-      if (!product) {
-        continue;
-      }
-
-      await this.prisma.product.update({
-        where: { id: product.id },
-        data: {
-          quantity: product.stocks.reduce(
-            (sum, stock) => sum + stock.quantity,
-            0,
-          ),
-        },
-      });
-    }
+    await this.writeOffSaleItemsFromStock(sale);
 
     const requestedPaymentMethod =
       this.optionalString(
@@ -747,6 +673,14 @@ export class SalesService {
 
     await this.recalculateSale(id);
 
+    const branchCode =
+      (await this.resolveScopedBranchCode(
+        this.optionalString(body.branch_code),
+        context,
+      )) ?? sale.branchCode;
+
+    await this.writeOffSaleItemsFromStock(sale, branchCode);
+
     const updatedSale = await this.prisma.sale.update({
       where: { id },
       data: {
@@ -757,7 +691,7 @@ export class SalesService {
           context?.companyId,
         ),
         clientName: this.optionalString(body.client_name),
-        branchCode: this.optionalString(body.branch_code),
+        branchCode,
         paidAt: new Date(),
       },
       include: {
@@ -808,6 +742,95 @@ export class SalesService {
     });
   }
 
+  private async writeOffSaleItemsFromStock(
+    sale: {
+      branchCode: string | null;
+      items: {
+        productId: number | null;
+        quantity: number;
+        salePrice: number;
+      }[];
+    },
+    branchCodeOverride?: string | null,
+  ) {
+    const branchCode = branchCodeOverride ?? sale.branchCode;
+    if (!branchCode) {
+      return;
+    }
+
+    const productIds = [
+      ...new Set(
+        sale.items
+          .map((item) => item.productId)
+          .filter((value): value is number => typeof value === 'number'),
+      ),
+    ];
+
+    if (!productIds.length) {
+      return;
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const item of sale.items) {
+        if (!item.productId) {
+          continue;
+        }
+
+        const stock = await tx.productStock.findFirst({
+          where: {
+            productId: item.productId,
+            branchCode,
+          },
+        });
+
+        if (stock) {
+          await tx.productStock.update({
+            where: { id: stock.id },
+            data: {
+              quantity: {
+                decrement: item.quantity,
+              },
+            },
+          });
+          continue;
+        }
+
+        const product = await tx.product.findUnique({
+          where: { id: item.productId },
+          select: {
+            purchasePrice: true,
+          },
+        });
+
+        await tx.productStock.create({
+          data: {
+            productId: item.productId,
+            branchCode,
+            quantity: -item.quantity,
+            purchasePrice: product?.purchasePrice ?? 0,
+            salePrice: item.salePrice,
+          },
+        });
+      }
+
+      for (const productId of productIds) {
+        const totalStock = await tx.productStock.aggregate({
+          where: { productId },
+          _sum: {
+            quantity: true,
+          },
+        });
+
+        await tx.product.update({
+          where: { id: productId },
+          data: {
+            quantity: totalStock._sum.quantity ?? 0,
+          },
+        });
+      }
+    });
+  }
+
   private async findSaleOrThrow(id: number) {
     const sale = await this.prisma.sale.findUnique({
       where: { id },
@@ -838,6 +861,7 @@ export class SalesService {
       id: sale.id,
       sid: sale.number,
       number: sale.number,
+      order_number: sale.number,
       discount_percent: sale.discountPercent,
       discount_amount: sale.discountAmount,
       payable_total: sale.payableTotal,
@@ -869,6 +893,7 @@ export class SalesService {
       id: sale.id,
       sid: sale.number,
       number: sale.number,
+      order_number: sale.number,
       status: sale.status,
       discount_percent: sale.discountPercent,
       discount_amount: sale.discountAmount,
@@ -1438,10 +1463,6 @@ export class SalesService {
           }))
         : null,
     };
-  }
-
-  private generateSaleNumber() {
-    return `SL-${Date.now()}`;
   }
 
   private generateOrderNumber() {
