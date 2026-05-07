@@ -380,6 +380,11 @@ export class PlatformController {
     @Body() body: UpdateUserDto,
     @Headers('authorization') authorization?: string,
   ) {
+    console.log('PlatformController.updateCompanyUser authorization =', {
+      companyId,
+      id,
+      authorization: authorization ?? null,
+    });
     const actor =
       await this.usersService.assertPlatformAdminAccess(authorization);
     await this.usersService.findCompanyManagedUserForPlatform(

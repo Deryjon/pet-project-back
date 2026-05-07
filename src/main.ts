@@ -60,7 +60,20 @@ async function bootstrap() {
       _res: express.Response,
       next: express.NextFunction,
     ) => {
+      console.log('RAW AUTH HEADER:', {
+        method: req.method,
+        url: req.originalUrl,
+        authorization: req.headers.authorization ?? null,
+        xAuthorization: req.headers['x-authorization'] ?? null,
+        xAccessToken: req.headers['x-access-token'] ?? null,
+        rawHeaders: req.rawHeaders,
+      });
       normalizeAuthorizationHeader(req);
+      console.log('NORMALIZED AUTH HEADER:', {
+        method: req.method,
+        url: req.originalUrl,
+        authorization: req.headers.authorization ?? null,
+      });
       next();
     },
   );
