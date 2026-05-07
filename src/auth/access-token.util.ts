@@ -1,6 +1,7 @@
 import { UnauthorizedException } from '@nestjs/common';
 
 export function extractAccessToken(authorization?: string) {
+  console.log('extractAccessToken input =', authorization ?? null);
   const value = authorization?.trim();
 
   if (!value) {
