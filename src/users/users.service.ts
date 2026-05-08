@@ -712,7 +712,7 @@ export class UsersService {
     const password = this.requireString(body.password, 'password');
     const userType = this.parseUserType(body.user_type);
     const birthDate = this.parseBirthDate(this.optionalString(body.birth_date));
-    const normalizedRoleInput = this.optionalString(body.role);
+    const normalizedPlatformRoleInput = this.optionalString(body.platform_role);
     const email = this.optionalString(body.email);
     const passwordHash = await bcrypt.hash(password, 10);
     const isActive =
@@ -722,7 +722,7 @@ export class UsersService {
 
     if (userType === 'platform') {
       const role = this.resolvePlatformRoleCode(
-        normalizedRoleInput ?? 'support',
+        normalizedPlatformRoleInput ?? 'support',
         'role',
       );
 
@@ -754,7 +754,7 @@ export class UsersService {
           password: passwordHash,
           passwordHash,
           userType: 'platform',
-          role,
+          platformRole: role,
           isActive,
           status: isActive ? 'active' : 'blocked',
           canSwitchShops: false,
@@ -774,11 +774,7 @@ export class UsersService {
       this.optionalString(body.crm_role_id),
       companyId,
     );
-    const role = await this.resolveCompanyUserRoleCode(
-      companyId,
-      normalizedRoleInput ?? 'employee',
-    );
-    const allowedShops = await this.resolveAllowedShopsForWrite(
+        const allowedShops = await this.resolveAllowedShopsForWrite(
       companyId,
       body.allowed_shop_ids,
       this.optionalString(body.current_shop_id) ??
@@ -818,7 +814,6 @@ export class UsersService {
         password: passwordHash,
         passwordHash,
         userType: 'company',
-        role,
         crmRoleId: crmRole?.id ?? null,
         companyId,
         isActive,
@@ -957,14 +952,11 @@ export class UsersService {
         this.parseBirthDate(this.optionalString(body.birth_date)) ?? null;
     }
 
-    if (body.role !== undefined) {
-      data.role =
-        targetUser.userType === 'platform'
-          ? this.resolvePlatformRoleCode(body.role, 'role')
-          : await this.resolveCompanyUserRoleCode(
-              companyId ?? targetUser.companyId,
-              body.role,
-            );
+    if (body.platform_role !== undefined) {
+      data.platformRole = this.resolvePlatformRoleCode(
+        body.platform_role,
+        'platform_role',
+      );
     }
 
     if (body.can_switch_shops !== undefined) {
@@ -1363,8 +1355,7 @@ export class UsersService {
       userId: user.id,
       fullName: `${user.firstName} ${user.lastName}`.trim(),
       userType: user.userType,
-      role:
-        user.userType === 'company' ? (user.crmRoleId ?? user.role) : user.role,
+      role: user.userType === 'company' ? user.crmRoleId : user.platformRole,
       crmRoleId: user.crmRoleId,
       crmRoleName: user.crmRole?.name ?? null,
       companyId: user.companyId,
@@ -1380,8 +1371,9 @@ export class UsersService {
     const user = await this.prepareAuthenticatedUser(userInput.id);
 
     if (user.userType === 'platform') {
+      const platformRole = user.platformRole;
       const roles = await this.resolveRoles(
-        user.role,
+        platformRole,
         user.userType,
         user.companyId,
       );
@@ -1398,9 +1390,10 @@ export class UsersService {
         avatar_url: user.avatarUrl,
         is_active: user.isActive,
         role: roles[0]?.role ?? null,
-        role_code: user.role,
-        role_name: roles[0]?.role?.name ?? user.role,
+        role_code: platformRole,
+        role_name: roles[0]?.role?.name ?? platformRole,
         roles,
+        platform_role: platformRole,
         crm_role_id: null,
         crm_role: null,
         company_id: null,
@@ -1427,8 +1420,8 @@ export class UsersService {
       avatar_url: user.avatarUrl,
       is_active: user.isActive,
       role: roles[0]?.role ?? null,
-      role_code: user.crmRoleId ?? user.role,
-      role_name: user.crmRole?.name ?? roles[0]?.role?.name ?? user.role,
+      role_code: user.crmRoleId,
+      role_name: user.crmRole?.name ?? roles[0]?.role?.name ?? null,
       roles,
       crm_role_id: user.crmRoleId,
       crm_role: user.crmRole
@@ -1936,17 +1929,19 @@ export class UsersService {
   }
 
   private isPlatformAdmin(user: UserWithRelations) {
+    const platformRole = (user.platformRole ?? '')
+      .trim()
+      .toLowerCase();
     return (
       user.userType === 'platform' &&
-      PLATFORM_ADMIN_ROLES.has(user.role.trim().toLowerCase())
+      PLATFORM_ADMIN_ROLES.has(platformRole)
     );
   }
 
   private isCompanyAdmin(user: UserWithRelations) {
     return (
       user.userType === 'company' &&
-      (COMPANY_ADMIN_ROLES.has(user.role.trim().toLowerCase()) ||
-        Boolean(user.crmRole?.isAdmin))
+      Boolean(user.crmRole?.isAdmin)
     );
   }
 
@@ -1971,10 +1966,10 @@ export class UsersService {
 
   private async resolveUserPrimaryRolePayload(user: UserWithRelations) {
     if (user.userType === 'platform') {
-      const roleItem = this.toRoleItem(user.role);
+      const roleItem = this.toRoleItem(user.platformRole ?? 'support');
       return {
         role: roleItem.role,
-        role_code: user.role,
+        role_code: user.platformRole ?? 'support',
         role_name: roleItem.role.name,
       };
     }
@@ -1990,20 +1985,16 @@ export class UsersService {
     }
 
     if (!user.companyId) {
-      const roleItem = this.toRoleItem(user.role);
-      return {
-        role: roleItem.role,
-        role_code: user.role,
-        role_name: roleItem.role.name,
-      };
+      return { role: null, role_code: null, role_name: null };
     }
 
     const companyRole = await this.findCompanyRoleByCode(
       user.companyId,
-      user.role,
+      user.crmRoleId ?? '',
     );
     const resolvedRole =
-      companyRole ?? this.toFallbackCompanyRole(user.companyId, user.role);
+      companyRole ??
+      this.toFallbackCompanyRole(user.companyId, user.crmRoleId ?? 'employee');
 
     return {
       role: {
@@ -2665,7 +2656,7 @@ export class UsersService {
       return [];
     }
 
-    if (COMPANY_ADMIN_ROLES.has(user.role.trim().toLowerCase())) {
+    if (Boolean(user.crmRole?.isAdmin)) {
       const allCompanyShops = await this.db.shop.findMany({
         where: {
           companyId: user.companyId,
@@ -2811,9 +2802,11 @@ export class UsersService {
       full_name: `${user.firstName} ${user.lastName}`.trim(),
       phone_number: user.phoneNumber,
       avatar_url: user.avatarUrl,
-      role: crmRolePayload?.role ?? user.role,
-      role_code: crmRolePayload?.roleCode ?? user.role,
-      role_name: crmRolePayload?.roleName ?? user.role,
+      role: crmRolePayload?.role ?? null,
+      role_code: crmRolePayload?.roleCode ?? null,
+      role_name: crmRolePayload?.roleName ?? null,
+      platform_role:
+        user.userType === 'platform' ? (user.platformRole) : null,
       crm_role_id: user.crmRoleId,
       crm_role: user.crmRole
         ? {
@@ -2953,7 +2946,7 @@ export class UsersService {
 
     const companyRole = await this.findCompanyRoleByCode(
       user.companyId,
-      user.role,
+      user.crmRoleId ?? '',
     );
 
     if (companyRole?.isActive) {

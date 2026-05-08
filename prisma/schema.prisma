@@ -109,7 +109,7 @@ model User {
   password           String
   passwordHash       String?
   userType           UserType            @default(company)
-  role               String
+  platformRole       String?
   companyId          String?
   crmRoleId          String?
   branchCode         String?

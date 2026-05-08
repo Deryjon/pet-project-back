@@ -31,7 +31,7 @@ export class CreateUserDto {
 
   @IsOptional()
   @IsString()
-  role?: string;
+  platform_role?: string;
 
   @IsOptional()
   @IsString()

@@ -32,7 +32,7 @@ export class UpdateUserDto {
 
   @IsOptional()
   @IsString()
-  role?: string;
+  platform_role?: string;
 
   @IsOptional()
   @IsString()
