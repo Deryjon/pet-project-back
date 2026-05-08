@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Headers,
+  Patch,
   ParseIntPipe,
   Query,
   Param,
@@ -101,6 +102,16 @@ export class SalesController {
     return this.salesService.payOrder(id, body, authorization);
   }
 
+  @Patch('order/:id/payment-method')
+  @Patch('v2/order/:id/payment-method')
+  updatePaymentMethod(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.updatePaymentMethod(id, body, authorization);
+  }
+
   @Get('new-sale/:id')
   findDraft(@Param('id', ParseIntPipe) id: number) {
     return this.salesService.findDraft(id);
@@ -133,7 +144,19 @@ export class SalesController {
   }
 
   @Delete('new-sale/:id')
-  remove(@Param('id', ParseIntPipe) id: number) {
-    return this.salesService.removeDraft(id);
+  remove(
+    @Param('id', ParseIntPipe) id: number,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.removeDraft(id, authorization);
+  }
+
+  @Delete('order/:id')
+  @Delete('v2/order/:id')
+  removeOrder(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.removeOrder(id, authorization);
   }
 }
