@@ -106,8 +106,7 @@ model User {
   birthDate          DateTime?
   phoneNumber        String
   email              String?
-  password           String
-  passwordHash       String?
+  passwordHash       String
   userType           UserType            @default(company)
   platformRole       String?
   companyId          String?

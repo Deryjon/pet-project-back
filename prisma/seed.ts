@@ -134,6 +134,7 @@ async function main() {
   });
 
   const primaryPlatformAdmin = existingPlatformAdmins[0];
+  const passwordHash = await bcrypt.hash(adminPassword, 10);
 
   if (primaryPlatformAdmin) {
     await prisma.user.update({
@@ -144,8 +145,8 @@ async function main() {
         firstName: 'Platform',
         lastName: 'Admin',
         phoneNumber: adminPhone,
-        password: await bcrypt.hash(adminPassword, 10),
-        role: primaryPlatformRole,
+        passwordHash,
+        platformRole: primaryPlatformRole,
         isActive: true,
       },
     });
@@ -169,9 +170,9 @@ async function main() {
         firstName: 'Platform',
         lastName: 'Admin',
         phoneNumber: adminPhone,
-        password: await bcrypt.hash(adminPassword, 10),
+        passwordHash,
         userType: 'platform',
-        role: primaryPlatformRole,
+        platformRole: primaryPlatformRole,
         isActive: true,
       },
     });

@@ -751,7 +751,6 @@ export class UsersService {
           lastName,
           phoneNumber,
           email,
-          password: passwordHash,
           passwordHash,
           userType: 'platform',
           platformRole: role,
@@ -811,7 +810,6 @@ export class UsersService {
         lastName,
         phoneNumber,
         email,
-        password: passwordHash,
         passwordHash,
         userType: 'company',
         crmRoleId: crmRole?.id ?? null,
@@ -943,7 +941,6 @@ export class UsersService {
         this.requireString(body.password, 'password'),
         10,
       );
-      data.password = passwordHash;
       data.passwordHash = passwordHash;
     }
 
@@ -1207,7 +1204,7 @@ export class UsersService {
 
     const isPasswordValid = await bcrypt.compare(
       currentPassword,
-      user.password,
+      user.passwordHash,
     );
     if (!isPasswordValid) {
       throw new BadRequestException('Current password is incorrect');
@@ -1216,7 +1213,7 @@ export class UsersService {
     await this.db.user.update({
       where: { id: user.id },
       data: {
-        password: await bcrypt.hash(newPassword, 10),
+        passwordHash: await bcrypt.hash(newPassword, 10),
       },
     });
 
