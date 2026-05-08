@@ -1,0 +1,7 @@
+ALTER TABLE "User"
+ADD COLUMN IF NOT EXISTS "platformRole" TEXT;
+
+UPDATE "User"
+SET "platformRole" = "role"
+WHERE "userType" = 'platform'::"UserType"
+  AND "platformRole" IS NULL;
