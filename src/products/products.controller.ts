@@ -9,12 +9,36 @@ import {
   Post,
   Put,
   Query,
+  UseGuards,
 } from '@nestjs/common';
+import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { Permissions } from '../auth/permissions.decorator';
 import { ProductsService } from './products.service';
 
 @Controller()
 export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
+
+  @Get('products/search')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('orders.read')
+  searchForPos(
+    @Query('q') q?: string,
+    @Query('shopId') shopId?: string,
+    @Query('limit') limit?: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.searchForPos(
+      {
+        q: q?.trim(),
+        shopId: shopId?.trim(),
+        limit: Number(limit) || 20,
+      },
+      authorization,
+    );
+  }
 
   @Get('products')
   findAll(
@@ -23,11 +47,14 @@ export class ProductsController {
     @Query('search') search?: string,
     @Headers('authorization') authorization?: string,
   ) {
-    return this.productsService.findAll({
-      page: Number(page) || 1,
-      limit: Number(limit) || 20,
-      search: search?.trim(),
-    }, authorization);
+    return this.productsService.findAll(
+      {
+        page: Number(page) || 1,
+        limit: Number(limit) || 20,
+        search: search?.trim(),
+      },
+      authorization,
+    );
   }
 
   @Post('products')
@@ -62,10 +89,13 @@ export class ProductsController {
     @Query('limit') limit?: string,
     @Headers('authorization') authorization?: string,
   ) {
-    return this.productsService.listImports({
-      page: Number(page) || 1,
-      limit: Number(limit) || 10,
-    }, authorization);
+    return this.productsService.listImports(
+      {
+        page: Number(page) || 1,
+        limit: Number(limit) || 10,
+      },
+      authorization,
+    );
   }
 
   @Get('v2/imports/:id')
@@ -173,27 +203,30 @@ export class ProductsController {
     @Query('free_price') freePrice?: string,
     @Headers('authorization') authorization?: string,
   ) {
-    return this.productsService.findAllV2Extended({
-      page: Number(page) || 1,
-      limit: Number(limit) || 20,
-      search: search?.trim() || fieldSearchKey?.trim(),
-      statistics: this.toBoolean(statistics),
-      status: status?.trim(),
-      archivedList: this.toBoolean(archivedList),
-      brandIds: this.toStringArray(brandIds),
-      supplierIds: this.toStringArray(supplierIds),
-      order: this.toStringArray(order),
-      shopIds: this.toStringArray(shopIds),
-      categoryIds: this.toStringArray(categoryIds),
-      sku: sku?.trim(),
-      measurementType: measurementType?.trim(),
-      supplyPriceFrom: this.toNumber(supplyPriceFrom),
-      supplyPriceTo: this.toNumber(supplyPriceTo),
-      retailPriceFrom: this.toNumber(retailPriceFrom),
-      retailPriceTo: this.toNumber(retailPriceTo),
-      wholesalePrice: this.toNumber(wholesalePrice),
-      freePrice: this.toOptionalBoolean(freePrice),
-    }, authorization);
+    return this.productsService.findAllV2Extended(
+      {
+        page: Number(page) || 1,
+        limit: Number(limit) || 20,
+        search: search?.trim() || fieldSearchKey?.trim(),
+        statistics: this.toBoolean(statistics),
+        status: status?.trim(),
+        archivedList: this.toBoolean(archivedList),
+        brandIds: this.toStringArray(brandIds),
+        supplierIds: this.toStringArray(supplierIds),
+        order: this.toStringArray(order),
+        shopIds: this.toStringArray(shopIds),
+        categoryIds: this.toStringArray(categoryIds),
+        sku: sku?.trim(),
+        measurementType: measurementType?.trim(),
+        supplyPriceFrom: this.toNumber(supplyPriceFrom),
+        supplyPriceTo: this.toNumber(supplyPriceTo),
+        retailPriceFrom: this.toNumber(retailPriceFrom),
+        retailPriceTo: this.toNumber(retailPriceTo),
+        wholesalePrice: this.toNumber(wholesalePrice),
+        freePrice: this.toOptionalBoolean(freePrice),
+      },
+      authorization,
+    );
   }
 
   @Get('v2/product-stats')
@@ -216,23 +249,26 @@ export class ProductsController {
     @Query('free_price') freePrice?: string,
     @Headers('authorization') authorization?: string,
   ) {
-    return this.productsService.getCatalogStatistics({
-      search: search?.trim() || fieldSearchKey?.trim(),
-      status: status?.trim(),
-      archivedList: this.toBoolean(archivedList),
-      brandIds: this.toStringArray(brandIds),
-      supplierIds: this.toStringArray(supplierIds),
-      shopIds: this.toStringArray(shopIds),
-      categoryIds: this.toStringArray(categoryIds),
-      sku: sku?.trim(),
-      measurementType: measurementType?.trim(),
-      supplyPriceFrom: this.toNumber(supplyPriceFrom),
-      supplyPriceTo: this.toNumber(supplyPriceTo),
-      retailPriceFrom: this.toNumber(retailPriceFrom),
-      retailPriceTo: this.toNumber(retailPriceTo),
-      wholesalePrice: this.toNumber(wholesalePrice),
-      freePrice: this.toOptionalBoolean(freePrice),
-    }, authorization);
+    return this.productsService.getCatalogStatistics(
+      {
+        search: search?.trim() || fieldSearchKey?.trim(),
+        status: status?.trim(),
+        archivedList: this.toBoolean(archivedList),
+        brandIds: this.toStringArray(brandIds),
+        supplierIds: this.toStringArray(supplierIds),
+        shopIds: this.toStringArray(shopIds),
+        categoryIds: this.toStringArray(categoryIds),
+        sku: sku?.trim(),
+        measurementType: measurementType?.trim(),
+        supplyPriceFrom: this.toNumber(supplyPriceFrom),
+        supplyPriceTo: this.toNumber(supplyPriceTo),
+        retailPriceFrom: this.toNumber(retailPriceFrom),
+        retailPriceTo: this.toNumber(retailPriceTo),
+        wholesalePrice: this.toNumber(wholesalePrice),
+        freePrice: this.toOptionalBoolean(freePrice),
+      },
+      authorization,
+    );
   }
 
   @Get('v2/product/:id')
@@ -253,7 +289,6 @@ export class ProductsController {
       throw new BadRequestException(
         'POST /api/v2/product is deprecated for catalog create. Use POST /api/v2/product/create.',
       );
-
     }
 
     if (this.isCatalogCreateRequest(body) && this.hasSearchPayload(body)) {
@@ -262,29 +297,32 @@ export class ProductsController {
       );
     }
 
-    return this.productsService.findAllV2Extended({
-      page: this.toNumber(body.page) || 1,
-      limit: this.toNumber(body.limit) || 20,
-      search:
-        this.toOptionalString(body.search) ??
-        this.toOptionalString(body.field_search_key),
-      statistics: this.toBoolean(body.statistics),
-      status: this.toOptionalString(body.status),
-      archivedList: this.toBoolean(body.archived_list),
-      brandIds: this.toStringArray(body.brand_ids),
-      supplierIds: this.toStringArray(body.supplier_ids),
-      order: this.toStringArray(body.order),
-      shopIds: this.toStringArray(body.shop_ids),
-      categoryIds: this.toStringArray(body.category_ids),
-      sku: this.toOptionalString(body.sku),
-      measurementType: this.toOptionalString(body.measurement_type),
-      supplyPriceFrom: this.toNumber(body.supply_price_from),
-      supplyPriceTo: this.toNumber(body.supply_price_to),
-      retailPriceFrom: this.toNumber(body.retail_price_from),
-      retailPriceTo: this.toNumber(body.retail_price_to),
-      wholesalePrice: this.toNumber(body.wholesale_price),
-      freePrice: this.toOptionalBoolean(body.free_price),
-    }, authorization);
+    return this.productsService.findAllV2Extended(
+      {
+        page: this.toNumber(body.page) || 1,
+        limit: this.toNumber(body.limit) || 20,
+        search:
+          this.toOptionalString(body.search) ??
+          this.toOptionalString(body.field_search_key),
+        statistics: this.toBoolean(body.statistics),
+        status: this.toOptionalString(body.status),
+        archivedList: this.toBoolean(body.archived_list),
+        brandIds: this.toStringArray(body.brand_ids),
+        supplierIds: this.toStringArray(body.supplier_ids),
+        order: this.toStringArray(body.order),
+        shopIds: this.toStringArray(body.shop_ids),
+        categoryIds: this.toStringArray(body.category_ids),
+        sku: this.toOptionalString(body.sku),
+        measurementType: this.toOptionalString(body.measurement_type),
+        supplyPriceFrom: this.toNumber(body.supply_price_from),
+        supplyPriceTo: this.toNumber(body.supply_price_to),
+        retailPriceFrom: this.toNumber(body.retail_price_from),
+        retailPriceTo: this.toNumber(body.retail_price_to),
+        wholesalePrice: this.toNumber(body.wholesale_price),
+        freePrice: this.toOptionalBoolean(body.free_price),
+      },
+      authorization,
+    );
   }
 
   @Post('v2/product/create')
@@ -355,29 +393,32 @@ export class ProductsController {
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
   ) {
-    return this.productsService.findAllV2Extended({
-      page: this.toNumber(body.page) || 1,
-      limit: this.toNumber(body.limit) || 20,
-      search:
-        this.toOptionalString(body.search) ??
-        this.toOptionalString(body.field_search_key),
-      statistics: this.toBoolean(body.statistics),
-      status: this.toOptionalString(body.status),
-      archivedList: this.toBoolean(body.archived_list),
-      brandIds: this.toStringArray(body.brand_ids),
-      supplierIds: this.toStringArray(body.supplier_ids),
-      order: this.toStringArray(body.order),
-      shopIds: this.toStringArray(body.shop_ids),
-      categoryIds: this.toStringArray(body.category_ids),
-      sku: this.toOptionalString(body.sku),
-      measurementType: this.toOptionalString(body.measurement_type),
-      supplyPriceFrom: this.toNumber(body.supply_price_from),
-      supplyPriceTo: this.toNumber(body.supply_price_to),
-      retailPriceFrom: this.toNumber(body.retail_price_from),
-      retailPriceTo: this.toNumber(body.retail_price_to),
-      wholesalePrice: this.toNumber(body.wholesale_price),
-      freePrice: this.toOptionalBoolean(body.free_price),
-    }, authorization);
+    return this.productsService.findAllV2Extended(
+      {
+        page: this.toNumber(body.page) || 1,
+        limit: this.toNumber(body.limit) || 20,
+        search:
+          this.toOptionalString(body.search) ??
+          this.toOptionalString(body.field_search_key),
+        statistics: this.toBoolean(body.statistics),
+        status: this.toOptionalString(body.status),
+        archivedList: this.toBoolean(body.archived_list),
+        brandIds: this.toStringArray(body.brand_ids),
+        supplierIds: this.toStringArray(body.supplier_ids),
+        order: this.toStringArray(body.order),
+        shopIds: this.toStringArray(body.shop_ids),
+        categoryIds: this.toStringArray(body.category_ids),
+        sku: this.toOptionalString(body.sku),
+        measurementType: this.toOptionalString(body.measurement_type),
+        supplyPriceFrom: this.toNumber(body.supply_price_from),
+        supplyPriceTo: this.toNumber(body.supply_price_to),
+        retailPriceFrom: this.toNumber(body.retail_price_from),
+        retailPriceTo: this.toNumber(body.retail_price_to),
+        wholesalePrice: this.toNumber(body.wholesale_price),
+        freePrice: this.toOptionalBoolean(body.free_price),
+      },
+      authorization,
+    );
   }
 
   @Post('v2/product-search-stats-with-filters')
@@ -386,25 +427,28 @@ export class ProductsController {
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
   ) {
-    return this.productsService.getCatalogStatistics({
-      search:
-        this.toOptionalString(body.search) ??
-        this.toOptionalString(body.field_search_key),
-      status: this.toOptionalString(body.status),
-      archivedList: this.toBoolean(body.archived_list),
-      brandIds: this.toStringArray(body.brand_ids),
-      supplierIds: this.toStringArray(body.supplier_ids),
-      shopIds: this.toStringArray(body.shop_ids),
-      categoryIds: this.toStringArray(body.category_ids),
-      sku: this.toOptionalString(body.sku),
-      measurementType: this.toOptionalString(body.measurement_type),
-      supplyPriceFrom: this.toNumber(body.supply_price_from),
-      supplyPriceTo: this.toNumber(body.supply_price_to),
-      retailPriceFrom: this.toNumber(body.retail_price_from),
-      retailPriceTo: this.toNumber(body.retail_price_to),
-      wholesalePrice: this.toNumber(body.wholesale_price),
-      freePrice: this.toOptionalBoolean(body.free_price),
-    }, authorization);
+    return this.productsService.getCatalogStatistics(
+      {
+        search:
+          this.toOptionalString(body.search) ??
+          this.toOptionalString(body.field_search_key),
+        status: this.toOptionalString(body.status),
+        archivedList: this.toBoolean(body.archived_list),
+        brandIds: this.toStringArray(body.brand_ids),
+        supplierIds: this.toStringArray(body.supplier_ids),
+        shopIds: this.toStringArray(body.shop_ids),
+        categoryIds: this.toStringArray(body.category_ids),
+        sku: this.toOptionalString(body.sku),
+        measurementType: this.toOptionalString(body.measurement_type),
+        supplyPriceFrom: this.toNumber(body.supply_price_from),
+        supplyPriceTo: this.toNumber(body.supply_price_to),
+        retailPriceFrom: this.toNumber(body.retail_price_from),
+        retailPriceTo: this.toNumber(body.retail_price_to),
+        wholesalePrice: this.toNumber(body.wholesale_price),
+        freePrice: this.toOptionalBoolean(body.free_price),
+      },
+      authorization,
+    );
   }
 
   private toStringArray(value: unknown) {

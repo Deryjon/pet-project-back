@@ -44,7 +44,10 @@ export class AuthService {
 
     await this.usersService.assertUserCanAuthenticate(user);
 
-    const isPasswordValid = await bcrypt.compare(dto.password, user.password);
+    const isPasswordValid = await bcrypt.compare(
+      dto.password,
+      user.passwordHash,
+    );
 
     if (!isPasswordValid) {
       throw new UnauthorizedException('Invalid password');
@@ -53,7 +56,7 @@ export class AuthService {
     const authProfile = await this.usersService.toAuthProfile(user);
     const payload = {
       sub: user.id,
-      role: user.role,
+      role: user.platformRole,
       userType: authProfile.user_type,
       companyId: null,
       currentShopId: null,
@@ -89,7 +92,10 @@ export class AuthService {
 
     await this.usersService.assertUserCanAuthenticate(user);
 
-    const isPasswordValid = await bcrypt.compare(dto.password, user.password);
+    const isPasswordValid = await bcrypt.compare(
+      dto.password,
+      user.passwordHash,
+    );
 
     if (!isPasswordValid) {
       throw new UnauthorizedException('Invalid password');
@@ -104,7 +110,7 @@ export class AuthService {
 
     const payload = {
       sub: preparedUser.id,
-      role: preparedUser.role,
+      role: preparedUser.crmRoleId,
       userType: authProfile.user_type,
       companyId: authProfile.company_id,
       currentShopId: authProfile.current_shop_id,
@@ -129,9 +135,10 @@ export class AuthService {
   async platformMe(authorization?: string) {
     const profile = await this.me(authorization);
 
+    const platformRole = profile.platform_role ?? profile.role_code;
     if (
       profile.user_type !== 'platform' ||
-      !['platform_admin', 'superadmin'].includes(profile.role_code)
+      !['platform_admin', 'superadmin'].includes(platformRole)
     ) {
       throw new ForbiddenException('Only platform admin can access platform');
     }
