@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -439,7 +440,6 @@ const DEFAULT_PRICE_TAGS: PriceTagProfile[] = [
 
 @Injectable()
 export class CompanySettingsService {
-  private companyPaymentTypesStore?: CompanyPaymentType[];
   private priceTagsStore?: PriceTagProfile[];
   private chequesStore?: ChequeProfile[];
 
@@ -1474,24 +1474,21 @@ export class CompanySettingsService {
     };
   }
 
-  getCompanyPaymentTypes(limit?: number, companyId?: string) {
-    const companyPaymentTypes = this.getStoredCompanyPaymentTypes();
+  async getCompanyPaymentTypes(limit?: number, companyId?: string) {
     const targetCompanyId = companyId?.trim() || DEFAULT_COMPANY_ID;
-    const filtered = companyPaymentTypes.filter(
-      (item) => this.stringOrDefault(item.company_id, '') === targetCompanyId,
-    );
+    const companyPaymentTypes =
+      await this.getPersistedCompanyPaymentTypes(targetCompanyId);
 
     return {
-      count: filtered.length,
-      company_payment_types: filtered.slice(
+      count: companyPaymentTypes.length,
+      company_payment_types: companyPaymentTypes.slice(
         0,
         this.normalizeLimit(limit, 1000),
       ),
     };
   }
 
-  createCompanyPaymentType(body: Record<string, unknown>) {
-    const companyPaymentTypes = this.getStoredCompanyPaymentTypes();
+  async createCompanyPaymentType(body: Record<string, unknown>) {
     const companyId =
       this.optionalString(body.company_id) ?? DEFAULT_COMPANY_ID;
     const name = this.requireString(body.name, 'name');
@@ -1504,129 +1501,149 @@ export class CompanySettingsService {
       this.optionalNestedString(body.payment_type, 'name') ??
       'Кастомный';
 
-    const created: CompanyPaymentType = {
-      id: randomUUID(),
-      company_id: companyId,
-      name,
-      token: this.optionalString(body.token) ?? '',
-      is_editable: this.optionalBoolean(body.is_editable) ?? true,
-      dont_show_in_make_payment:
-        this.optionalBoolean(body.dont_show_in_make_payment) ?? false,
-      dont_show_in_settings:
-        this.optionalBoolean(body.dont_show_in_settings) ?? false,
-      is_cash_payment_type:
-        this.optionalBoolean(body.is_cash_payment_type) ?? false,
-      payment_type: {
-        id: paymentTypeId,
-        name: paymentTypeName,
-      },
-    };
+    await this.ensureCompanyPaymentTypesSeeded(companyId);
 
-    companyPaymentTypes.unshift(created);
-    return created;
+    try {
+      const created = await this.db.companyPaymentType.create({
+        data: {
+          companyId,
+          name,
+          token: this.optionalString(body.token) ?? '',
+          isEditable: this.optionalBoolean(body.is_editable) ?? true,
+          dontShowInMakePayment:
+            this.optionalBoolean(body.dont_show_in_make_payment) ?? false,
+          dontShowInSettings:
+            this.optionalBoolean(body.dont_show_in_settings) ?? false,
+          isCashPaymentType:
+            this.optionalBoolean(body.is_cash_payment_type) ?? false,
+          paymentTypeId,
+          paymentTypeName,
+        },
+      });
+
+      return this.toCompanyPaymentTypeResponse(created);
+    } catch (error: any) {
+      if (error?.code === 'P2002') {
+        throw new ConflictException(
+          'Company payment type with this name already exists',
+        );
+      }
+
+      throw error;
+    }
   }
 
-  updateCompanyPaymentType(id: string, body: Record<string, unknown>) {
-    const companyPaymentTypes = this.getStoredCompanyPaymentTypes();
-    const paymentType = companyPaymentTypes.find(
-      (item) => this.stringOrDefault(item.id, '') === id,
-    );
+  async updateCompanyPaymentType(id: string, body: Record<string, unknown>) {
+    const paymentType = await this.db.companyPaymentType.findUnique({
+      where: { id },
+    });
 
     if (!paymentType) {
       throw new NotFoundException('Company payment type not found');
     }
 
-    if (body.name !== undefined) {
-      paymentType.name = this.requireString(body.name, 'name');
-    }
+    const updatedPaymentType = await this.db.companyPaymentType.update({
+      where: { id },
+      data: {
+        ...(body.name !== undefined
+          ? { name: this.requireString(body.name, 'name') }
+          : {}),
+        ...(body.company_id !== undefined
+          ? {
+              companyId: this.requireString(body.company_id, 'company_id'),
+            }
+          : {}),
+        ...(body.token !== undefined
+          ? {
+              token: this.optionalString(body.token) ?? '',
+            }
+          : {}),
+        ...(body.is_editable !== undefined
+          ? {
+              isEditable:
+                this.optionalBoolean(body.is_editable) ?? false,
+            }
+          : {}),
+        ...(body.dont_show_in_make_payment !== undefined
+          ? {
+              dontShowInMakePayment:
+                this.optionalBoolean(body.dont_show_in_make_payment) ?? false,
+            }
+          : {}),
+        ...(body.dont_show_in_settings !== undefined
+          ? {
+              dontShowInSettings:
+                this.optionalBoolean(body.dont_show_in_settings) ?? false,
+            }
+          : {}),
+        ...(body.is_cash_payment_type !== undefined
+          ? {
+              isCashPaymentType:
+                this.optionalBoolean(body.is_cash_payment_type) ?? false,
+            }
+          : {}),
+        ...(body.payment_type_id !== undefined
+          ? {
+              paymentTypeId: this.requireString(
+                body.payment_type_id,
+                'payment_type_id',
+              ),
+            }
+          : {}),
+        ...(body.payment_type_name !== undefined
+          ? {
+              paymentTypeName: this.requireString(
+                body.payment_type_name,
+                'payment_type_name',
+              ),
+            }
+          : {}),
+        ...(body.payment_type !== undefined
+          ? {
+              ...(this.optionalNestedString(body.payment_type, 'id')
+                ? {
+                    paymentTypeId: this.requireString(
+                      this.optionalNestedString(body.payment_type, 'id'),
+                      'payment_type.id',
+                    ),
+                  }
+                : {}),
+              ...(this.optionalNestedString(body.payment_type, 'name')
+                ? {
+                    paymentTypeName: this.requireString(
+                      this.optionalNestedString(body.payment_type, 'name'),
+                      'payment_type.name',
+                    ),
+                  }
+                : {}),
+            }
+          : {}),
+      },
+    });
 
-    if (body.company_id !== undefined) {
-      paymentType.company_id = this.requireString(
-        body.company_id,
-        'company_id',
-      );
-    }
-
-    if (body.token !== undefined) {
-      paymentType.token = this.optionalString(body.token) ?? '';
-    }
-
-    if (body.is_editable !== undefined) {
-      paymentType.is_editable = this.optionalBoolean(body.is_editable) ?? false;
-    }
-
-    if (body.dont_show_in_make_payment !== undefined) {
-      paymentType.dont_show_in_make_payment =
-        this.optionalBoolean(body.dont_show_in_make_payment) ?? false;
-    }
-
-    if (body.dont_show_in_settings !== undefined) {
-      paymentType.dont_show_in_settings =
-        this.optionalBoolean(body.dont_show_in_settings) ?? false;
-    }
-
-    if (body.is_cash_payment_type !== undefined) {
-      paymentType.is_cash_payment_type =
-        this.optionalBoolean(body.is_cash_payment_type) ?? false;
-    }
-
-    const paymentTypeMeta =
-      paymentType.payment_type &&
-      typeof paymentType.payment_type === 'object' &&
-      !Array.isArray(paymentType.payment_type)
-        ? (paymentType.payment_type as Record<string, unknown>)
-        : {};
-
-    if (body.payment_type_id !== undefined) {
-      paymentTypeMeta.id = this.requireString(
-        body.payment_type_id,
-        'payment_type_id',
-      );
-    }
-
-    if (body.payment_type_name !== undefined) {
-      paymentTypeMeta.name = this.requireString(
-        body.payment_type_name,
-        'payment_type_name',
-      );
-    }
-
-    if (body.payment_type !== undefined) {
-      const nestedId = this.optionalNestedString(body.payment_type, 'id');
-      const nestedName = this.optionalNestedString(body.payment_type, 'name');
-
-      if (nestedId) {
-        paymentTypeMeta.id = nestedId;
-      }
-
-      if (nestedName) {
-        paymentTypeMeta.name = nestedName;
-      }
-    }
-
-    paymentType.payment_type = paymentTypeMeta;
-
-    return paymentType;
+    return this.toCompanyPaymentTypeResponse(updatedPaymentType);
   }
 
-  deleteCompanyPaymentType(id: string) {
-    const companyPaymentTypes = this.getStoredCompanyPaymentTypes();
-    const index = companyPaymentTypes.findIndex(
-      (item) => this.stringOrDefault(item.id, '') === id,
-    );
+  async deleteCompanyPaymentType(id: string) {
+    const existing = await this.db.companyPaymentType.findUnique({
+      where: { id },
+    });
 
-    if (index === -1) {
+    if (!existing) {
       throw new NotFoundException('Company payment type not found');
     }
 
-    const [deleted] = companyPaymentTypes.splice(index, 1);
+    const deleted = await this.db.companyPaymentType.delete({
+      where: { id },
+    });
+
     return {
       success: true,
-      company_payment_type: deleted,
+      company_payment_type: this.toCompanyPaymentTypeResponse(deleted),
     };
   }
 
-  getCashBoxes(query: {
+  async getCashBoxes(query: {
     page?: number;
     limit?: number;
     name?: string;
@@ -1641,9 +1658,8 @@ export class CompanySettingsService {
       DEFAULT_SHOPS,
     );
     const targetCompanyId = query.companyId?.trim() || DEFAULT_COMPANY_ID;
-    const companyPaymentTypes = this.getStoredCompanyPaymentTypes().filter(
-      (item) => this.stringOrDefault(item.company_id, '') === targetCompanyId,
-    );
+    const companyPaymentTypes =
+      await this.getPersistedCompanyPaymentTypes(targetCompanyId);
     const safeLimit = this.normalizeLimit(query.limit, 10);
     const safePage = Math.max(1, Number(query.page) || 1);
     const normalizedName = (query.name ?? '').trim().toLowerCase();
@@ -1732,15 +1748,100 @@ export class CompanySettingsService {
     return parsed as T[];
   }
 
-  private getStoredCompanyPaymentTypes() {
-    if (!this.companyPaymentTypesStore) {
-      this.companyPaymentTypesStore = this.parseJsonArray<CompanyPaymentType>(
-        process.env.COMPANY_PAYMENT_TYPES_JSON,
-        DEFAULT_COMPANY_PAYMENT_TYPES,
-      ).map((item) => ({ ...item }));
+  private async getPersistedCompanyPaymentTypes(companyId: string) {
+    await this.ensureCompanyPaymentTypesSeeded(companyId);
+    const paymentTypes = await this.db.companyPaymentType.findMany({
+      where: {
+        companyId,
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+
+    return paymentTypes.map((paymentType: any) =>
+      this.toCompanyPaymentTypeResponse(paymentType),
+    );
+  }
+
+  private async ensureCompanyPaymentTypesSeeded(companyId: string) {
+    const existingCount = await this.db.companyPaymentType.count({
+      where: {
+        companyId,
+      },
+    });
+
+    if (existingCount > 0) {
+      return;
     }
 
-    return this.companyPaymentTypesStore;
+    const defaults = this.parseJsonArray<CompanyPaymentType>(
+      process.env.COMPANY_PAYMENT_TYPES_JSON,
+      DEFAULT_COMPANY_PAYMENT_TYPES,
+    ).filter((item) => this.stringOrDefault(item.company_id, '') === companyId);
+
+    if (!defaults.length) {
+      return;
+    }
+
+    await this.db.companyPaymentType.createMany({
+      data: defaults.map((item) => {
+        const paymentTypeMeta =
+          item.payment_type &&
+          typeof item.payment_type === 'object' &&
+          !Array.isArray(item.payment_type)
+            ? (item.payment_type as Record<string, unknown>)
+            : {};
+
+        return {
+          id: this.stringOrDefault(item.id, randomUUID()),
+          companyId,
+          name: this.stringOrDefault(item.name, ''),
+          token: this.stringOrDefault(item.token, ''),
+          isEditable: Boolean(item.is_editable),
+          dontShowInMakePayment: Boolean(item.dont_show_in_make_payment),
+          dontShowInSettings: Boolean(item.dont_show_in_settings),
+          isCashPaymentType: Boolean(item.is_cash_payment_type),
+          paymentTypeId: this.stringOrDefault(
+            paymentTypeMeta.id,
+            '00ed9cff-9576-432f-849b-7bbcc2fed640',
+          ),
+          paymentTypeName: this.stringOrDefault(
+            paymentTypeMeta.name,
+            'РљР°СЃС‚РѕРјРЅС‹Р№',
+          ),
+        };
+      }),
+      skipDuplicates: true,
+    });
+  }
+
+  private toCompanyPaymentTypeResponse(paymentType: {
+    id: string;
+    companyId: string;
+    name: string;
+    token: string;
+    isEditable: boolean;
+    dontShowInMakePayment: boolean;
+    dontShowInSettings: boolean;
+    isCashPaymentType: boolean;
+    paymentTypeId: string;
+    paymentTypeName: string;
+  }) {
+    return {
+      id: paymentType.id,
+      company_id: paymentType.companyId,
+      name: paymentType.name,
+      token: paymentType.token,
+      is_editable: paymentType.isEditable,
+      dont_show_in_make_payment: paymentType.dontShowInMakePayment,
+      dont_show_in_settings: paymentType.dontShowInSettings,
+      is_cash_payment_type: paymentType.isCashPaymentType,
+      payment_type: {
+        id: paymentType.paymentTypeId,
+        name: paymentType.paymentTypeName,
+      },
+    };
   }
 
   private getStoredPriceTags() {

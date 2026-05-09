@@ -96,8 +96,10 @@ export class DashboardService {
     });
 
     const paymentTypeLookup = new Map<string, string>();
-    const paymentTypes =
-      this.companySettingsService.getCompanyPaymentTypes(undefined, companyId);
+    const paymentTypes = await this.companySettingsService.getCompanyPaymentTypes(
+      undefined,
+      companyId,
+    );
     for (const paymentType of paymentTypes.company_payment_types as Array<
       Record<string, unknown>
     >) {

@@ -68,7 +68,9 @@ export class SalesService {
         .filter((value): value is string => !!value),
       context?.companyId,
     );
-    const paymentTypeLookup = this.buildPaymentTypeLookup(context?.companyId);
+    const paymentTypeLookup = await this.buildPaymentTypeLookup(
+      context?.companyId,
+    );
 
     return sales.map((sale) =>
       this.toSaleListItem(sale, context, shopLookup, paymentTypeLookup),
@@ -118,7 +120,9 @@ export class SalesService {
         .filter((value): value is string => !!value),
       context?.companyId,
     );
-    const paymentTypeLookup = this.buildPaymentTypeLookup(context?.companyId);
+    const paymentTypeLookup = await this.buildPaymentTypeLookup(
+      context?.companyId,
+    );
 
     return sales.map((sale) =>
       this.toSaleListItem(sale, context, shopLookup, paymentTypeLookup),
@@ -154,7 +158,9 @@ export class SalesService {
         .filter((value): value is string => !!value),
       context?.companyId,
     );
-    const paymentTypeLookup = this.buildPaymentTypeLookup(context?.companyId);
+    const paymentTypeLookup = await this.buildPaymentTypeLookup(
+      context?.companyId,
+    );
 
     return sales.map((sale) =>
       this.toSaleListItem(sale, context, shopLookup, paymentTypeLookup),
@@ -316,7 +322,7 @@ export class SalesService {
     for (const sale of sales) {
       const date = this.formatDate(sale.createdAt);
       const orders = grouped.get(date) ?? [];
-      orders.push(this.toV2OrderResponse(sale, context, shopLookup));
+      orders.push(await this.toV2OrderResponse(sale, context, shopLookup));
       grouped.set(date, orders);
     }
 
@@ -354,7 +360,9 @@ export class SalesService {
       },
     });
 
-    const paymentTypeLookup = this.buildPaymentTypeLookup(context?.companyId);
+    const paymentTypeLookup = await this.buildPaymentTypeLookup(
+      context?.companyId,
+    );
     const paymentStats = new Map<
       string,
       {
@@ -633,7 +641,7 @@ export class SalesService {
               .company_payment_type_id
           : undefined,
       ) ?? this.optionalString(body.payment_method);
-    const paymentMethod = this.resolvePaymentMethod(
+    const paymentMethod = await this.resolvePaymentMethod(
       requestedPaymentMethod,
       context?.companyId,
     );
@@ -716,7 +724,7 @@ export class SalesService {
       data: {
         ...(requestedPaymentMethod
           ? {
-              paymentMethod: this.resolvePaymentMethod(
+              paymentMethod: await this.resolvePaymentMethod(
                 requestedPaymentMethod,
                 context?.companyId,
               ),
@@ -968,7 +976,7 @@ export class SalesService {
       data: {
         status: 'paid',
         isDraft: false,
-        paymentMethod: this.resolvePaymentMethod(
+        paymentMethod: await this.resolvePaymentMethod(
           this.optionalString(body.payment_method),
           context?.companyId,
         ),
@@ -1437,6 +1445,10 @@ export class SalesService {
     paymentMethod?: string;
   }) {
     const total = args.items.reduce((sum, item) => sum + item.lineTotal, 0);
+    const paymentMethod = await this.resolvePaymentMethod(
+      args.paymentMethod,
+      args.originalSale.companyId,
+    );
 
     return this.prisma.sale.create({
       data: {
@@ -1446,10 +1458,7 @@ export class SalesService {
         status: args.status,
         payableTotal: total,
         total,
-        paymentMethod: this.resolvePaymentMethod(
-          args.paymentMethod,
-          args.originalSale.companyId,
-        ),
+        paymentMethod,
         clientName: args.originalSale.clientName ?? undefined,
         branchCode: args.originalSale.branchCode ?? undefined,
         isDraft: false,
@@ -2023,7 +2032,7 @@ export class SalesService {
     };
   }
 
-  private toV2OrderResponse(
+  private async toV2OrderResponse(
     sale: {
       id: number;
       number: string;
@@ -2075,7 +2084,9 @@ export class SalesService {
       sale.branchCode ?? '',
       shopLookup,
     );
-    const paymentTypeLookup = this.buildPaymentTypeLookup(context?.companyId);
+    const paymentTypeLookup = await this.buildPaymentTypeLookup(
+      context?.companyId,
+    );
     const payment = sale.paymentMethod
       ? paymentTypeLookup.get(sale.paymentMethod)
       : undefined;
@@ -2557,7 +2568,7 @@ export class SalesService {
     return trimmed.length > 0 ? trimmed : undefined;
   }
 
-  private resolvePaymentMethod(
+  private async resolvePaymentMethod(
     requestedPaymentMethod?: string,
     companyId?: string | null,
   ) {
@@ -2566,13 +2577,15 @@ export class SalesService {
     }
 
     return (
-      this.findDefaultPaymentMethod(companyId) ?? requestedPaymentMethod ?? null
+      (await this.findDefaultPaymentMethod(companyId)) ??
+      requestedPaymentMethod ??
+      null
     );
   }
 
-  private findDefaultPaymentMethod(companyId?: string | null) {
+  private async findDefaultPaymentMethod(companyId?: string | null) {
     const companyPaymentTypes =
-      this.companySettingsService.getCompanyPaymentTypes(
+      await this.companySettingsService.getCompanyPaymentTypes(
         undefined,
         companyId ?? undefined,
       );
@@ -2780,9 +2793,9 @@ export class SalesService {
     return shopLookup;
   }
 
-  private buildPaymentTypeLookup(companyId?: string | null) {
+  private async buildPaymentTypeLookup(companyId?: string | null) {
     const companyPaymentTypes =
-      this.companySettingsService.getCompanyPaymentTypes(
+      await this.companySettingsService.getCompanyPaymentTypes(
         undefined,
         companyId ?? undefined,
       );

@@ -55,6 +55,7 @@ model Company {
   sales              Sale[]
   cashboxes          Cashbox[]
   paymentTypes       PaymentType[]
+  companyPaymentTypes CompanyPaymentType[]
   orders             Order[]
   stockMovements     StockMovement[]
   auditLogs          AuditLog[]
@@ -326,6 +327,25 @@ model PaymentType {
   payments  OrderPayment[]
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
+
+  @@unique([companyId, name])
+  @@index([companyId])
+}
+
+model CompanyPaymentType {
+  id                    String   @id @default(uuid())
+  companyId             String
+  name                  String
+  token                 String   @default("")
+  isEditable            Boolean  @default(true)
+  dontShowInMakePayment Boolean  @default(false)
+  dontShowInSettings    Boolean  @default(false)
+  isCashPaymentType     Boolean  @default(false)
+  paymentTypeId         String
+  paymentTypeName       String
+  company               Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
   @@unique([companyId, name])
   @@index([companyId])

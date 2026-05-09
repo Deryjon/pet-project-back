@@ -234,7 +234,7 @@ export class CompanySettingsController {
 
   @Get('company-payment-type')
   @Get('v1/company-payment-type')
-  getV1CompanyPaymentTypes(
+  async getV1CompanyPaymentTypes(
     @Query('limit') limit?: string,
     @Query('company_id') companyId?: string,
   ) {
@@ -245,12 +245,12 @@ export class CompanySettingsController {
   }
 
   @Post('company-payment-type')
-  createCompanyPaymentType(@Body() body: Record<string, unknown>) {
+  async createCompanyPaymentType(@Body() body: Record<string, unknown>) {
     return this.companySettingsService.createCompanyPaymentType(body);
   }
 
   @Put('company-payment-type/:id')
-  updateCompanyPaymentType(
+  async updateCompanyPaymentType(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
   ) {
@@ -258,12 +258,12 @@ export class CompanySettingsController {
   }
 
   @Delete('company-payment-type/:id')
-  deleteCompanyPaymentType(@Param('id') id: string) {
+  async deleteCompanyPaymentType(@Param('id') id: string) {
     return this.companySettingsService.deleteCompanyPaymentType(id);
   }
 
   @Get('cash-box')
-  getCashBoxes(
+  async getCashBoxes(
     @Query('limit') limit?: string,
     @Query('page') page?: string,
     @Query('name') name?: string,
@@ -278,7 +278,7 @@ export class CompanySettingsController {
   }
 
   @Get('v1/cash-box')
-  getV1CashBoxes(
+  async getV1CashBoxes(
     @Query('limit') limit?: string,
     @Query('page') page?: string,
     @Query('name') name?: string,
