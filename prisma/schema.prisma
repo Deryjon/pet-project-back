@@ -33,6 +33,14 @@ enum StockMovementType {
   TRANSFER
 }
 
+enum SalaryCalculationType {
+  FIXED_ONLY
+  PROFIT_PERCENT_ONLY
+  REVENUE_PERCENT_ONLY
+  FIXED_PLUS_PROFIT
+  FIXED_PLUS_REVENUE
+}
+
 model Company {
   id                 String              @id @default(uuid())
   login              String              @unique
@@ -56,6 +64,13 @@ model Company {
   cashboxes          Cashbox[]
   paymentTypes       PaymentType[]
   companyPaymentTypes CompanyPaymentType[]
+  companyProfile     CompanyProfileSetting?
+  companyTariff      CompanyTariffSetting?
+  companyCurrency    CompanyCurrencySetting?
+  loyaltyProgram     LoyaltyProgramSetting?
+  measurementUnits   MeasurementUnitSetting[]
+  priceTags          PriceTagSetting[]
+  cheques            ChequeSetting[]
   orders             Order[]
   stockMovements     StockMovement[]
   auditLogs          AuditLog[]
@@ -88,6 +103,13 @@ model Shop {
   companyId      String
   name           String
   branchCode     String
+  address        String?
+  phoneNumbers   Json?
+  facebook       String?
+  instagram      String?
+  telegram       String?
+  website        String?
+  workingHours   Json?
   isActive       Boolean          @default(true)
   company        Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   currentUsers   User[]           @relation("CurrentShop")
@@ -127,6 +149,8 @@ model User {
   currentShop        Shop?               @relation("CurrentShop", fields: [currentShopId], references: [id], onDelete: SetNull)
   shopAccesses       UserShopAccess[]
   sales              Sale[]
+  sellerSalarySettings SellerSalarySettings?
+  soldSaleItems      SaleItem[]           @relation("SaleItemSeller")
   orders             Order[]
   stockMovements     StockMovement[]
   auditLogs          AuditLog[]
@@ -306,6 +330,9 @@ model Cashbox {
   companyId String
   shopId    String
   name      String
+  chequeId  String?
+  ePos      Int      @default(0)
+  webKassa  Int      @default(0)
   isActive  Boolean  @default(true)
   company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
@@ -348,6 +375,140 @@ model CompanyPaymentType {
   updatedAt             DateTime @updatedAt
 
   @@unique([companyId, name])
+  @@index([companyId])
+}
+
+model CountryReference {
+  id        String              @id
+  name      String
+  code      String              @unique
+  timeZones TimeZoneReference[]
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+}
+
+model TimeZoneReference {
+  id         String            @id
+  countryId  String?
+  name       String
+  shortName  String
+  gmtOffset  String
+  country    CountryReference? @relation(fields: [countryId], references: [id], onDelete: SetNull)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  @@index([countryId])
+}
+
+model CompanyProfileSetting {
+  companyId  String   @id
+  data       Json
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model CompanyTariffSetting {
+  companyId  String   @id
+  data       Json
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model CompanyCurrencySetting {
+  id           String   @id @default(uuid())
+  companyId    String   @unique
+  currencyId   String
+  name         String
+  symbol       String
+  isoCode      String
+  exchangeRate Float    @default(1)
+  precision    Int      @default(0)
+  isEditable   Boolean  @default(false)
+  company      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model LoyaltyProgramSetting {
+  id                 String   @id @default(uuid())
+  companyId          String   @unique
+  isActive           Boolean  @default(false)
+  name               String   @default("")
+  type               String   @default("")
+  cashbackPercent    Float    @default(0)
+  bonusPercent       Float    @default(0)
+  levels             Json
+  hasCustomerBalance Boolean  @default(false)
+  hasCustomerDebt    Boolean  @default(false)
+  company            Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model MeasurementUnitSetting {
+  id         String   @id
+  companyId  String
+  name       String
+  shortName  String
+  precision  String
+  isEditable Boolean  @default(false)
+  isDefault  Boolean  @default(false)
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([companyId])
+}
+
+model PriceTagSetting {
+  id            String   @id
+  companyId     String
+  name          String
+  width         Float
+  length        Float
+  barcodeType   String
+  barcodeTypeId String
+  properties    Json?
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([companyId])
+}
+
+model ChequeSetting {
+  id                    String   @id
+  companyId             String
+  name                  String
+  hasLogo               Boolean  @default(false)
+  logoImage             Json
+  hasInformationBlock   Boolean  @default(true)
+  hasAdditionalInfo     Boolean  @default(true)
+  hasLowerBlock         Boolean  @default(true)
+  displayText           String
+  chequeItems           Json
+  hasBarCode            Boolean  @default(false)
+  isDefault             Boolean  @default(false)
+  type                  String   @default("cheque")
+  hasAdditionalImage    Boolean  @default(false)
+  additionalImage       Json
+  hasCustomerDebt       Boolean  @default(false)
+  hasCustomerBalance    Boolean  @default(false)
+  printedWithBillz      Boolean  @default(true)
+  logoUrl               String   @default("")
+  width                 Float    @default(0)
+  length                Float    @default(0)
+  xAxis                 Float    @default(0)
+  yAxis                 Float    @default(0)
+  rotation              Float    @default(0)
+  logo                  String   @default("")
+  compact               Boolean  @default(false)
+  company               Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
   @@index([companyId])
 }
 
@@ -504,6 +665,9 @@ model Sale {
   paidAt          DateTime?
 
   @@index([companyId])
+  @@index([createdAt])
+  @@index([branchCode])
+  @@index([userId])
   @@index([parentSaleId])
   @@index([saleType])
 }
@@ -512,16 +676,42 @@ model SaleItem {
   id        Int      @id @default(autoincrement())
   saleId    Int
   productId Int?
+  sellerId  Int?
   name      String
   barcode   String?
   sku       String?
   quantity  Int
   salePrice Float
   lineTotal Float
+  retailPriceAtSale Float      @default(0)
+  discountAmount    Float      @default(0)
+  finalPrice        Float      @default(0)
+  supplyPriceAtSale Float      @default(0)
+  profitAtSale      Float      @default(0)
+  markupAtSale      Float?
+  sellerBonusAmount Float      @default(0)
   sale      Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
   product   Product? @relation(fields: [productId], references: [id])
+  seller    User?    @relation("SaleItemSeller", fields: [sellerId], references: [id], onDelete: SetNull)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([sellerId])
+  @@index([saleId])
+  @@index([productId])
+}
+
+model SellerSalarySettings {
+  id              String                @id @default(uuid())
+  userId          Int                   @unique
+  fixedSalary     Float                 @default(0)
+  salaryPercent   Float                 @default(0)
+  calculationType SalaryCalculationType @default(FIXED_PLUS_PROFIT)
+  bonusEnabled    Boolean               @default(true)
+  isActive        Boolean               @default(true)
+  user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
 }
 
 model Role {

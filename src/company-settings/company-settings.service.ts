@@ -440,8 +440,7 @@ const DEFAULT_PRICE_TAGS: PriceTagProfile[] = [
 
 @Injectable()
 export class CompanySettingsService {
-  private priceTagsStore?: PriceTagProfile[];
-  private chequesStore?: ChequeProfile[];
+  private currencyIsoCache = new Map<string, string>();
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -449,70 +448,102 @@ export class CompanySettingsService {
     return this.prisma as any;
   }
 
-  getDefaultCurrency(companyId?: string): CompanyCurrencyConfig {
-    const targetCompanyId = companyId?.trim() || DEFAULT_COMPANY_ID;
-    const map = this.parseJsonMap<CompanyCurrencyConfig>(
-      process.env.COMPANY_CURRENCY_MAP_JSON,
-    );
-    const fromMap = targetCompanyId ? map[targetCompanyId] : undefined;
+  async getDefaultCurrency(companyId?: string): Promise<CompanyCurrencyConfig> {
+    const targetCompanyId = await this.resolveCompanyId(companyId);
+    if (!targetCompanyId) {
+      return {
+        id: DEFAULT_CURRENCY_CONFIG_ID,
+        company_id: companyId?.trim() || DEFAULT_COMPANY_ID,
+        currency: {
+          id: DEFAULT_CURRENCY_ID,
+          name: DEFAULT_CURRENCY_NAME,
+          symbol: DEFAULT_CURRENCY_SYMBOL,
+          iso_code: DEFAULT_CURRENCY_ISO_CODE,
+          exchange_rate: DEFAULT_CURRENCY_EXCHANGE_RATE,
+          precision: DEFAULT_CURRENCY_PRECISION,
+        },
+        is_editable: DEFAULT_CURRENCY_EDITABLE,
+      };
+    }
 
-    return {
-      id: fromMap?.id ?? DEFAULT_CURRENCY_CONFIG_ID,
+    await this.ensureCompanySettingsSeeded(targetCompanyId);
+    const currency = await this.db.companyCurrencySetting.findUnique({
+      where: { companyId: targetCompanyId },
+    });
+
+    const response = {
+      id: currency?.id ?? DEFAULT_CURRENCY_CONFIG_ID,
       company_id: targetCompanyId,
       currency: {
-        id: fromMap?.currency?.id ?? DEFAULT_CURRENCY_ID,
-        name: fromMap?.currency?.name ?? DEFAULT_CURRENCY_NAME,
-        symbol: fromMap?.currency?.symbol ?? DEFAULT_CURRENCY_SYMBOL,
-        iso_code: fromMap?.currency?.iso_code ?? DEFAULT_CURRENCY_ISO_CODE,
-        exchange_rate:
-          fromMap?.currency?.exchange_rate ?? DEFAULT_CURRENCY_EXCHANGE_RATE,
-        precision: fromMap?.currency?.precision ?? DEFAULT_CURRENCY_PRECISION,
+        id: currency?.currencyId ?? DEFAULT_CURRENCY_ID,
+        name: currency?.name ?? DEFAULT_CURRENCY_NAME,
+        symbol: currency?.symbol ?? DEFAULT_CURRENCY_SYMBOL,
+        iso_code: currency?.isoCode ?? DEFAULT_CURRENCY_ISO_CODE,
+        exchange_rate: currency?.exchangeRate ?? DEFAULT_CURRENCY_EXCHANGE_RATE,
+        precision: currency?.precision ?? DEFAULT_CURRENCY_PRECISION,
       },
-      is_editable: fromMap?.is_editable ?? DEFAULT_CURRENCY_EDITABLE,
+      is_editable: currency?.isEditable ?? DEFAULT_CURRENCY_EDITABLE,
     };
+
+    this.currencyIsoCache.set(targetCompanyId, response.currency.iso_code);
+    return response;
   }
 
   getDefaultCurrencyIsoCode(companyId?: string): string {
-    return this.getDefaultCurrency(companyId).currency.iso_code;
+    const key = companyId?.trim() || DEFAULT_COMPANY_ID;
+    return this.currencyIsoCache.get(key) ?? DEFAULT_CURRENCY_ISO_CODE;
   }
 
-  getCountries(limit?: number) {
-    const countries = this.parseJsonArray<CountryItem>(
-      process.env.COUNTRIES_JSON,
-      DEFAULT_COUNTRIES,
-    );
+  async getCountries(limit?: number) {
+    await this.ensureReferenceDataSeeded();
+    const countries = await this.db.countryReference.findMany({
+      orderBy: { name: 'asc' },
+    });
 
     return {
       count: countries.length,
-      countries: countries.slice(0, this.normalizeLimit(limit, 1000)),
+      countries: countries.slice(0, this.normalizeLimit(limit, 1000)).map((country: any) => ({
+        id: country.id,
+        name: country.name,
+        code: country.code,
+      })),
     };
   }
 
-  getTimeZones(limit?: number, countryId?: string) {
-    const timeZones = this.parseJsonArray<TimeZoneItem>(
-      process.env.TIME_ZONES_JSON,
-      DEFAULT_TIME_ZONES,
-    );
-    const filtered = countryId
-      ? timeZones.filter((item) => item.country_id === countryId)
-      : timeZones;
+  async getTimeZones(limit?: number, countryId?: string) {
+    await this.ensureReferenceDataSeeded();
+    const filtered = await this.db.timeZoneReference.findMany({
+      where: countryId ? { countryId } : undefined,
+      orderBy: { name: 'asc' },
+    });
 
     return {
       count: filtered.length,
-      time_zones: filtered.slice(0, this.normalizeLimit(limit, 1000)),
+      time_zones: filtered.slice(0, this.normalizeLimit(limit, 1000)).map((item: any) => ({
+        id: item.id,
+        country_id: item.countryId ?? '',
+        name: item.name,
+        short_name: item.shortName,
+        gmt_offset: item.gmtOffset,
+      })),
     };
   }
 
-  getCompanyTariff() {
-    const custom = this.parseJsonObject(process.env.COMPANY_TARIFF_JSON);
+  async getCompanyTariff() {
+    const targetCompanyId = await this.resolveCompanyId();
+    if (!targetCompanyId) {
+      return DEFAULT_COMPANY_TARIFF;
+    }
 
-    return {
+    await this.ensureCompanySettingsSeeded(targetCompanyId);
+    const tariff = await this.db.companyTariffSetting.findUnique({
+      where: { companyId: targetCompanyId },
+    });
+
+    return this.objectOrDefault(tariff?.data, {
       ...DEFAULT_COMPANY_TARIFF,
-      ...custom,
-      billz_company_id:
-        this.stringOrDefault(custom.billz_company_id, DEFAULT_COMPANY_ID) ??
-        DEFAULT_COMPANY_ID,
-    };
+      billz_company_id: targetCompanyId,
+    });
   }
 
   async getCompany() {
@@ -525,10 +556,17 @@ export class CompanySettingsService {
       },
     });
 
-    const custom = this.parseJsonObject(process.env.COMPANY_PROFILE_JSON);
+    if (companyFromDb) {
+      await this.ensureCompanySettingsSeeded(companyFromDb.id);
+    }
+    const profile = companyFromDb
+      ? await this.db.companyProfileSetting.findUnique({
+          where: { companyId: companyFromDb.id },
+        })
+      : null;
     const merged: Record<string, unknown> = {
       ...DEFAULT_COMPANY_PROFILE,
-      ...custom,
+      ...this.objectOrDefault(profile?.data, {}),
       ...(companyFromDb
         ? {
             id: companyFromDb.id,
@@ -539,14 +577,12 @@ export class CompanySettingsService {
         : {}),
     };
 
-    const zones = this.parseJsonArray<TimeZoneItem>(
-      process.env.TIME_ZONES_JSON,
-      DEFAULT_TIME_ZONES,
-    );
+    await this.ensureReferenceDataSeeded();
+    const zones = await this.db.timeZoneReference.findMany();
     const selectedZone = zones.find(
-      (item) =>
+      (item: any) =>
         item.id === this.stringOrDefault(merged.time_zone_id, '') ||
-        item.short_name === this.stringOrDefault(merged.time_zone_name, ''),
+        item.shortName === this.stringOrDefault(merged.time_zone_name, ''),
     );
 
     if (!selectedZone) {
@@ -556,8 +592,8 @@ export class CompanySettingsService {
     return {
       ...merged,
       time_zone_id: merged.time_zone_id || selectedZone.id,
-      time_zone_name: selectedZone.short_name,
-      time_zone_gmt: selectedZone.gmt_offset,
+      time_zone_name: selectedZone.shortName,
+      time_zone_gmt: selectedZone.gmtOffset,
     };
   }
 
@@ -572,6 +608,7 @@ export class CompanySettingsService {
     const safePage = Math.max(1, Number(query.page) || 1);
     const normalizedName = (query.name ?? '').trim().toLowerCase();
     const companyId = query.companyId?.trim() || DEFAULT_COMPANY_ID;
+    await this.ensureShopsSeeded(companyId);
     const dbShops = await this.db.shop.findMany({
       where: {
         companyId,
@@ -606,8 +643,10 @@ export class CompanySettingsService {
             company_id: shop.companyId,
             name: shop.name,
             branch_code: shop.branchCode,
-            address: '',
-            phone_numbers: [],
+            address: shop.address ?? '',
+            phone_numbers: Array.isArray(shop.phoneNumbers)
+              ? shop.phoneNumbers
+              : [],
             cash_boxes_count: 0,
             cash_boxes: [],
             is_active: shop.isActive,
@@ -625,6 +664,7 @@ export class CompanySettingsService {
     const shopId = this.requireString(id, 'id');
     const targetCompanyId = companyId?.trim() || DEFAULT_COMPANY_ID;
 
+    await this.ensureShopsSeeded(targetCompanyId);
     const dbShop = await this.db.shop.findFirst({
       where: {
         companyId: targetCompanyId,
@@ -638,46 +678,24 @@ export class CompanySettingsService {
         company_id: dbShop.companyId,
         name: dbShop.name,
         branch_code: dbShop.branchCode,
-        address: '',
-        phone_numbers: [],
-        facebook: '',
-        instagram: '',
-        telegram: '',
-        website: '',
-        working_hours: null,
+        address: dbShop.address ?? '',
+        phone_numbers: Array.isArray(dbShop.phoneNumbers) ? dbShop.phoneNumbers : [],
+        facebook: dbShop.facebook ?? '',
+        instagram: dbShop.instagram ?? '',
+        telegram: dbShop.telegram ?? '',
+        website: dbShop.website ?? '',
+        working_hours: dbShop.workingHours ?? null,
         cash_boxes_count: 0,
         cash_boxes: [],
         is_active: dbShop.isActive,
       };
     }
 
-    const shop = this.parseJsonArray<ShopProfile>(
-      process.env.SHOPS_JSON,
-      DEFAULT_SHOPS,
-    ).find(
-      (item) =>
-        this.stringOrDefault(item.id, '') === shopId &&
-        this.stringOrDefault(item.company_id, DEFAULT_COMPANY_ID) ===
-          targetCompanyId,
-    );
-
-    if (!shop) {
-      throw new NotFoundException('Shop not found');
-    }
-
-    return {
-      ...shop,
-      company_id: targetCompanyId,
-      facebook: this.stringOrDefault(shop.facebook, ''),
-      instagram: this.stringOrDefault(shop.instagram, ''),
-      telegram: this.stringOrDefault(shop.telegram, ''),
-      website: this.stringOrDefault(shop.website, ''),
-      working_hours: shop.working_hours ?? null,
-    };
+    throw new NotFoundException('Shop not found');
   }
 
-  getCompanyCurrencies(companyId?: string) {
-    const defaultCurrency = this.getDefaultCurrency(companyId);
+  async getCompanyCurrencies(companyId?: string) {
+    const defaultCurrency = await this.getDefaultCurrency(companyId);
 
     return {
       company_currencies: [defaultCurrency],
@@ -685,40 +703,65 @@ export class CompanySettingsService {
     };
   }
 
-  getLoyaltyProgram(companyId?: string) {
+  async getLoyaltyProgram(companyId?: string) {
+    const targetCompanyId = await this.resolveCompanyId(companyId);
+    if (!targetCompanyId) {
+      return {
+        id: '',
+        company_id: companyId?.trim() || DEFAULT_COMPANY_ID,
+        is_active: false,
+        name: '',
+        type: '',
+        cashback_percent: 0,
+        bonus_percent: 0,
+        levels: [],
+        has_customer_balance: false,
+        has_customer_debt: false,
+      };
+    }
+
+    await this.ensureCompanySettingsSeeded(targetCompanyId);
+    const loyalty = await this.db.loyaltyProgramSetting.findUnique({
+      where: { companyId: targetCompanyId },
+    });
+
     return {
-      id: '',
-      company_id: companyId?.trim() || DEFAULT_COMPANY_ID,
-      is_active: false,
-      name: '',
-      type: '',
-      cashback_percent: 0,
-      bonus_percent: 0,
-      levels: [],
-      has_customer_balance: false,
-      has_customer_debt: false,
+      id: loyalty?.id ?? '',
+      company_id: targetCompanyId,
+      is_active: loyalty?.isActive ?? false,
+      name: loyalty?.name ?? '',
+      type: loyalty?.type ?? '',
+      cashback_percent: loyalty?.cashbackPercent ?? 0,
+      bonus_percent: loyalty?.bonusPercent ?? 0,
+      levels: Array.isArray(loyalty?.levels) ? loyalty.levels : [],
+      has_customer_balance: loyalty?.hasCustomerBalance ?? false,
+      has_customer_debt: loyalty?.hasCustomerDebt ?? false,
     };
   }
 
-  getMeasurementUnitById(id: string, companyId?: string) {
+  async getMeasurementUnitById(id: string, companyId?: string) {
     const measurementUnitId = this.requireString(id, 'id');
-    const targetCompanyId = companyId?.trim() || DEFAULT_COMPANY_ID;
-    const configuredUnits = this.parseJsonArray<MeasurementUnitProfile>(
-      process.env.MEASUREMENT_UNITS_JSON,
-      [DEFAULT_MEASUREMENT_UNIT],
-    );
-
-    const matchedUnit = configuredUnits.find(
-      (unit) => this.stringOrDefault(unit.id, '') === measurementUnitId,
-    );
+    const targetCompanyId =
+      (await this.resolveCompanyId(companyId)) ||
+      companyId?.trim() ||
+      DEFAULT_COMPANY_ID;
+    await this.ensureCompanySettingsSeeded(targetCompanyId);
+    const matchedUnit = await this.db.measurementUnitSetting.findFirst({
+      where: {
+        id: measurementUnitId,
+        companyId: targetCompanyId,
+      },
+    });
 
     if (matchedUnit) {
       return {
-        ...matchedUnit,
-        company_id: this.stringOrDefault(
-          matchedUnit.company_id,
-          targetCompanyId,
-        ),
+        id: matchedUnit.id,
+        name: matchedUnit.name,
+        company_id: matchedUnit.companyId,
+        short_name: matchedUnit.shortName,
+        precision: matchedUnit.precision,
+        is_editable: matchedUnit.isEditable,
+        is_default: matchedUnit.isDefault,
       };
     }
 
@@ -730,130 +773,156 @@ export class CompanySettingsService {
     };
   }
 
-  getPriceTags(companyId?: string) {
-    const priceTags = this.getStoredPriceTags();
-    const targetCompanyId = companyId?.trim() || DEFAULT_COMPANY_ID;
+  async getPriceTags(companyId?: string) {
+    const targetCompanyId =
+      (await this.resolveCompanyId(companyId)) ||
+      companyId?.trim() ||
+      DEFAULT_COMPANY_ID;
+    await this.ensureCompanySettingsSeeded(targetCompanyId);
+    const priceTags = await this.db.priceTagSetting.findMany({
+      where: { companyId: targetCompanyId },
+      orderBy: { createdAt: 'desc' },
+    });
 
     return {
-      price_tags: priceTags
-        .filter(
-          (priceTag) =>
-            this.stringOrDefault(priceTag.company_id, '') === targetCompanyId,
-        )
-        .map((priceTag) => ({
-          ...priceTag,
-          company_id: targetCompanyId,
-        })),
+      price_tags: priceTags.map((priceTag: any) => ({
+        id: priceTag.id,
+        company_id: priceTag.companyId,
+        name: priceTag.name,
+        width: priceTag.width,
+        length: priceTag.length,
+        barcode_type: priceTag.barcodeType,
+        barcode_type_id: priceTag.barcodeTypeId,
+        properties: priceTag.properties,
+      })),
     };
   }
 
-  createPriceTag(body: Record<string, unknown>) {
-    const priceTags = this.getStoredPriceTags();
+  async createPriceTag(body: Record<string, unknown>) {
     const companyId =
       this.optionalString(body.company_id) ?? DEFAULT_COMPANY_ID;
+    await this.ensureCompanySettingsSeeded(companyId);
+    const created = await this.db.priceTagSetting.create({
+      data: {
+        id: randomUUID(),
+        companyId,
+        name: this.requireString(body.name, 'name'),
+        width: this.toNumber(body.width) ?? 40,
+        length: this.toNumber(body.length) ?? 20,
+        barcodeType: this.optionalString(body.barcode_type) ?? 'EAN13',
+        barcodeTypeId:
+          this.optionalString(body.barcode_type_id) ??
+          '5517af95-ea38-444e-bf19-90fe4e9e4df7',
+        properties: body.properties ?? null,
+      },
+    });
 
-    const created: PriceTagProfile = {
-      id: randomUUID(),
-      company_id: companyId,
-      name: this.requireString(body.name, 'name'),
-      width: this.toNumber(body.width) ?? 40,
-      length: this.toNumber(body.length) ?? 20,
-      barcode_type: this.optionalString(body.barcode_type) ?? 'EAN13',
-      barcode_type_id:
-        this.optionalString(body.barcode_type_id) ??
-        '5517af95-ea38-444e-bf19-90fe4e9e4df7',
-      properties: body.properties ?? null,
+    return {
+      id: created.id,
+      company_id: created.companyId,
+      name: created.name,
+      width: created.width,
+      length: created.length,
+      barcode_type: created.barcodeType,
+      barcode_type_id: created.barcodeTypeId,
+      properties: created.properties,
     };
-
-    priceTags.unshift(created);
-    return created;
   }
 
-  updatePriceTag(id: string, body: Record<string, unknown>) {
-    const priceTags = this.getStoredPriceTags();
-    const priceTag = priceTags.find(
-      (item) => this.stringOrDefault(item.id, '') === id,
-    );
-
+  async updatePriceTag(id: string, body: Record<string, unknown>) {
+    const priceTag = await this.db.priceTagSetting.findUnique({ where: { id } });
     if (!priceTag) {
       throw new NotFoundException('Price tag not found');
     }
-
-    if (body.company_id !== undefined) {
-      priceTag.company_id = this.requireString(body.company_id, 'company_id');
-    }
-
-    if (body.name !== undefined) {
-      priceTag.name = this.requireString(body.name, 'name');
-    }
-
-    if (body.width !== undefined) {
-      const width = this.toNumber(body.width);
-      if (width === undefined) {
-        throw new BadRequestException('width must be a number');
-      }
-      priceTag.width = width;
-    }
-
-    if (body.length !== undefined) {
-      const length = this.toNumber(body.length);
-      if (length === undefined) {
-        throw new BadRequestException('length must be a number');
-      }
-      priceTag.length = length;
-    }
-
-    if (body.barcode_type !== undefined) {
-      priceTag.barcode_type = this.requireString(
-        body.barcode_type,
-        'barcode_type',
-      );
-    }
-
-    if (body.barcode_type_id !== undefined) {
-      priceTag.barcode_type_id = this.requireString(
-        body.barcode_type_id,
-        'barcode_type_id',
-      );
-    }
-
-    if (body.properties !== undefined) {
-      priceTag.properties = body.properties;
-    }
-
-    return priceTag;
-  }
-
-  deletePriceTag(id: string) {
-    const priceTags = this.getStoredPriceTags();
-    const index = priceTags.findIndex(
-      (item) => this.stringOrDefault(item.id, '') === id,
-    );
-
-    if (index === -1) {
-      throw new NotFoundException('Price tag not found');
-    }
-
-    const [deleted] = priceTags.splice(index, 1);
+    const updated = await this.db.priceTagSetting.update({
+      where: { id },
+      data: {
+        ...(body.company_id !== undefined
+          ? { companyId: this.requireString(body.company_id, 'company_id') }
+          : {}),
+        ...(body.name !== undefined
+          ? { name: this.requireString(body.name, 'name') }
+          : {}),
+        ...(body.width !== undefined
+          ? { width: this.toRequiredNumber(body.width, 'width') }
+          : {}),
+        ...(body.length !== undefined
+          ? { length: this.toRequiredNumber(body.length, 'length') }
+          : {}),
+        ...(body.barcode_type !== undefined
+          ? {
+              barcodeType: this.requireString(body.barcode_type, 'barcode_type'),
+            }
+          : {}),
+        ...(body.barcode_type_id !== undefined
+          ? {
+              barcodeTypeId: this.requireString(
+                body.barcode_type_id,
+                'barcode_type_id',
+              ),
+            }
+          : {}),
+        ...(body.properties !== undefined ? { properties: body.properties } : {}),
+      },
+    });
 
     return {
-      success: true,
-      price_tag: deleted,
+      id: updated.id,
+      company_id: updated.companyId,
+      name: updated.name,
+      width: updated.width,
+      length: updated.length,
+      barcode_type: updated.barcodeType,
+      barcode_type_id: updated.barcodeTypeId,
+      properties: updated.properties,
     };
   }
 
-  getCheque(query?: { name?: string; limit?: number; page?: number }) {
-    const cheques = this.getStoredCheques();
+  async deletePriceTag(id: string) {
+    const existing = await this.db.priceTagSetting.findUnique({ where: { id } });
+    if (!existing) {
+      throw new NotFoundException('Price tag not found');
+    }
+    const deleted = await this.db.priceTagSetting.delete({ where: { id } });
+
+    return {
+      success: true,
+      price_tag: {
+        id: deleted.id,
+        company_id: deleted.companyId,
+        name: deleted.name,
+        width: deleted.width,
+        length: deleted.length,
+        barcode_type: deleted.barcodeType,
+        barcode_type_id: deleted.barcodeTypeId,
+        properties: deleted.properties,
+      },
+    };
+  }
+
+  async getCheque(query?: { name?: string; limit?: number; page?: number }) {
+    const companyId = await this.resolveCompanyId();
+    if (companyId) {
+      await this.ensureCompanySettingsSeeded(companyId);
+    }
     const normalizedName = (query?.name ?? '').trim().toLowerCase();
-    const prepared = cheques
-      .filter(
-        (cheque) =>
-          !normalizedName ||
-          this.stringOrDefault(cheque.name, '')
-            .toLowerCase()
-            .includes(normalizedName),
-      )
-      .map((cheque, index) => this.toChequeResponse(cheque, index));
+    const rows = await this.db.chequeSetting.findMany({
+      where: {
+        ...(companyId ? { companyId } : {}),
+        ...(normalizedName
+          ? {
+              name: {
+                contains: normalizedName,
+                mode: 'insensitive',
+              },
+            }
+          : {}),
+      },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+    });
+    const prepared = rows.map((row: any, index: number) =>
+      this.toChequeResponse(this.toChequeProfile(row), index),
+    );
     const safeLimit = this.normalizeLimit(query?.limit, 100);
     const safePage = Math.max(1, Number(query?.page) || 1);
 
@@ -863,27 +932,31 @@ export class CompanySettingsService {
     };
   }
 
-  getChequeById(id: string) {
+  async getChequeById(id: string) {
     const chequeId = this.requireString(id, 'id');
-    const cheques = this.getStoredCheques();
-    const index = cheques.findIndex(
-      (cheque) => this.stringOrDefault(cheque.id, '') === chequeId,
-    );
+    const row = await this.db.chequeSetting.findUnique({
+      where: { id: chequeId },
+    });
 
-    if (index === -1) {
+    if (!row) {
       throw new NotFoundException('Cheque not found');
     }
 
-    return this.toChequeResponse(cheques[index], index);
+    return this.toChequeResponse(this.toChequeProfile(row), 0);
   }
 
-  createCheque(body: Record<string, unknown>) {
-    const cheques = this.getStoredCheques();
+  async createCheque(body: Record<string, unknown>) {
+    const companyId =
+      this.optionalString(body.company_id) ?? DEFAULT_COMPANY_ID;
+    await this.ensureCompanySettingsSeeded(companyId);
+    const existingCount = await this.db.chequeSetting.count({
+      where: { companyId },
+    });
     const chequeId = randomUUID();
     const created: ChequeProfile = {
       id: chequeId,
       name: this.optionalString(body.name) ?? 'Новый чек',
-      company_id: this.optionalString(body.company_id) ?? DEFAULT_COMPANY_ID,
+      company_id: companyId,
       has_logo: this.optionalBoolean(body.has_logo) ?? false,
       logo_image: this.objectOrDefault(body.logo_image, {
         id: '',
@@ -905,7 +978,7 @@ export class CompanySettingsService {
         this.optionalString(body.display_text) ?? 'Спасибо за вашу покупку!',
       cheque_items: this.normalizeChequeItems(body.cheque_items, chequeId),
       has_bar_code: this.optionalBoolean(body.has_bar_code) ?? false,
-      is_default: this.optionalBoolean(body.is_default) ?? cheques.length === 0,
+      is_default: this.optionalBoolean(body.is_default) ?? existingCount === 0,
       type: this.optionalString(body.type) ?? 'cheque',
       has_additional_image:
         this.optionalBoolean(body.has_additional_image) ?? false,
@@ -935,60 +1008,80 @@ export class CompanySettingsService {
     };
 
     if (created.is_default) {
-      for (const cheque of cheques) {
-        cheque.is_default = false;
-      }
+      await this.db.chequeSetting.updateMany({
+        where: { companyId, isDefault: true },
+        data: { isDefault: false },
+      });
     }
 
-    cheques.unshift(created);
-    return this.toChequeResponse(created, 0);
+    const row = await this.db.chequeSetting.create({
+      data: this.toChequeRowData(created),
+    });
+    return this.toChequeResponse(this.toChequeProfile(row), 0);
   }
 
-  updateCheque(id: string, body: Record<string, unknown>) {
+  async updateCheque(id: string, body: Record<string, unknown>) {
     const chequeId = this.requireString(id, 'id');
-    const cheques = this.getStoredCheques();
-    const index = cheques.findIndex(
-      (cheque) => this.stringOrDefault(cheque.id, '') === chequeId,
-    );
+    const existing = await this.db.chequeSetting.findUnique({
+      where: { id: chequeId },
+    });
 
-    if (index === -1) {
+    if (!existing) {
       throw new NotFoundException('Cheque not found');
     }
 
-    const cheque = cheques[index];
+    const cheque = this.toChequeProfile(existing);
     this.applyChequePatch(cheque, body);
 
     if (cheque.is_default) {
-      for (const item of cheques) {
-        if (item !== cheque) {
-          item.is_default = false;
-        }
-      }
+      await this.db.chequeSetting.updateMany({
+        where: {
+          companyId: this.stringOrDefault(cheque.company_id, DEFAULT_COMPANY_ID),
+          id: { not: chequeId },
+        },
+        data: { isDefault: false },
+      });
     }
 
-    return this.toChequeResponse(cheque, index);
+    const updated = await this.db.chequeSetting.update({
+      where: { id: chequeId },
+      data: this.toChequeRowData(cheque),
+    });
+
+    return this.toChequeResponse(this.toChequeProfile(updated), 0);
   }
 
-  deleteCheque(id: string) {
+  async deleteCheque(id: string) {
     const chequeId = this.requireString(id, 'id');
-    const cheques = this.getStoredCheques();
-    const index = cheques.findIndex(
-      (cheque) => this.stringOrDefault(cheque.id, '') === chequeId,
-    );
+    const existing = await this.db.chequeSetting.findUnique({
+      where: { id: chequeId },
+    });
 
-    if (index === -1) {
+    if (!existing) {
       throw new NotFoundException('Cheque not found');
     }
 
-    const [deleted] = cheques.splice(index, 1);
+    const deleted = await this.db.chequeSetting.delete({
+      where: { id: chequeId },
+    });
 
-    if (deleted.is_default && cheques.length > 0) {
-      cheques[0].is_default = true;
+    if (deleted.isDefault) {
+      const nextCheque = await this.db.chequeSetting.findFirst({
+        where: { companyId: deleted.companyId },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (nextCheque) {
+        await this.db.chequeSetting.update({
+          where: { id: nextCheque.id },
+          data: { isDefault: true },
+        });
+      }
     }
 
     return {
       success: true,
-      cheque: this.toChequeResponse(deleted, index),
+      cheque: this.toChequeResponse(this.toChequeProfile(deleted), 0),
     };
   }
 
@@ -1649,68 +1742,71 @@ export class CompanySettingsService {
     name?: string;
     companyId?: string;
   }) {
-    const cashBoxes = this.parseJsonArray<CashBoxProfile>(
-      process.env.CASH_BOXES_JSON,
-      DEFAULT_CASH_BOXES,
-    );
-    const shops = this.parseJsonArray<ShopProfile>(
-      process.env.SHOPS_JSON,
-      DEFAULT_SHOPS,
-    );
     const targetCompanyId = query.companyId?.trim() || DEFAULT_COMPANY_ID;
+    await this.ensureCompanySettingsSeeded(targetCompanyId);
+    await this.ensureShopsSeeded(targetCompanyId);
+    await this.ensureCashboxesSeeded(targetCompanyId);
     const companyPaymentTypes =
       await this.getPersistedCompanyPaymentTypes(targetCompanyId);
     const safeLimit = this.normalizeLimit(query.limit, 10);
     const safePage = Math.max(1, Number(query.page) || 1);
     const normalizedName = (query.name ?? '').trim().toLowerCase();
+    const cashBoxes = await this.db.cashbox.findMany({
+      where: {
+        companyId: targetCompanyId,
+        ...(normalizedName
+          ? {
+              name: {
+                contains: normalizedName,
+                mode: 'insensitive',
+              },
+            }
+          : {}),
+      },
+      include: {
+        shop: true,
+      },
+      orderBy: {
+        name: 'asc',
+      },
+    });
 
-    const prepared = cashBoxes
-      .filter(
-        (item) => this.stringOrDefault(item.company_id, '') === targetCompanyId,
-      )
-      .filter(
-        (item) =>
-          !normalizedName ||
-          this.stringOrDefault(item.name, '')
-            .toLowerCase()
-            .includes(normalizedName),
-      )
-      .map((cashBox) => {
-        const shop = shops.find(
-          (item) =>
-            this.stringOrDefault(item.id, '') ===
-            this.stringOrDefault(cashBox.shop_id, ''),
-        );
-
-        return {
-          ...cashBox,
-          shop: {
-            id: this.stringOrDefault(shop?.id, ''),
-            name: this.stringOrDefault(shop?.name, ''),
-            phone_numbers: shop?.phone_numbers ?? null,
-            facebook: '',
-            instagram: '',
-            telegram: '',
-            website: '',
-            working_hours: null,
-          },
-          payment_types: companyPaymentTypes.map((type) => ({
-            id: randomUUID(),
-            company_payment_type: {
-              ...type,
-              company_id: '',
-            },
-            is_active: !type.dont_show_in_make_payment,
-          })),
-          tariff_limits: {
-            company_tariff: '',
-            cashbox_count: 0,
-            products_count: 0,
-            users_count: 0,
-            customers_count: 0,
-          },
-        };
-      });
+    const prepared = cashBoxes.map((cashBox: any) => ({
+      id: cashBox.id,
+      company_id: cashBox.companyId,
+      shop_id: cashBox.shopId,
+      name: cashBox.name,
+      cheque_id: cashBox.chequeId ?? '',
+      e_pos: cashBox.ePos ?? 0,
+      web_kassa: cashBox.webKassa ?? 0,
+      shop: {
+        id: this.stringOrDefault(cashBox.shop?.id, ''),
+        name: this.stringOrDefault(cashBox.shop?.name, ''),
+        phone_numbers: Array.isArray(cashBox.shop?.phoneNumbers)
+          ? cashBox.shop.phoneNumbers
+          : null,
+        facebook: this.stringOrDefault(cashBox.shop?.facebook, ''),
+        instagram: this.stringOrDefault(cashBox.shop?.instagram, ''),
+        telegram: this.stringOrDefault(cashBox.shop?.telegram, ''),
+        website: this.stringOrDefault(cashBox.shop?.website, ''),
+        working_hours: cashBox.shop?.workingHours ?? null,
+      },
+      payment_types: companyPaymentTypes.map((type) => ({
+        id: randomUUID(),
+        company_payment_type: {
+          ...type,
+          company_id: '',
+        },
+        is_active: !type.dont_show_in_make_payment,
+      })),
+      tariff_limits: {
+        company_tariff: '',
+        cashbox_count: 0,
+        products_count: 0,
+        users_count: 0,
+        customers_count: 0,
+      },
+    }));
 
     return {
       count: prepared.length,
@@ -1844,26 +1940,347 @@ export class CompanySettingsService {
     };
   }
 
-  private getStoredPriceTags() {
-    if (!this.priceTagsStore) {
-      this.priceTagsStore = this.parseJsonArray<PriceTagProfile>(
-        process.env.PRICE_TAGS_JSON,
-        DEFAULT_PRICE_TAGS,
-      ).map((item) => ({ ...item }));
+  private async resolveCompanyId(companyId?: string) {
+    const normalized = companyId?.trim();
+    if (normalized) {
+      return normalized;
     }
 
-    return this.priceTagsStore;
+    const company = await this.db.company.findFirst({
+      where: { isActive: true },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    });
+
+    return company?.id ?? null;
   }
 
-  private getStoredCheques() {
-    if (!this.chequesStore) {
-      this.chequesStore = this.parseJsonArray<ChequeProfile>(
-        process.env.CHEQUES_JSON,
-        DEFAULT_CHEQUES,
-      ).map((item) => ({ ...item }));
+  private async ensureReferenceDataSeeded() {
+    const countriesCount = await this.db.countryReference.count();
+    if (countriesCount === 0) {
+      await this.db.countryReference.createMany({
+        data: DEFAULT_COUNTRIES.map((country) => ({
+          id: country.id,
+          name: country.name,
+          code: country.code,
+        })),
+        skipDuplicates: true,
+      });
     }
 
-    return this.chequesStore;
+    const timeZonesCount = await this.db.timeZoneReference.count();
+    if (timeZonesCount === 0) {
+      await this.db.timeZoneReference.createMany({
+        data: DEFAULT_TIME_ZONES.map((timeZone) => ({
+          id: timeZone.id,
+          countryId: timeZone.country_id || null,
+          name: timeZone.name,
+          shortName: timeZone.short_name,
+          gmtOffset: timeZone.gmt_offset,
+        })),
+        skipDuplicates: true,
+      });
+    }
+  }
+
+  private async ensureCompanySettingsSeeded(companyId: string) {
+    const companyExists = await this.db.company.findUnique({
+      where: { id: companyId },
+      select: { id: true },
+    });
+    if (!companyExists) {
+      return;
+    }
+
+    await this.ensureReferenceDataSeeded();
+    await this.ensureCompanyPaymentTypesSeeded(companyId);
+
+    await this.db.companyProfileSetting.upsert({
+      where: { companyId },
+      update: {},
+      create: {
+        companyId,
+        data: {
+          ...DEFAULT_COMPANY_PROFILE,
+          ...this.parseJsonObject(process.env.COMPANY_PROFILE_JSON),
+          id: companyId,
+        },
+      },
+    });
+
+    await this.db.companyTariffSetting.upsert({
+      where: { companyId },
+      update: {},
+      create: {
+        companyId,
+        data: {
+          ...DEFAULT_COMPANY_TARIFF,
+          ...this.parseJsonObject(process.env.COMPANY_TARIFF_JSON),
+          billz_company_id: companyId,
+        },
+      },
+    });
+
+    const currencyMap = this.parseJsonMap<CompanyCurrencyConfig>(
+      process.env.COMPANY_CURRENCY_MAP_JSON,
+    );
+    const currencyConfig = currencyMap[companyId];
+    await this.db.companyCurrencySetting.upsert({
+      where: { companyId },
+      update: {},
+      create: {
+        id: currencyConfig?.id ?? DEFAULT_CURRENCY_CONFIG_ID,
+        companyId,
+        currencyId: currencyConfig?.currency?.id ?? DEFAULT_CURRENCY_ID,
+        name: currencyConfig?.currency?.name ?? DEFAULT_CURRENCY_NAME,
+        symbol: currencyConfig?.currency?.symbol ?? DEFAULT_CURRENCY_SYMBOL,
+        isoCode: currencyConfig?.currency?.iso_code ?? DEFAULT_CURRENCY_ISO_CODE,
+        exchangeRate:
+          currencyConfig?.currency?.exchange_rate ??
+          DEFAULT_CURRENCY_EXCHANGE_RATE,
+        precision:
+          currencyConfig?.currency?.precision ?? DEFAULT_CURRENCY_PRECISION,
+        isEditable: currencyConfig?.is_editable ?? DEFAULT_CURRENCY_EDITABLE,
+      },
+    });
+    this.currencyIsoCache.set(
+      companyId,
+      currencyConfig?.currency?.iso_code ?? DEFAULT_CURRENCY_ISO_CODE,
+    );
+
+    await this.db.loyaltyProgramSetting.upsert({
+      where: { companyId },
+      update: {},
+      create: {
+        companyId,
+        isActive: false,
+        name: '',
+        type: '',
+        cashbackPercent: 0,
+        bonusPercent: 0,
+        levels: [],
+        hasCustomerBalance: false,
+        hasCustomerDebt: false,
+      },
+    });
+
+    const measurementUnitCount = await this.db.measurementUnitSetting.count({
+      where: { companyId },
+    });
+    if (measurementUnitCount === 0) {
+      const measurementUnits = this.parseJsonArray<MeasurementUnitProfile>(
+        process.env.MEASUREMENT_UNITS_JSON,
+        [DEFAULT_MEASUREMENT_UNIT],
+      );
+      await this.db.measurementUnitSetting.createMany({
+        data: measurementUnits.map((unit) => ({
+          id: this.stringOrDefault(unit.id, randomUUID()),
+          companyId,
+          name: this.stringOrDefault(
+            unit.name,
+            this.stringOrDefault(DEFAULT_MEASUREMENT_UNIT.name, 'Штука'),
+          ),
+          shortName: this.stringOrDefault(
+            unit.short_name,
+            this.stringOrDefault(DEFAULT_MEASUREMENT_UNIT.short_name, 'шт'),
+          ),
+          precision: this.stringOrDefault(
+            unit.precision,
+            this.stringOrDefault(DEFAULT_MEASUREMENT_UNIT.precision, '1'),
+          ),
+          isEditable: Boolean(unit.is_editable),
+          isDefault: Boolean(unit.is_default),
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    const priceTagCount = await this.db.priceTagSetting.count({
+      where: { companyId },
+    });
+    if (priceTagCount === 0) {
+      const priceTags = this.parseJsonArray<PriceTagProfile>(
+        process.env.PRICE_TAGS_JSON,
+        DEFAULT_PRICE_TAGS,
+      ).filter((item) => this.stringOrDefault(item.company_id, '') === companyId);
+      await this.db.priceTagSetting.createMany({
+        data: priceTags.map((item) => ({
+          id: this.stringOrDefault(item.id, randomUUID()),
+          companyId,
+          name: this.stringOrDefault(item.name, ''),
+          width: Number(item.width) || 40,
+          length: Number(item.length) || 20,
+          barcodeType: this.stringOrDefault(item.barcode_type, 'EAN13'),
+          barcodeTypeId: this.stringOrDefault(
+            item.barcode_type_id,
+            '5517af95-ea38-444e-bf19-90fe4e9e4df7',
+          ),
+          properties: item.properties ?? null,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    const chequeCount = await this.db.chequeSetting.count({
+      where: { companyId },
+    });
+    if (chequeCount === 0) {
+      const cheques = this.parseJsonArray<ChequeProfile>(
+        process.env.CHEQUES_JSON,
+        DEFAULT_CHEQUES,
+      ).filter((item) => this.stringOrDefault(item.company_id, '') === companyId);
+      await this.db.chequeSetting.createMany({
+        data: cheques.map((item) => this.toChequeRowData(item)),
+        skipDuplicates: true,
+      });
+    }
+  }
+
+  private async ensureShopsSeeded(companyId: string) {
+    const companyExists = await this.db.company.findUnique({
+      where: { id: companyId },
+      select: { id: true },
+    });
+    if (!companyExists) {
+      return;
+    }
+    const existingCount = await this.db.shop.count({
+      where: { companyId },
+    });
+    if (existingCount > 0) {
+      return;
+    }
+
+    const shops = this.parseJsonArray<ShopProfile>(
+      process.env.SHOPS_JSON,
+      DEFAULT_SHOPS,
+    ).filter((item) => this.stringOrDefault(item.company_id, '') === companyId);
+
+    for (const shop of shops) {
+      await this.db.shop.create({
+        data: {
+          id: this.stringOrDefault(shop.id, randomUUID()),
+          companyId,
+          name: this.stringOrDefault(shop.name, ''),
+          branchCode: this.stringOrDefault(shop.branch_code, ''),
+          address: this.stringOrDefault(shop.address, ''),
+          phoneNumbers: Array.isArray(shop.phone_numbers) ? shop.phone_numbers : [],
+          facebook: this.stringOrDefault(shop.facebook, ''),
+          instagram: this.stringOrDefault(shop.instagram, ''),
+          telegram: this.stringOrDefault(shop.telegram, ''),
+          website: this.stringOrDefault(shop.website, ''),
+          workingHours: shop.working_hours ?? null,
+          isActive: shop.is_active !== false,
+        },
+      });
+    }
+  }
+
+  private async ensureCashboxesSeeded(companyId: string) {
+    const companyExists = await this.db.company.findUnique({
+      where: { id: companyId },
+      select: { id: true },
+    });
+    if (!companyExists) {
+      return;
+    }
+    const existingCount = await this.db.cashbox.count({
+      where: { companyId },
+    });
+    if (existingCount > 0) {
+      return;
+    }
+
+    const cashBoxes = this.parseJsonArray<CashBoxProfile>(
+      process.env.CASH_BOXES_JSON,
+      DEFAULT_CASH_BOXES,
+    ).filter((item) => this.stringOrDefault(item.company_id, '') === companyId);
+
+    for (const cashBox of cashBoxes) {
+      await this.db.cashbox.create({
+        data: {
+          id: this.stringOrDefault(cashBox.id, randomUUID()),
+          companyId,
+          shopId: this.stringOrDefault(cashBox.shop_id, ''),
+          name: this.stringOrDefault(cashBox.name, ''),
+          chequeId: this.optionalString(cashBox.cheque_id) ?? '',
+          ePos: Number(cashBox.e_pos) || 0,
+          webKassa: Number(cashBox.web_kassa) || 0,
+          isActive: cashBox.is_active !== false,
+        },
+      });
+    }
+  }
+
+  private toChequeProfile(row: any): ChequeProfile {
+    return {
+      id: row.id,
+      company_id: row.companyId,
+      name: row.name,
+      has_logo: row.hasLogo,
+      logo_image: row.logoImage,
+      has_information_block: row.hasInformationBlock,
+      has_additional_info: row.hasAdditionalInfo,
+      has_lower_block: row.hasLowerBlock,
+      display_text: row.displayText,
+      cheque_items: row.chequeItems,
+      has_bar_code: row.hasBarCode,
+      is_default: row.isDefault,
+      type: row.type,
+      has_additional_image: row.hasAdditionalImage,
+      additional_image: row.additionalImage,
+      has_customer_debt: row.hasCustomerDebt,
+      has_customer_balance: row.hasCustomerBalance,
+      printed_with_billz: row.printedWithBillz,
+      logo_url: row.logoUrl,
+      width: row.width,
+      length: row.length,
+      x_axis: row.xAxis,
+      y_axis: row.yAxis,
+      rotation: row.rotation,
+      logo: row.logo,
+      compact: row.compact,
+    };
+  }
+
+  private toChequeRowData(cheque: ChequeProfile) {
+    return {
+      id: this.stringOrDefault(cheque.id, randomUUID()),
+      companyId: this.stringOrDefault(cheque.company_id, DEFAULT_COMPANY_ID),
+      name: this.stringOrDefault(cheque.name, 'Konkurent Cases'),
+      hasLogo: Boolean(cheque.has_logo),
+      logoImage: this.objectOrDefault(cheque.logo_image, {}),
+      hasInformationBlock: cheque.has_information_block !== false,
+      hasAdditionalInfo: cheque.has_additional_info !== false,
+      hasLowerBlock: cheque.has_lower_block !== false,
+      displayText:
+        this.stringOrDefault(cheque.display_text, '') ||
+        'РЎРїР°СЃРёР±Рѕ Р·Р° РІР°С€Сѓ РїРѕРєСѓРїРєСѓ!',
+      chequeItems: Array.isArray(cheque.cheque_items)
+        ? cheque.cheque_items
+        : this.buildDefaultChequeItems(
+            this.stringOrDefault(cheque.id, randomUUID()),
+          ),
+      hasBarCode: Boolean(cheque.has_bar_code),
+      isDefault: Boolean(cheque.is_default),
+      type: this.stringOrDefault(cheque.type, 'cheque'),
+      hasAdditionalImage: Boolean(cheque.has_additional_image),
+      additionalImage: this.objectOrDefault(cheque.additional_image, {}),
+      hasCustomerDebt: Boolean(cheque.has_customer_debt),
+      hasCustomerBalance: Boolean(cheque.has_customer_balance),
+      printedWithBillz:
+        cheque.printed_with_billz === undefined
+          ? true
+          : Boolean(cheque.printed_with_billz),
+      logoUrl: this.stringOrDefault(cheque.logo_url, ''),
+      width: Number(cheque.width) || 0,
+      length: Number(cheque.length) || 0,
+      xAxis: Number(cheque.x_axis) || 0,
+      yAxis: Number(cheque.y_axis) || 0,
+      rotation: Number(cheque.rotation) || 0,
+      logo: this.stringOrDefault(cheque.logo, ''),
+      compact: Boolean(cheque.compact),
+    };
   }
 
   private parseJsonObject(raw?: string): Record<string, unknown> {
@@ -1949,6 +2366,15 @@ export class CompanySettingsService {
 
     const normalized = Number(value);
     return Number.isFinite(normalized) ? normalized : undefined;
+  }
+
+  private toRequiredNumber(value: unknown, fieldName: string) {
+    const parsed = this.toNumber(value);
+    if (parsed === undefined) {
+      throw new BadRequestException(`${fieldName} must be a number`);
+    }
+
+    return parsed;
   }
 
   private optionalNestedString(value: unknown, key: string) {

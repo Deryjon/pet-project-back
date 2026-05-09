@@ -21,19 +21,19 @@ export class CompanySettingsController {
 
   @Get('default-currency')
   @Get('v1/default-currency')
-  getDefaultCurrency(@Query('company_id') companyId?: string) {
+  async getDefaultCurrency(@Query('company_id') companyId?: string) {
     return this.companySettingsService.getDefaultCurrency(companyId);
   }
 
   @Get('country')
   @Get('v1/country')
-  getCountries(@Query('limit') limit?: string) {
+  async getCountries(@Query('limit') limit?: string) {
     return this.companySettingsService.getCountries(Number(limit));
   }
 
   @Get('time-zone')
   @Get('v1/time-zone')
-  getTimeZones(
+  async getTimeZones(
     @Query('limit') limit?: string,
     @Query('country_id') countryId?: string,
   ) {
@@ -41,13 +41,13 @@ export class CompanySettingsController {
   }
 
   @Get('v2/company-tariff')
-  getCompanyTariff() {
+  async getCompanyTariff() {
     return this.companySettingsService.getCompanyTariff();
   }
 
   @Get('company')
   @Get('v1/company')
-  getCompany() {
+  async getCompany() {
     return this.companySettingsService.getCompany();
   }
 
@@ -144,13 +144,13 @@ export class CompanySettingsController {
 
   @Post('price-tag')
   @Post('v1/price-tag')
-  createPriceTag(@Body() body: Record<string, unknown>) {
+  async createPriceTag(@Body() body: Record<string, unknown>) {
     return this.companySettingsService.createPriceTag(body);
   }
 
   @Put('price-tag/:id')
   @Put('v1/price-tag/:id')
-  updatePriceTag(
+  async updatePriceTag(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
   ) {
@@ -159,27 +159,27 @@ export class CompanySettingsController {
 
   @Delete('price-tag/:id')
   @Delete('v1/price-tag/:id')
-  deletePriceTag(@Param('id') id: string) {
+  async deletePriceTag(@Param('id') id: string) {
     return this.companySettingsService.deletePriceTag(id);
   }
 
   @Post('cheque')
-  createCheque(@Body() body: Record<string, unknown>) {
+  async createCheque(@Body() body: Record<string, unknown>) {
     return this.companySettingsService.createCheque(body);
   }
 
   @Post('v1/cheque')
-  createV1Cheque(@Body() body: Record<string, unknown>) {
+  async createV1Cheque(@Body() body: Record<string, unknown>) {
     return this.companySettingsService.createCheque(body);
   }
 
   @Put('cheque/:id')
-  updateCheque(@Param('id') id: string, @Body() body: Record<string, unknown>) {
+  async updateCheque(@Param('id') id: string, @Body() body: Record<string, unknown>) {
     return this.companySettingsService.updateCheque(id, body);
   }
 
   @Put('v1/cheque/:id')
-  updateV1Cheque(
+  async updateV1Cheque(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
   ) {
@@ -187,27 +187,27 @@ export class CompanySettingsController {
   }
 
   @Delete('cheque/:id')
-  deleteCheque(@Param('id') id: string) {
+  async deleteCheque(@Param('id') id: string) {
     return this.companySettingsService.deleteCheque(id);
   }
 
   @Delete('v1/cheque/:id')
-  deleteV1Cheque(@Param('id') id: string) {
+  async deleteV1Cheque(@Param('id') id: string) {
     return this.companySettingsService.deleteCheque(id);
   }
 
   @Get('cheque/:id')
-  getChequeById(@Param('id') id: string) {
+  async getChequeById(@Param('id') id: string) {
     return this.companySettingsService.getChequeById(id);
   }
 
   @Get('v1/cheque/:id')
-  getV1ChequeById(@Param('id') id: string) {
+  async getV1ChequeById(@Param('id') id: string) {
     return this.companySettingsService.getChequeById(id);
   }
 
   @Get('cheque')
-  getCheque(
+  async getCheque(
     @Query('name') name?: string,
     @Query('limit') limit?: string,
     @Query('page') page?: string,
@@ -220,7 +220,7 @@ export class CompanySettingsController {
   }
 
   @Get('v1/cheque')
-  getV1Cheque(
+  async getV1Cheque(
     @Query('name') name?: string,
     @Query('limit') limit?: string,
     @Query('page') page?: string,
@@ -293,12 +293,12 @@ export class CompanySettingsController {
   }
 
   @Get('v1/loyalty-program')
-  getV1LoyaltyProgram(@Query('company_id') companyId?: string) {
+  async getV1LoyaltyProgram(@Query('company_id') companyId?: string) {
     return this.companySettingsService.getLoyaltyProgram(companyId);
   }
 
   @Get('v2/company-currencies')
-  getV2CompanyCurrencies(@Query('company_id') companyId?: string) {
+  async getV2CompanyCurrencies(@Query('company_id') companyId?: string) {
     return this.companySettingsService.getCompanyCurrencies(companyId);
   }
 }

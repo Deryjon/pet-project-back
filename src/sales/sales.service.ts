@@ -630,6 +630,13 @@ export class SalesService {
 
     await this.recalculateSale(sale.id);
 
+    await this.finalizeSaleItemSnapshots(
+      sale.id,
+      sale.branchCode,
+      sale.userId ?? null,
+      sale.companyId ?? context?.companyId ?? null,
+    );
+
     await this.writeOffSaleItemsFromStock(sale);
 
     const requestedPaymentMethod =
@@ -907,8 +914,20 @@ export class SalesService {
         where: { id: existingItem.id },
         data: {
           quantity: existingItem.quantity + quantity,
+          sellerId: sale.userId ?? undefined,
           salePrice,
           lineTotal: (existingItem.quantity + quantity) * salePrice,
+          retailPriceAtSale: (existingItem.quantity + quantity) * salePrice,
+          finalPrice: (existingItem.quantity + quantity) * salePrice,
+          supplyPriceAtSale:
+            (existingItem.quantity + quantity) * (product.purchasePrice ?? 0),
+          profitAtSale:
+            (existingItem.quantity + quantity) * salePrice -
+            (existingItem.quantity + quantity) * (product.purchasePrice ?? 0),
+          markupAtSale:
+            product.purchasePrice && product.purchasePrice > 0
+              ? salePrice / product.purchasePrice
+              : null,
         },
       });
     } else {
@@ -920,8 +939,18 @@ export class SalesService {
           barcode: product.barcode,
           sku: product.sku,
           quantity,
+          sellerId: sale.userId ?? undefined,
           salePrice,
           lineTotal: quantity * salePrice,
+          retailPriceAtSale: quantity * salePrice,
+          finalPrice: quantity * salePrice,
+          supplyPriceAtSale: quantity * (product.purchasePrice ?? 0),
+          profitAtSale:
+            quantity * salePrice - quantity * (product.purchasePrice ?? 0),
+          markupAtSale:
+            product.purchasePrice && product.purchasePrice > 0
+              ? salePrice / product.purchasePrice
+              : null,
         },
       });
     }
@@ -968,6 +997,13 @@ export class SalesService {
         this.optionalString(body.branch_code),
         context,
       )) ?? sale.branchCode;
+
+    await this.finalizeSaleItemSnapshots(
+      id,
+      branchCode,
+      sale.userId ?? context?.userId ?? null,
+      sale.companyId ?? context?.companyId ?? null,
+    );
 
     await this.writeOffSaleItemsFromStock(sale, branchCode);
 
@@ -1450,7 +1486,7 @@ export class SalesService {
       args.originalSale.companyId,
     );
 
-    return this.prisma.sale.create({
+    const createdSale = await this.prisma.sale.create({
       data: {
         companyId: args.originalSale.companyId ?? undefined,
         number: this.generateOrderNumber(),
@@ -1472,11 +1508,29 @@ export class SalesService {
             barcode: item.barcode,
             sku: item.sku,
             quantity: item.quantity,
+            sellerId: args.sellerId,
             salePrice: item.salePrice,
             lineTotal: item.lineTotal,
+            retailPriceAtSale: item.lineTotal,
+            finalPrice: item.lineTotal,
           })),
         },
       } as any,
+      include: {
+        user: true,
+        items: true,
+      },
+    });
+
+    await this.finalizeSaleItemSnapshots(
+      createdSale.id,
+      args.originalSale.branchCode ?? null,
+      args.sellerId ?? args.originalSale.userId ?? null,
+      args.originalSale.companyId ?? null,
+    );
+
+    return this.prisma.sale.findUnique({
+      where: { id: createdSale.id },
       include: {
         user: true,
         items: true,
@@ -1657,6 +1711,92 @@ export class SalesService {
         payableTotal,
       },
     });
+  }
+
+  private async finalizeSaleItemSnapshots(
+    saleId: number,
+    branchCode?: string | null,
+    sellerId?: number | null,
+    companyId?: string | null,
+  ) {
+    const sale = await this.prisma.sale.findUnique({
+      where: { id: saleId },
+      include: {
+        items: true,
+      },
+    });
+
+    if (!sale || !sale.items.length) {
+      return;
+    }
+
+    const effectiveBranchCode = branchCode ?? sale.branchCode;
+    const sellerSettings =
+      sellerId &&
+      (await (this.prisma as any).sellerSalarySettings?.findUnique?.({
+        where: { userId: sellerId },
+      }));
+    const retailTotal = sale.items.reduce((sum, item) => sum + item.lineTotal, 0);
+    const flatDiscount = sale.discountAmount || 0;
+    const percentDiscount = sale.discountPercent || 0;
+
+    for (const item of sale.items as any[]) {
+      const retailPriceAtSale = Number(item.lineTotal || item.quantity * item.salePrice || 0);
+      const percentPart = retailPriceAtSale * (percentDiscount / 100);
+      const flatPart =
+        retailTotal > 0 ? (flatDiscount * retailPriceAtSale) / retailTotal : 0;
+      const discountAmount = Number((percentPart + flatPart).toFixed(2));
+      const finalPrice = Number(Math.max(0, retailPriceAtSale - discountAmount).toFixed(2));
+
+      let unitSupplyPrice = 0;
+      if (typeof item.productId === 'number') {
+        const stock = effectiveBranchCode
+          ? await this.prisma.productStock.findFirst({
+              where: {
+                productId: item.productId,
+                branchCode: effectiveBranchCode,
+              },
+            })
+          : null;
+        const product = await this.prisma.product.findUnique({
+          where: { id: item.productId },
+          select: {
+            purchasePrice: true,
+          },
+        });
+        unitSupplyPrice = stock?.purchasePrice ?? product?.purchasePrice ?? 0;
+      }
+
+      const supplyPriceAtSale = Number((unitSupplyPrice * item.quantity).toFixed(2));
+      const profitAtSale = Number((finalPrice - supplyPriceAtSale).toFixed(2));
+      const markupAtSale =
+        supplyPriceAtSale > 0
+          ? Number((finalPrice / supplyPriceAtSale).toFixed(4))
+          : null;
+      const sellerBonusAmount = Number(
+        this.calculateSellerBonusAmount(
+          {
+            finalPrice,
+            profitAtSale,
+          },
+          sellerSettings,
+        ).toFixed(2),
+      );
+
+      await this.prisma.saleItem.update({
+        where: { id: item.id },
+        data: {
+          sellerId: sellerId ?? item.sellerId ?? undefined,
+          retailPriceAtSale,
+          discountAmount,
+          finalPrice,
+          supplyPriceAtSale,
+          profitAtSale,
+          markupAtSale,
+          sellerBonusAmount,
+        } as any,
+      });
+    }
   }
 
   private async writeOffSaleItemsFromStock(
@@ -2836,6 +2976,45 @@ export class SalesService {
     }
 
     return lookup;
+  }
+
+  private calculateSellerBonusAmount(
+    item: {
+      finalPrice: number;
+      profitAtSale: number;
+    },
+    settings?: {
+      salaryPercent?: number;
+      calculationType?: string;
+      bonusEnabled?: boolean;
+      isActive?: boolean;
+    } | null,
+  ) {
+    if (!settings || settings.bonusEnabled === false || settings.isActive === false) {
+      return 0;
+    }
+
+    const percent = Number(settings.salaryPercent ?? 0);
+    if (percent <= 0) {
+      return 0;
+    }
+
+    const calculationType = settings.calculationType ?? 'FIXED_PLUS_PROFIT';
+    if (
+      calculationType === 'PROFIT_PERCENT_ONLY' ||
+      calculationType === 'FIXED_PLUS_PROFIT'
+    ) {
+      return (item.profitAtSale * percent) / 100;
+    }
+
+    if (
+      calculationType === 'REVENUE_PERCENT_ONLY' ||
+      calculationType === 'FIXED_PLUS_REVENUE'
+    ) {
+      return (item.finalPrice * percent) / 100;
+    }
+
+    return 0;
   }
 
   private resolveBranchCodeByShopId(shopId: string) {
