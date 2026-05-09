@@ -131,7 +131,7 @@ export class DashboardService {
         ? shopByBranchCode.get(sale.branchCode)
         : undefined;
       const shopName = shop?.name ?? sale.branchCode ?? 'Unknown';
-      const saleTotal = sale.payableTotal ?? sale.total ?? 0;
+      const saleTotal = this.getSignedSaleAmount(sale);
 
       if (bucketIndex >= 0) {
         bucketTotals[bucketIndex].total_price += saleTotal;
@@ -199,15 +199,15 @@ export class DashboardService {
       }
     }
 
-    return {
-      shops: [...visibleShopNames].map((shopName) => ({
-        shop_name: shopName,
-        total_price: shopTotals.get(shopName) ?? 0,
-      })),
+      return {
+        shops: [...visibleShopNames].map((shopName) => ({
+          shop_name: shopName,
+          total_price: shopTotals.get(shopName) ?? 0,
+        })),
       shop_orders: shopOrders,
       total: bucketTotals,
       total_orders_price: sales.reduce(
-        (sum, sale) => sum + (sale.payableTotal ?? sale.total ?? 0),
+        (sum, sale) => sum + this.getSignedSaleAmount(sale),
         0,
       ),
       payment_type_stats: [...paymentTotals.values()],
@@ -219,8 +219,8 @@ export class DashboardService {
         ),
         services: 0,
         sets: 0,
-        refunds: 0,
-        exchanges: 0,
+        refunds: sales.filter((sale) => (sale as any).saleType === 'return').length,
+        exchanges: sales.filter((sale) => (sale as any).saleType === 'exchange').length,
       },
       top_sellers: [...sellerTotals.values()]
         .sort((a, b) => b.total_price - a.total_price)
@@ -360,5 +360,14 @@ export class DashboardService {
     const seconds = String(value.getSeconds()).padStart(2, '0');
 
     return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  }
+
+  private getSignedSaleAmount(sale: {
+    payableTotal?: number | null;
+    total?: number | null;
+    saleType?: string;
+  }) {
+    const amount = sale.payableTotal ?? sale.total ?? 0;
+    return sale.saleType === 'return' ? -amount : amount;
   }
 }

@@ -92,6 +92,75 @@ export class SalesService {
     return this.toDraftSummary(sale);
   }
 
+  async findParkedSales(authorization?: string) {
+    const context = await this.getRequestContext(authorization);
+    const sales = await this.prisma.sale.findMany({
+      where: {
+        AND: [
+          this.buildSaleScope(context) ?? {},
+          {
+            isDraft: true,
+            status: 'parked',
+          },
+        ],
+      },
+      include: {
+        user: true,
+        items: true,
+      },
+      orderBy: {
+        updatedAt: 'desc',
+      },
+    });
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      sales
+        .map((sale) => sale.branchCode)
+        .filter((value): value is string => !!value),
+      context?.companyId,
+    );
+    const paymentTypeLookup = this.buildPaymentTypeLookup(context?.companyId);
+
+    return sales.map((sale) =>
+      this.toSaleListItem(sale, context, shopLookup, paymentTypeLookup),
+    );
+  }
+
+  async findDraftSales(authorization?: string) {
+    const context = await this.getRequestContext(authorization);
+    const sales = await this.prisma.sale.findMany({
+      where: {
+        AND: [
+          this.buildSaleScope(context) ?? {},
+          {
+            isDraft: true,
+            status: 'draft',
+            items: {
+              some: {},
+            },
+          },
+        ],
+      },
+      include: {
+        user: true,
+        items: true,
+      },
+      orderBy: {
+        updatedAt: 'desc',
+      },
+    });
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      sales
+        .map((sale) => sale.branchCode)
+        .filter((value): value is string => !!value),
+      context?.companyId,
+    );
+    const paymentTypeLookup = this.buildPaymentTypeLookup(context?.companyId);
+
+    return sales.map((sale) =>
+      this.toSaleListItem(sale, context, shopLookup, paymentTypeLookup),
+    );
+  }
+
   async createOrder(body: Record<string, unknown>, authorization?: string) {
     const context = await this.getRequestContext(authorization);
     const shopId = this.optionalString(body.shop_id) ?? '';
@@ -301,9 +370,23 @@ export class SalesService {
     let totalProducts = 0;
     let totalServices = 0;
     let totalTransactionsSum = 0;
+    let totalReturnedMeasurementValue = 0;
+    let totalReturnedSum = 0;
+    let totalExchangesCount = 0;
+    let totalReturnalsCount = 0;
 
     for (const sale of sales) {
-      totalTransactionsSum += sale.payableTotal || sale.total || 0;
+      const saleAmount = this.getSignedSaleAmount(sale);
+      totalTransactionsSum += saleAmount;
+
+      if ((sale as any).saleType === 'return') {
+        totalReturnalsCount += 1;
+        totalReturnedSum += sale.payableTotal || sale.total || 0;
+      }
+
+      if ((sale as any).saleType === 'exchange') {
+        totalExchangesCount += 1;
+      }
 
       for (const item of sale.items) {
         if (
@@ -312,6 +395,10 @@ export class SalesService {
           totalServices += item.quantity;
         } else {
           totalProducts += item.quantity;
+        }
+
+        if ((sale as any).saleType === 'return') {
+          totalReturnedMeasurementValue += item.quantity;
         }
       }
 
@@ -322,7 +409,7 @@ export class SalesService {
 
       const paymentType = paymentTypeLookup.get(paymentTypeId);
       const existing = paymentStats.get(paymentTypeId);
-      const sum = sale.payableTotal || sale.total || 0;
+      const sum = saleAmount;
 
       if (existing) {
         existing.sum += sum;
@@ -343,6 +430,10 @@ export class SalesService {
       ...this.emptyOrderSearchStats(),
       total_products_measurement_value: totalProducts,
       total_services_measurement_value: totalServices,
+      total_returned_measurement_value: totalReturnedMeasurementValue,
+      total_returnals_count: totalReturnalsCount,
+      total_exchanges_count: totalExchangesCount,
+      total_returnals_sum: totalReturnedSum,
       total_transactions_sum: totalTransactionsSum,
       payment_types_stats: [...paymentStats.values()],
       count: sales.length,
@@ -553,6 +644,7 @@ export class SalesService {
         status: 'paid',
         isDraft: false,
         paymentMethod,
+        parkNote: null,
         paidAt: new Date(),
       },
     });
@@ -639,6 +731,118 @@ export class SalesService {
     });
 
     return this.toSaleListItem(updatedSale, context);
+  }
+
+  async processReturn(
+    id: string,
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const originalSale = await this.findBaseSaleForAdjustment(id, context);
+    const sellerId = await this.resolveSellerIdForAdjustment(
+      originalSale,
+      body,
+      context,
+    );
+    const returnItems = await this.prepareAdjustmentItems(
+      originalSale,
+      body.items,
+      'items',
+    );
+
+    const returnSale = await this.createAdjustmentSale({
+      originalSale,
+      saleType: 'return',
+      status: 'returned',
+      items: returnItems,
+      sellerId,
+      paymentMethod:
+        this.optionalString(body.payment_method) ??
+        originalSale.paymentMethod ??
+        undefined,
+    });
+
+    await this.applyStockDelta(originalSale.branchCode, returnItems, 1);
+    await this.syncProductsQuantity(returnItems);
+    await this.refreshBaseSaleStatus(originalSale.id);
+
+    return {
+      success: true,
+      type: 'return',
+      original_order_id: String(originalSale.id),
+      return_order: this.toSaleListItem(returnSale, context),
+    };
+  }
+
+  async processExchange(
+    id: string,
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const originalSale = await this.findBaseSaleForAdjustment(id, context);
+    const sellerId = await this.resolveSellerIdForAdjustment(
+      originalSale,
+      body,
+      context,
+    );
+    const returnItems = await this.prepareAdjustmentItems(
+      originalSale,
+      body.return_items,
+      'return_items',
+    );
+    const exchangeItems = await this.prepareNewExchangeItems(
+      originalSale,
+      body.new_items,
+      returnItems,
+      context,
+    );
+
+    const returnSale = await this.createAdjustmentSale({
+      originalSale,
+      saleType: 'return',
+      status: 'returned',
+      items: returnItems,
+      sellerId,
+      paymentMethod:
+        this.optionalString(body.return_payment_method) ??
+        this.optionalString(body.payment_method) ??
+        originalSale.paymentMethod ??
+        undefined,
+    });
+
+    const exchangeSale = await this.createAdjustmentSale({
+      originalSale,
+      saleType: 'exchange',
+      status: 'paid',
+      items: exchangeItems,
+      sellerId,
+      paymentMethod:
+        this.optionalString(body.exchange_payment_method) ??
+        this.optionalString(body.payment_method) ??
+        originalSale.paymentMethod ??
+        undefined,
+    });
+
+    await this.applyStockDelta(originalSale.branchCode, returnItems, 1);
+    await this.applyStockDelta(originalSale.branchCode, exchangeItems, -1);
+    await this.syncProductsQuantity([...returnItems, ...exchangeItems]);
+    await this.refreshBaseSaleStatus(originalSale.id);
+
+    return {
+      success: true,
+      type: 'exchange',
+      original_order_id: String(originalSale.id),
+      returned_total: returnSale.payableTotal,
+      exchange_total: exchangeSale.payableTotal,
+      balance_due: Number(
+        ((exchangeSale.payableTotal ?? 0) - (returnSale.payableTotal ?? 0))
+          .toFixed(2),
+      ),
+      return_order: this.toSaleListItem(returnSale, context),
+      exchange_order: this.toSaleListItem(exchangeSale, context),
+    };
   }
 
   async findDraft(id: number) {
@@ -769,6 +973,7 @@ export class SalesService {
           context?.companyId,
         ),
         clientName: this.optionalString(body.client_name),
+        parkNote: null,
         branchCode,
         paidAt: new Date(),
       },
@@ -779,6 +984,85 @@ export class SalesService {
     });
 
     return this.toSaleListItem(updatedSale, context);
+  }
+
+  async parkDraft(
+    id: number,
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const sale = await this.findSaleOrThrow(id);
+    this.assertSaleAccess(sale, context);
+
+    if (!sale.isDraft) {
+      throw new BadRequestException('Only draft sale can be parked');
+    }
+
+    const updatedSale = await this.prisma.sale.update({
+      where: { id },
+      data: {
+        status: 'parked',
+        parkNote:
+          this.optionalString(body.park_note) ??
+          this.optionalString(body.note) ??
+          sale.parkNote ??
+          null,
+      },
+      include: {
+        user: true,
+        items: true,
+      },
+    });
+    const shouldCreateNewDraft = this.toBoolean(body.create_new_draft) ?? false;
+
+    if (!shouldCreateNewDraft) {
+      return this.toDraftResponse(updatedSale);
+    }
+
+    const newDraft = await this.prisma.sale.create({
+      data: {
+        companyId:
+          context?.userType === 'company'
+            ? (context.companyId ?? undefined)
+            : undefined,
+        number: this.generateOrderNumber(),
+        status: 'draft',
+        isDraft: true,
+        branchCode: context?.currentBranchCode ?? sale.branchCode ?? undefined,
+        userId: context?.userId ?? sale.userId ?? undefined,
+      },
+    });
+
+    return {
+      parked_sale: this.toDraftResponse(updatedSale),
+      new_draft: this.toDraftSummary(newDraft),
+    };
+  }
+
+  async resumeParkedSale(id: number, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
+    const sale = await this.findSaleOrThrow(id);
+    this.assertSaleAccess(sale, context);
+
+    if (!sale.isDraft || sale.status !== 'parked') {
+      throw new BadRequestException('Only parked sale can be resumed');
+    }
+
+    const updatedSale = await this.prisma.sale.update({
+      where: { id },
+      data: {
+        status: 'draft',
+        userId: context?.userId ?? sale.userId ?? undefined,
+        branchCode: context?.currentBranchCode ?? sale.branchCode ?? undefined,
+      },
+      include: {
+        user: true,
+        items: true,
+      },
+    });
+
+    return this.toDraftResponse(updatedSale);
   }
 
   async removeDraft(id: number, authorization?: string) {
@@ -813,13 +1097,31 @@ export class SalesService {
         },
         user: true,
       },
-    });
+    }) as any;
 
     if (!sale) {
       throw new NotFoundException('Order not found');
     }
 
     this.assertSaleAccess(sale, context);
+
+    if (sale.parentSaleId) {
+      throw new BadRequestException(
+        'Return or exchange documents cannot be deleted separately',
+      );
+    }
+
+    const childSalesCount = await this.prisma.sale.count({
+      where: {
+        parentSaleId: sale.id,
+      } as any,
+    });
+
+    if (childSalesCount > 0) {
+      throw new BadRequestException(
+        'Order with returns or exchanges cannot be deleted',
+      );
+    }
 
     if (!sale.isDraft) {
       await this.restoreSaleStock(sale);
@@ -833,6 +1135,493 @@ export class SalesService {
       success: true,
       id: sale.id,
     };
+  }
+
+  private async findBaseSaleForAdjustment(id: string, context: any) {
+    const saleId = this.parseEntityId(id, 'order id');
+    const sale = await this.prisma.sale.findUnique({
+      where: { id: saleId },
+      include: {
+        user: true,
+        items: {
+          include: {
+            product: {
+              include: {
+                category: true,
+                brand: true,
+                stocks: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!sale) {
+      throw new NotFoundException('Order not found');
+    }
+
+    this.assertSaleAccess(sale, context);
+
+    if (sale.isDraft) {
+      throw new BadRequestException(
+        'Only paid orders can be returned or exchanged',
+      );
+    }
+
+    if ((sale as any).saleType && (sale as any).saleType !== 'sale') {
+      throw new BadRequestException(
+        'Returns and exchanges are allowed only for original sales',
+      );
+    }
+
+    return sale as any;
+  }
+
+  private async resolveSellerIdForAdjustment(
+    originalSale: { companyId?: string | null; userId?: number | null },
+    body: Record<string, unknown>,
+    context: any,
+  ) {
+    const requestedSellerId =
+      this.toInt(body.user_id) ?? this.toInt(body.seller_id);
+
+    if (!requestedSellerId) {
+      return originalSale.userId ?? context?.userId ?? undefined;
+    }
+
+    const seller = await this.prisma.user.findFirst({
+      where: {
+        id: requestedSellerId,
+        ...(originalSale.companyId ? { companyId: originalSale.companyId } : {}),
+      },
+    });
+
+    if (!seller) {
+      throw new NotFoundException('Seller not found');
+    }
+
+    return seller.id;
+  }
+
+  private async prepareAdjustmentItems(
+    originalSale: {
+      id: number;
+      items: Array<{
+        id: number;
+        productId: number | null;
+        name: string;
+        barcode: string | null;
+        sku: string | null;
+        quantity: number;
+        salePrice: number;
+      }>;
+    },
+    rawItems: unknown,
+    fieldName: string,
+  ) {
+    if (!Array.isArray(rawItems) || rawItems.length === 0) {
+      throw new BadRequestException(`${fieldName} must contain at least one item`);
+    }
+
+    const returnableQuantities = await this.getReturnableQuantities(originalSale);
+    const normalizedItems: Array<{
+      productId: number;
+      name: string;
+      barcode: string | null;
+      sku: string | null;
+      quantity: number;
+      salePrice: number;
+      lineTotal: number;
+    }> = [];
+
+    for (const rawItem of rawItems) {
+      if (!rawItem || typeof rawItem !== 'object') {
+        throw new BadRequestException(`${fieldName} contains invalid item`);
+      }
+
+      const record = rawItem as Record<string, unknown>;
+      const productId = this.toInt(record.product_id) ?? this.toInt(record.id);
+      const quantity = this.toInt(record.quantity);
+
+      if (!productId || !quantity || quantity <= 0) {
+        throw new BadRequestException(
+          `${fieldName} items require product_id and positive quantity`,
+        );
+      }
+
+      const originalItem = originalSale.items.find(
+        (item) => item.productId === productId,
+      );
+
+      if (!originalItem) {
+        throw new BadRequestException(
+          `Product ${productId} is not present in the original sale`,
+        );
+      }
+
+      const availableQuantity = returnableQuantities.get(productId) ?? 0;
+      const alreadyRequestedQuantity =
+        normalizedItems.find((item) => item.productId === productId)?.quantity ?? 0;
+
+      if (alreadyRequestedQuantity + quantity > availableQuantity) {
+        throw new BadRequestException(
+          `Return quantity for product ${productId} exceeds available amount`,
+        );
+      }
+
+      normalizedItems.push({
+        productId,
+        name: originalItem.name,
+        barcode: originalItem.barcode,
+        sku: originalItem.sku,
+        quantity,
+        salePrice: originalItem.salePrice,
+        lineTotal: Number((quantity * originalItem.salePrice).toFixed(2)),
+      });
+    }
+
+    return normalizedItems;
+  }
+
+  private async prepareNewExchangeItems(
+    originalSale: { companyId?: string | null; branchCode: string | null },
+    rawItems: unknown,
+    returnItems: Array<{ productId: number; quantity: number }>,
+    context: any,
+  ) {
+    if (!Array.isArray(rawItems) || rawItems.length === 0) {
+      throw new BadRequestException('new_items must contain at least one item');
+    }
+
+    const normalizedItems: Array<{
+      productId: number;
+      name: string;
+      barcode: string | null;
+      sku: string | null;
+      quantity: number;
+      salePrice: number;
+      lineTotal: number;
+    }> = [];
+
+    for (const rawItem of rawItems) {
+      if (!rawItem || typeof rawItem !== 'object') {
+        throw new BadRequestException('new_items contains invalid item');
+      }
+
+      const record = rawItem as Record<string, unknown>;
+      const productId = this.toInt(record.product_id) ?? this.toInt(record.id);
+      const quantity = this.toInt(record.quantity);
+
+      if (!productId || !quantity || quantity <= 0) {
+        throw new BadRequestException(
+          'new_items require product_id and positive quantity',
+        );
+      }
+
+      const product = await this.prisma.product.findFirst({
+        where: this.buildProductScope({ id: productId }, context),
+      });
+
+      if (!product) {
+        throw new NotFoundException(`Product ${productId} not found`);
+      }
+
+      const salePrice =
+        this.toNumber(record.sale_price) ??
+        product.salePrice ??
+        0;
+
+      if (salePrice <= 0) {
+        throw new BadRequestException(
+          `Sale price for product ${productId} must be greater than 0`,
+        );
+      }
+
+      const stock = originalSale.branchCode
+        ? await this.prisma.productStock.findFirst({
+            where: {
+              productId,
+              branchCode: originalSale.branchCode,
+            },
+          })
+        : null;
+
+      const availableQuantity = stock?.quantity ?? product.quantity ?? 0;
+      const quantityReturnedInSameExchange = returnItems
+        .filter((item) => item.productId === productId)
+        .reduce((sum, item) => sum + item.quantity, 0);
+      const alreadyRequestedQuantity =
+        normalizedItems.find((item) => item.productId === productId)?.quantity ?? 0;
+
+      if (
+        alreadyRequestedQuantity + quantity >
+        availableQuantity + quantityReturnedInSameExchange
+      ) {
+        throw new BadRequestException(
+          `Not enough stock for exchange product ${productId}`,
+        );
+      }
+
+      normalizedItems.push({
+        productId,
+        name: product.name,
+        barcode: product.barcode,
+        sku: product.sku,
+        quantity,
+        salePrice,
+        lineTotal: Number((quantity * salePrice).toFixed(2)),
+      });
+    }
+
+    return normalizedItems;
+  }
+
+  private async getReturnableQuantities(originalSale: {
+    id: number;
+    items: Array<{ productId: number | null; quantity: number }>;
+  }) {
+    const returns = await this.prisma.sale.findMany({
+      where: {
+        parentSaleId: originalSale.id,
+        saleType: 'return',
+      } as any,
+      include: {
+        items: true,
+      },
+    });
+
+    const returnedMap = new Map<number, number>();
+    for (const returnSale of returns as any[]) {
+      for (const item of returnSale.items) {
+        if (!item.productId) {
+          continue;
+        }
+
+        returnedMap.set(
+          item.productId,
+          (returnedMap.get(item.productId) ?? 0) + item.quantity,
+        );
+      }
+    }
+
+    const returnableMap = new Map<number, number>();
+    for (const item of originalSale.items) {
+      if (!item.productId) {
+        continue;
+      }
+
+      returnableMap.set(
+        item.productId,
+        item.quantity - (returnedMap.get(item.productId) ?? 0),
+      );
+    }
+
+    return returnableMap;
+  }
+
+  private async createAdjustmentSale(args: {
+    originalSale: any;
+    saleType: 'return' | 'exchange';
+    status: string;
+    items: Array<{
+      productId: number;
+      name: string;
+      barcode: string | null;
+      sku: string | null;
+      quantity: number;
+      salePrice: number;
+      lineTotal: number;
+    }>;
+    sellerId?: number;
+    paymentMethod?: string;
+  }) {
+    const total = args.items.reduce((sum, item) => sum + item.lineTotal, 0);
+
+    return this.prisma.sale.create({
+      data: {
+        companyId: args.originalSale.companyId ?? undefined,
+        number: this.generateOrderNumber(),
+        saleType: args.saleType,
+        status: args.status,
+        payableTotal: total,
+        total,
+        paymentMethod: this.resolvePaymentMethod(
+          args.paymentMethod,
+          args.originalSale.companyId,
+        ),
+        clientName: args.originalSale.clientName ?? undefined,
+        branchCode: args.originalSale.branchCode ?? undefined,
+        isDraft: false,
+        userId: args.sellerId,
+        parentSaleId: args.originalSale.id,
+        paidAt: new Date(),
+        items: {
+          create: args.items.map((item) => ({
+            productId: item.productId,
+            name: item.name,
+            barcode: item.barcode,
+            sku: item.sku,
+            quantity: item.quantity,
+            salePrice: item.salePrice,
+            lineTotal: item.lineTotal,
+          })),
+        },
+      } as any,
+      include: {
+        user: true,
+        items: true,
+      },
+    });
+  }
+
+  private async applyStockDelta(
+    branchCode: string | null,
+    items: Array<{ productId: number; quantity: number; salePrice: number }>,
+    multiplier: 1 | -1,
+  ) {
+    if (!branchCode) {
+      return;
+    }
+
+    for (const item of items) {
+      const stock = await this.prisma.productStock.findFirst({
+        where: {
+          productId: item.productId,
+          branchCode,
+        },
+      });
+
+      if (stock) {
+        await this.prisma.productStock.update({
+          where: { id: stock.id },
+          data: {
+            quantity: stock.quantity + item.quantity * multiplier,
+          },
+        });
+      } else {
+        const product = await this.prisma.product.findUnique({
+          where: { id: item.productId },
+        });
+
+        await this.prisma.productStock.create({
+          data: {
+            productId: item.productId,
+            branchCode,
+            quantity: item.quantity * multiplier,
+            purchasePrice: product?.purchasePrice ?? 0,
+            salePrice: item.salePrice,
+          },
+        });
+      }
+    }
+  }
+
+  private async syncProductsQuantity(
+    items: Array<{ productId: number }>,
+  ) {
+    const uniqueProductIds = [...new Set(items.map((item) => item.productId))];
+
+    for (const productId of uniqueProductIds) {
+      const product = await this.prisma.product.findUnique({
+        where: { id: productId },
+        include: { stocks: true },
+      });
+
+      if (!product) {
+        continue;
+      }
+
+      await this.prisma.product.update({
+        where: { id: productId },
+        data: {
+          quantity: product.stocks.reduce(
+            (sum, stock) => sum + stock.quantity,
+            0,
+          ),
+        },
+      });
+    }
+  }
+
+  private async refreshBaseSaleStatus(saleId: number) {
+    const originalSale = await this.prisma.sale.findUnique({
+      where: { id: saleId },
+      include: {
+        items: true,
+      },
+    });
+
+    if (!originalSale) {
+      return;
+    }
+
+    const childSales = await this.prisma.sale.findMany({
+      where: {
+        parentSaleId: saleId,
+      } as any,
+      include: {
+        items: true,
+      },
+    });
+
+    const returnedMap = new Map<number, number>();
+    let hasExchange = false;
+
+    for (const childSale of childSales as any[]) {
+      if (childSale.saleType === 'exchange') {
+        hasExchange = true;
+      }
+
+      if (childSale.saleType !== 'return') {
+        continue;
+      }
+
+      for (const item of childSale.items) {
+        if (!item.productId) {
+          continue;
+        }
+
+        returnedMap.set(
+          item.productId,
+          (returnedMap.get(item.productId) ?? 0) + item.quantity,
+        );
+      }
+    }
+
+    let hasReturnedItems = false;
+    let fullyReturned = true;
+
+    for (const item of originalSale.items) {
+      if (!item.productId) {
+        continue;
+      }
+
+      const returnedQuantity = returnedMap.get(item.productId) ?? 0;
+      if (returnedQuantity > 0) {
+        hasReturnedItems = true;
+      }
+
+      if (returnedQuantity < item.quantity) {
+        fullyReturned = false;
+      }
+    }
+
+    let status = originalSale.status;
+    if (hasReturnedItems) {
+      if (hasExchange) {
+        status = fullyReturned ? 'exchanged' : 'partially_exchanged';
+      } else {
+        status = fullyReturned ? 'returned' : 'partially_returned';
+      }
+    }
+
+    await this.prisma.sale.update({
+      where: { id: saleId },
+      data: {
+        status,
+      },
+    });
   }
 
   private async recalculateSale(id: number) {
@@ -1040,6 +1829,8 @@ export class SalesService {
     sale: {
       id: number;
       number: string;
+      status?: string;
+      parkNote?: string | null;
       discountPercent: number;
       discountAmount: number;
       payableTotal: number;
@@ -1051,6 +1842,9 @@ export class SalesService {
       sid: sale.number,
       number: sale.number,
       order_number: sale.number,
+      status: sale.status ?? 'draft',
+      park_status: sale.status === 'parked' ? 'parked' : '',
+      park_note: sale.parkNote ?? '',
       discount_percent: sale.discountPercent,
       discount_amount: sale.discountAmount,
       payable_total: sale.payableTotal,
@@ -1061,7 +1855,10 @@ export class SalesService {
     sale: {
       id: number;
       number: string;
+      saleType?: string;
+      parentSaleId?: number | null;
       status: string;
+      parkNote?: string | null;
       discountPercent: number;
       discountAmount: number;
       payableTotal: number;
@@ -1084,6 +1881,8 @@ export class SalesService {
       number: sale.number,
       order_number: sale.number,
       status: sale.status,
+      park_status: sale.status === 'parked' ? 'parked' : '',
+      park_note: sale.parkNote ?? '',
       discount_percent: sale.discountPercent,
       discount_amount: sale.discountAmount,
       payable_total: sale.payableTotal,
@@ -1105,8 +1904,11 @@ export class SalesService {
     sale: {
       id: number;
       number: string;
+      saleType?: string;
+      parentSaleId?: number | null;
       createdAt: Date;
       status: string;
+      parkNote?: string | null;
       payableTotal: number;
       total: number;
       discountAmount: number;
@@ -1150,8 +1952,12 @@ export class SalesService {
       id: sale.id,
       number: sale.number,
       sale_number: sale.number,
+      sale_type: sale.saleType ?? 'sale',
+      parent_order_id: sale.parentSaleId ? String(sale.parentSaleId) : null,
       created_at: sale.createdAt,
       status: sale.status,
+      park_status: sale.status === 'parked' ? 'parked' : '',
+      park_note: sale.parkNote ?? '',
       payable_total: sale.payableTotal,
       total: sale.total,
       amount: sale.payableTotal,
@@ -1202,7 +2008,10 @@ export class SalesService {
     sale: {
       id: number;
       number: string;
+      saleType?: string;
+      parentSaleId?: number | null;
       status: string;
+      parkNote?: string | null;
       branchCode: string | null;
       createdAt: Date;
       updatedAt: Date;
@@ -1255,10 +2064,16 @@ export class SalesService {
 
     return {
       id: String(sale.id),
-      parent_id: '',
+      parent_id: sale.parentSaleId ? String(sale.parentSaleId) : '',
       company_id: context?.companyId ?? COMPANY_ID,
       order_number: sale.number,
-      order_status: sale.isDraft ? 'draft' : 'paid',
+      order_status: sale.status,
+      order_type:
+        sale.saleType === 'return'
+          ? 'RETURN'
+          : sale.saleType === 'exchange'
+            ? 'EXCHANGE'
+            : 'SALE',
       order_detail: {
         id: String(sale.id),
         order_id: String(sale.id),
@@ -1291,7 +2106,10 @@ export class SalesService {
         ),
         total_sets_measurement_value: 0,
         total_services_measurement_value: 0,
-        total_returned_measurement_value: 0,
+        total_returned_measurement_value:
+          sale.saleType === 'return'
+            ? sale.items.reduce((sum, item) => sum + item.quantity, 0)
+            : 0,
         version_number: 1,
         comment: '',
         created_at: this.formatDateTime(sale.createdAt),
@@ -1332,10 +2150,10 @@ export class SalesService {
           discount_amount: 0,
           discount_percent: 0,
           measurement_value: item.quantity,
-          returned_measurement_value: 0,
+          returned_measurement_value: sale.saleType === 'return' ? item.quantity : 0,
           measurement_type: '',
           sequence_number: index + 1,
-          is_returned: false,
+          is_returned: sale.saleType === 'return',
           has_manual_discount: false,
           promo_id: '',
           promo_ids: null,
@@ -1421,7 +2239,8 @@ export class SalesService {
       display_sold_at: '',
       display_deleted_at: '',
       order_debt_payments: null,
-      park_status: '',
+      park_status: sale.status === 'parked' ? 'parked' : '',
+      park_note: sale.parkNote ?? '',
       exchange_disabled: false,
       total_remaining_debt_in_chain: 0,
       updated_at: this.formatDateTime(sale.updatedAt),
@@ -1655,7 +2474,38 @@ export class SalesService {
   }
 
   private generateOrderNumber() {
-    return `${Date.now()}`.slice(-12).padStart(12, '0');
+    const randomSuffix = Math.floor(Math.random() * 1000)
+      .toString()
+      .padStart(3, '0');
+    return `${Date.now()}${randomSuffix}`;
+  }
+
+  private getSignedSaleAmount(sale: {
+    payableTotal?: number | null;
+    total?: number | null;
+    saleType?: string;
+  }) {
+    const amount = sale.payableTotal || sale.total || 0;
+    return sale.saleType === 'return' ? -amount : amount;
+  }
+
+  private toBoolean(value: unknown) {
+    if (typeof value === 'boolean') {
+      return value;
+    }
+
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === 'true') {
+        return true;
+      }
+
+      if (normalized === 'false') {
+        return false;
+      }
+    }
+
+    return undefined;
   }
 
   private toNumber(value: unknown) {

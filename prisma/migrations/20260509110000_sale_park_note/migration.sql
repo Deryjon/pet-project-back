@@ -1,0 +1,2 @@
+ALTER TABLE "Sale"
+ADD COLUMN "parkNote" TEXT;

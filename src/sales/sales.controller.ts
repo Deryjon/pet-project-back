@@ -27,6 +27,18 @@ export class SalesController {
     return this.salesService.createDraft(authorization);
   }
 
+  @Get('parked-sales')
+  @Get('v2/parked-sales')
+  findParkedSales(@Headers('authorization') authorization?: string) {
+    return this.salesService.findParkedSales(authorization);
+  }
+
+  @Get('draft-sales')
+  @Get('v2/draft-sales')
+  findDraftSales(@Headers('authorization') authorization?: string) {
+    return this.salesService.findDraftSales(authorization);
+  }
+
   @Post('order')
   @Post('v2/order')
   createOrder(
@@ -102,6 +114,26 @@ export class SalesController {
     return this.salesService.payOrder(id, body, authorization);
   }
 
+  @Post('order/:id/return')
+  @Post('v2/order/:id/return')
+  processReturn(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.processReturn(id, body, authorization);
+  }
+
+  @Post('order/:id/exchange')
+  @Post('v2/order/:id/exchange')
+  processExchange(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.processExchange(id, body, authorization);
+  }
+
   @Patch('order/:id/payment-method')
   @Patch('v2/order/:id/payment-method')
   updatePaymentMethod(
@@ -141,6 +173,24 @@ export class SalesController {
     @Headers('authorization') authorization?: string,
   ) {
     return this.salesService.pay(id, body, authorization);
+  }
+
+  @Post('new-sale/:id/park')
+  parkDraft(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.parkDraft(id, body, authorization);
+  }
+
+  @Post('parked-sales/:id/resume')
+  @Post('v2/parked-sales/:id/resume')
+  resumeParkedSale(
+    @Param('id', ParseIntPipe) id: number,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.resumeParkedSale(id, authorization);
   }
 
   @Delete('new-sale/:id')
