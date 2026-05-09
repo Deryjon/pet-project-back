@@ -646,7 +646,7 @@ export class SalesService {
         paymentMethod,
         parkNote: null,
         paidAt: new Date(),
-      },
+      } as any,
     });
 
     return {
@@ -976,14 +976,14 @@ export class SalesService {
         parkNote: null,
         branchCode,
         paidAt: new Date(),
-      },
+      } as any,
       include: {
         user: true,
         items: true,
       },
     });
 
-    return this.toSaleListItem(updatedSale, context);
+    return this.toSaleListItem(updatedSale as any, context);
   }
 
   async parkDraft(
@@ -1006,9 +1006,9 @@ export class SalesService {
         parkNote:
           this.optionalString(body.park_note) ??
           this.optionalString(body.note) ??
-          sale.parkNote ??
+          (sale as any).parkNote ??
           null,
-      },
+      } as any,
       include: {
         user: true,
         items: true,
@@ -1017,7 +1017,7 @@ export class SalesService {
     const shouldCreateNewDraft = this.toBoolean(body.create_new_draft) ?? false;
 
     if (!shouldCreateNewDraft) {
-      return this.toDraftResponse(updatedSale);
+      return this.toDraftResponse(updatedSale as any);
     }
 
     const newDraft = await this.prisma.sale.create({
@@ -1035,7 +1035,7 @@ export class SalesService {
     });
 
     return {
-      parked_sale: this.toDraftResponse(updatedSale),
+      parked_sale: this.toDraftResponse(updatedSale as any),
       new_draft: this.toDraftSummary(newDraft),
     };
   }
@@ -1650,24 +1650,6 @@ export class SalesService {
     });
   }
 
-<<<<<<< HEAD
-  private async restoreSaleStock(sale: {
-    id: number;
-    branchCode: string | null;
-    items: Array<{
-      productId: number | null;
-      quantity: number;
-      salePrice: number;
-      product: {
-        purchasePrice: number | null;
-        stocks: Array<{ quantity: number }>;
-      } | null;
-    }>;
-  }) {
-    const branchCode = sale.branchCode;
-
-    if (branchCode) {
-=======
   private async writeOffSaleItemsFromStock(
     sale: {
       branchCode: string | null;
@@ -1697,17 +1679,12 @@ export class SalesService {
     }
 
     await this.prisma.$transaction(async (tx) => {
->>>>>>> 346c4418e6ffcca524a6a885fb1416dc7b39262a
       for (const item of sale.items) {
         if (!item.productId) {
           continue;
         }
 
-<<<<<<< HEAD
-        const stock = await this.prisma.productStock.findFirst({
-=======
         const stock = await tx.productStock.findFirst({
->>>>>>> 346c4418e6ffcca524a6a885fb1416dc7b39262a
           where: {
             productId: item.productId,
             branchCode,
@@ -1715,52 +1692,6 @@ export class SalesService {
         });
 
         if (stock) {
-<<<<<<< HEAD
-          await this.prisma.productStock.update({
-            where: { id: stock.id },
-            data: {
-              quantity: stock.quantity + item.quantity,
-            },
-          });
-        } else {
-          await this.prisma.productStock.create({
-            data: {
-              productId: item.productId,
-              branchCode,
-              quantity: item.quantity,
-              purchasePrice: item.product?.purchasePrice ?? 0,
-              salePrice: item.salePrice,
-            },
-          });
-        }
-      }
-    }
-
-    for (const item of sale.items) {
-      if (!item.productId) {
-        continue;
-      }
-
-      const product = await this.prisma.product.findUnique({
-        where: { id: item.productId },
-        include: { stocks: true },
-      });
-
-      if (!product) {
-        continue;
-      }
-
-      await this.prisma.product.update({
-        where: { id: product.id },
-        data: {
-          quantity: product.stocks.reduce(
-            (sum, stock) => sum + stock.quantity,
-            0,
-          ),
-        },
-      });
-    }
-=======
           await tx.productStock.update({
             where: { id: stock.id },
             data: {
@@ -1806,7 +1737,95 @@ export class SalesService {
         });
       }
     });
->>>>>>> 346c4418e6ffcca524a6a885fb1416dc7b39262a
+  }
+
+  private async restoreSaleStock(sale: {
+    branchCode: string | null;
+    items: Array<{
+      productId: number | null;
+      quantity: number;
+      salePrice: number;
+      product?: {
+        purchasePrice: number | null;
+      } | null;
+    }>;
+  }) {
+    const branchCode = sale.branchCode;
+    if (!branchCode) {
+      return;
+    }
+
+    const productIds = [
+      ...new Set(
+        sale.items
+          .map((item) => item.productId)
+          .filter((value): value is number => typeof value === 'number'),
+      ),
+    ];
+
+    if (!productIds.length) {
+      return;
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const item of sale.items) {
+        if (!item.productId) {
+          continue;
+        }
+
+        const stock = await tx.productStock.findFirst({
+          where: {
+            productId: item.productId,
+            branchCode,
+          },
+        });
+
+        if (stock) {
+          await tx.productStock.update({
+            where: { id: stock.id },
+            data: {
+              quantity: {
+                increment: item.quantity,
+              },
+            },
+          });
+          continue;
+        }
+
+        const product = await tx.product.findUnique({
+          where: { id: item.productId },
+          select: {
+            purchasePrice: true,
+          },
+        });
+
+        await tx.productStock.create({
+          data: {
+            productId: item.productId,
+            branchCode,
+            quantity: item.quantity,
+            purchasePrice: item.product?.purchasePrice ?? product?.purchasePrice ?? 0,
+            salePrice: item.salePrice,
+          },
+        });
+      }
+
+      for (const productId of productIds) {
+        const totalStock = await tx.productStock.aggregate({
+          where: { productId },
+          _sum: {
+            quantity: true,
+          },
+        });
+
+        await tx.product.update({
+          where: { id: productId },
+          data: {
+            quantity: totalStock._sum.quantity ?? 0,
+          },
+        });
+      }
+    });
   }
 
   private async findSaleOrThrow(id: number) {
@@ -2219,7 +2238,6 @@ export class SalesService {
         has_payment_token: false,
         payment_token: '',
       },
-      order_type: 'SALE',
       created_at: this.formatDateTime(sale.createdAt),
       deleted_at: 0,
       created_at_utc: '',
