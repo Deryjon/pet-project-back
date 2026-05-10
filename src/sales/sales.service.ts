@@ -873,7 +873,7 @@ export class SalesService {
   ) {
     const context = await this.getRequestContext(authorization);
     const productId = this.toInt(body.product_id);
-    const quantity = this.toInt(body.quantity) ?? 1;
+    const quantity = this.toNumber(body.quantity) ?? 1;
     const salePrice = this.toNumber(body.sale_price);
 
     if (!productId) {
@@ -1287,7 +1287,7 @@ export class SalesService {
 
       const record = rawItem as Record<string, unknown>;
       const productId = this.toInt(record.product_id) ?? this.toInt(record.id);
-      const quantity = this.toInt(record.quantity);
+      const quantity = this.toNumber(record.quantity);
 
       if (!productId || !quantity || quantity <= 0) {
         throw new BadRequestException(
@@ -1356,7 +1356,7 @@ export class SalesService {
 
       const record = rawItem as Record<string, unknown>;
       const productId = this.toInt(record.product_id) ?? this.toInt(record.id);
-      const quantity = this.toInt(record.quantity);
+      const quantity = this.toNumber(record.quantity);
 
       if (!productId || !quantity || quantity <= 0) {
         throw new BadRequestException(

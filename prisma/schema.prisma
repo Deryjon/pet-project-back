@@ -302,7 +302,7 @@ model Product {
   markupPercent    Float?
   salePrice        Float?
   discountPrice    Float?
-  quantity         Int               @default(0)
+  quantity         Float             @default(0)
   metadata         Json?
   categoryId       Int?
   brandId          Int?
@@ -630,7 +630,7 @@ model ProductStock {
   id            Int      @id @default(autoincrement())
   productId     Int
   branchCode    String
-  quantity      Int      @default(0)
+  quantity      Float    @default(0)
   purchasePrice Float?
   salePrice     Float?
   product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
@@ -680,7 +680,7 @@ model SaleItem {
   name      String
   barcode   String?
   sku       String?
-  quantity  Int
+  quantity  Float
   salePrice Float
   lineTotal Float
   retailPriceAtSale Float      @default(0)

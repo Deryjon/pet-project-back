@@ -405,6 +405,28 @@ const DEFAULT_MEASUREMENT_UNIT: MeasurementUnitProfile = {
   is_default: true,
 };
 
+const DEFAULT_MEASUREMENT_UNITS: MeasurementUnitProfile[] = [
+  DEFAULT_MEASUREMENT_UNIT,
+  {
+    id: '6ef2d6c8-6b72-46c9-a633-8f43b2a1d5ef',
+    name: 'Килограмм',
+    company_id: DEFAULT_COMPANY_ID,
+    short_name: 'кг',
+    precision: '0.001',
+    is_editable: true,
+    is_default: false,
+  },
+  {
+    id: '62033f40-46f0-4ef8-b99c-45df3919e7b7',
+    name: 'Грамм',
+    company_id: DEFAULT_COMPANY_ID,
+    short_name: 'г',
+    precision: '1',
+    is_editable: true,
+    is_default: false,
+  },
+];
+
 const DEFAULT_PRICE_TAGS: PriceTagProfile[] = [
   {
     id: '157cb24e-4d81-4aee-a199-29a79c7e2617',
@@ -2070,11 +2092,11 @@ export class CompanySettingsService {
     if (measurementUnitCount === 0) {
       const measurementUnits = this.parseJsonArray<MeasurementUnitProfile>(
         process.env.MEASUREMENT_UNITS_JSON,
-        [DEFAULT_MEASUREMENT_UNIT],
+        DEFAULT_MEASUREMENT_UNITS,
       );
       await this.db.measurementUnitSetting.createMany({
         data: measurementUnits.map((unit) => ({
-          id: this.stringOrDefault(unit.id, randomUUID()),
+          id: this.resolveDefaultMeasurementUnitId(unit, companyId),
           companyId,
           name: this.stringOrDefault(
             unit.name,
@@ -2306,6 +2328,14 @@ export class CompanySettingsService {
 
   private stringOrDefault(value: unknown, fallback: string): string {
     return typeof value === 'string' ? value : fallback;
+  }
+
+  private resolveDefaultMeasurementUnitId(
+    unit: MeasurementUnitProfile,
+    companyId: string,
+  ) {
+    const unitId = this.stringOrDefault(unit.id, randomUUID());
+    return companyId === DEFAULT_COMPANY_ID ? unitId : `${companyId}:${unitId}`;
   }
 
   private objectOrDefault(
