@@ -32,7 +32,7 @@ export class RolesService {
     const isAdmin = this.optionalBoolean(body.is_admin) ?? false;
 
     await this.ensureRoleNameIsUnique(companyId, name);
-    const externalId = await this.getNextExternalId();
+    const externalId = await this.getNextExternalId(companyId);
 
     const role = await this.db.role.create({
       data: {
@@ -352,8 +352,11 @@ export class RolesService {
     }
   }
 
-  private async getNextExternalId() {
+  private async getNextExternalId(companyId: string) {
     const lastRole = await this.db.role.findFirst({
+      where: {
+        companyId,
+      },
       orderBy: {
         externalId: 'desc',
       },

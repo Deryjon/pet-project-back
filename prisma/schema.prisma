@@ -719,7 +719,7 @@ model Role {
   companyId    String
   name         String
   description  String           @default("")
-  externalId   Int              @unique
+  externalId   Int
   clientTypeId String           @default("")
   sessionId    String           @default("")
   isAdmin      Boolean          @default(false)
@@ -732,6 +732,7 @@ model Role {
   updatedAt    DateTime         @updatedAt
 
   @@unique([companyId, name])
+  @@unique([companyId, externalId])
 }
 
 model RolePermission {

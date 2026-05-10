@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { createDefaultCrmRolesForCompany } from '../roles/default-crm-roles';
 
 const DEFAULT_COMPANY_ROLES = [
   { code: 'owner', name: 'Owner', isSystem: true },
@@ -63,6 +64,8 @@ export class PlatformService {
           isActive: true,
         })),
       });
+
+      await createDefaultCrmRolesForCompany(tx, createdCompany.id);
 
       const planId = this.optionalString(body.plan_id ?? body.planId);
       if (planId) {
