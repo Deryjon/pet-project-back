@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  InternalServerErrorException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -928,7 +929,7 @@ export class SalesService {
             product.purchasePrice && product.purchasePrice > 0
               ? salePrice / product.purchasePrice
               : null,
-        },
+        } as any,
       });
     } else {
       await this.prisma.saleItem.create({
@@ -951,7 +952,7 @@ export class SalesService {
             product.purchasePrice && product.purchasePrice > 0
               ? salePrice / product.purchasePrice
               : null,
-        },
+        } as any,
       });
     }
 
@@ -1529,13 +1530,19 @@ export class SalesService {
       args.originalSale.companyId ?? null,
     );
 
-    return this.prisma.sale.findUnique({
+    const sale = await this.prisma.sale.findUnique({
       where: { id: createdSale.id },
       include: {
         user: true,
         items: true,
       },
     });
+
+    if (!sale) {
+      throw new InternalServerErrorException('Adjustment sale was not created');
+    }
+
+    return sale;
   }
 
   private async applyStockDelta(
