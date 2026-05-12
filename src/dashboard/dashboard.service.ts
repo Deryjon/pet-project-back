@@ -101,12 +101,7 @@ export class DashboardService {
       const actualEndDate = nextBucketStart ? new Date(nextBucketStart.getTime() - 1) : bucketEndDate;
 
       return { start_date: this.formatDateTime(bucketStart), end_date: this.formatDateTime(actualEndDate), total_price: 0 };
-    );
-    const bucketTotals = bucketStarts.map((bucketStart) => ({
-      start_date: this.formatDateTime(bucketStart),
-      end_date: '',
-      total_price: 0,
-    }));
+    });
     const shopOrders = bucketStarts.map((bucketStart) => {
       const row: Record<string, number | string> = {
         start_date: this.formatDateTime(bucketStart),
