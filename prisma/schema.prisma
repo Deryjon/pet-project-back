@@ -302,7 +302,7 @@ model Product {
   markupPercent    Float?
   salePrice        Float?
   discountPrice    Float?
-  quantity         Int               @default(0)
+  quantity         Float             @default(0)
   metadata         Json?
   categoryId       Int?
   brandId          Int?
@@ -630,7 +630,7 @@ model ProductStock {
   id            Int      @id @default(autoincrement())
   productId     Int
   branchCode    String
-  quantity      Int      @default(0)
+  quantity      Float    @default(0)
   purchasePrice Float?
   salePrice     Float?
   product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
@@ -680,7 +680,7 @@ model SaleItem {
   name      String
   barcode   String?
   sku       String?
-  quantity  Int
+  quantity  Float
   salePrice Float
   lineTotal Float
   retailPriceAtSale Float      @default(0)
@@ -719,7 +719,7 @@ model Role {
   companyId    String
   name         String
   description  String           @default("")
-  externalId   Int              @unique
+  externalId   Int
   clientTypeId String           @default("")
   sessionId    String           @default("")
   isAdmin      Boolean          @default(false)
@@ -732,6 +732,7 @@ model Role {
   updatedAt    DateTime         @updatedAt
 
   @@unique([companyId, name])
+  @@unique([companyId, externalId])
 }
 
 model RolePermission {

@@ -9,11 +9,97 @@ import {
 } from '@nestjs/common';
 import { ReportsService } from './reports.service';
 
+const versioned = (routes: string[]) =>
+  routes.flatMap((route) => [route, `v1/${route}`, `v2/${route}`]);
+
+const SUMMARY_REPORT_ROUTES = versioned([
+  'reports/summary',
+  'reports/shop/summary',
+  'reports/shop/transactions',
+  'reports/finances',
+  'reports/finances/summary',
+  'reports/finances/movements',
+  'reports/favorites',
+]);
+const SHOP_REPORT_ROUTES = versioned(['reports/shops', 'reports/shop']);
+const SHOP_DETAIL_REPORT_ROUTES = versioned([
+  'reports/shops/:shopId',
+  'reports/shop/:shopId',
+]);
+const PRODUCT_REPORT_ROUTES = versioned([
+  'reports/products',
+  'reports/products/summary',
+]);
+const PRODUCT_SALES_REPORT_ROUTES = versioned([
+  'reports/products/sales',
+  'reports/products/sold',
+]);
+const PRODUCT_EFFECTIVENESS_REPORT_ROUTES = versioned([
+  'reports/products/effectiveness',
+  'reports/products/efficiency',
+]);
+const PRODUCT_IMPORT_REPORT_ROUTES = versioned([
+  'reports/products/imports',
+  'reports/products/import',
+]);
+const PRODUCT_SUPPLIER_REPORT_ROUTES = versioned([
+  'reports/products/suppliers',
+  'reports/products/supplier',
+]);
+const PRODUCT_STOCK_REPORT_ROUTES = versioned([
+  'reports/products/stocks',
+  'reports/products/leftover',
+]);
+const INVENTORY_RESULT_REPORT_ROUTES = versioned([
+  'reports/products/inventory-results',
+  'reports/stocktaking',
+]);
+const ORDER_RETURN_REPORT_ROUTES = versioned([
+  'reports/products/order-returns',
+  'reports/supplier-order-return',
+]);
+const WRITE_OFF_REPORT_ROUTES = versioned([
+  'reports/products/write-offs',
+  'reports/writeoff',
+]);
+const ABC_ANALYSIS_REPORT_ROUTES = versioned([
+  'reports/products/abc-analysis',
+  'reports/abc-segmentation',
+]);
+const TRANSFER_REPORT_ROUTES = versioned([
+  'reports/products/transfers',
+  'reports/products/transfer',
+]);
+const SELLER_REPORT_ROUTES = versioned([
+  'reports/sellers',
+  'reports/report-seller',
+  'reports/sellers/products',
+]);
+const SELLER_SALES_REPORT_ROUTES = versioned([
+  'reports/seller-sales/:sellerId',
+  'reports/sellers/:sellerId/sales',
+]);
+const SELLER_DETAIL_REPORT_ROUTES = versioned(['reports/sellers/:sellerId']);
+const CUSTOMER_REPORT_ROUTES = versioned([
+  'reports/customers',
+  'reports/clients',
+  'reports/clients/summary',
+  'reports/clients/purchases',
+]);
+const SELLER_SALARY_SETTINGS_ROUTES = versioned([
+  'sellers/:sellerId/salary-settings',
+  'reports/sellers/:sellerId/salary-settings',
+]);
+const SELLER_SALARY_REPORT_ROUTES = versioned([
+  'sellers/:sellerId/salary-report',
+  'reports/sellers/:sellerId/salary-report',
+]);
+
 @Controller()
 export class ReportsController {
   constructor(private readonly reportsService: ReportsService) {}
 
-  @Get('reports/summary')
+  @Get(SUMMARY_REPORT_ROUTES)
   getSummary(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -21,7 +107,7 @@ export class ReportsController {
     return this.reportsService.getSummary(query, authorization);
   }
 
-  @Get('reports/shops')
+  @Get(SHOP_REPORT_ROUTES)
   getShops(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -29,7 +115,7 @@ export class ReportsController {
     return this.reportsService.getShops(query, authorization);
   }
 
-  @Get('reports/shops/:shopId')
+  @Get(SHOP_DETAIL_REPORT_ROUTES)
   getShopDetail(
     @Param('shopId') shopId: string,
     @Query() query: Record<string, string | undefined>,
@@ -38,7 +124,7 @@ export class ReportsController {
     return this.reportsService.getShopDetail(shopId, query, authorization);
   }
 
-  @Get('reports/products')
+  @Get(PRODUCT_REPORT_ROUTES)
   getProducts(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -46,7 +132,7 @@ export class ReportsController {
     return this.reportsService.getProducts(query, authorization);
   }
 
-  @Get('reports/products/sales')
+  @Get(PRODUCT_SALES_REPORT_ROUTES)
   getProductSales(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -54,7 +140,7 @@ export class ReportsController {
     return this.reportsService.getProductSales(query, authorization);
   }
 
-  @Get('reports/products/effectiveness')
+  @Get(PRODUCT_EFFECTIVENESS_REPORT_ROUTES)
   getProductEffectiveness(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -62,7 +148,7 @@ export class ReportsController {
     return this.reportsService.getProductEffectiveness(query, authorization);
   }
 
-  @Get('reports/products/imports')
+  @Get(PRODUCT_IMPORT_REPORT_ROUTES)
   getProductImports(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -70,7 +156,7 @@ export class ReportsController {
     return this.reportsService.getProductImports(query, authorization);
   }
 
-  @Get('reports/products/suppliers')
+  @Get(PRODUCT_SUPPLIER_REPORT_ROUTES)
   getProductSuppliers(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -78,7 +164,7 @@ export class ReportsController {
     return this.reportsService.getProductSuppliers(query, authorization);
   }
 
-  @Get('reports/products/stocks')
+  @Get(PRODUCT_STOCK_REPORT_ROUTES)
   getProductStocks(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -86,7 +172,7 @@ export class ReportsController {
     return this.reportsService.getProductStocks(query, authorization);
   }
 
-  @Get('reports/products/inventory-results')
+  @Get(INVENTORY_RESULT_REPORT_ROUTES)
   getInventoryResults(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -94,7 +180,7 @@ export class ReportsController {
     return this.reportsService.getInventoryResults(query, authorization);
   }
 
-  @Get('reports/products/order-returns')
+  @Get(ORDER_RETURN_REPORT_ROUTES)
   getOrderReturns(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -102,7 +188,7 @@ export class ReportsController {
     return this.reportsService.getOrderReturns(query, authorization);
   }
 
-  @Get('reports/products/write-offs')
+  @Get(WRITE_OFF_REPORT_ROUTES)
   getWriteOffs(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -110,7 +196,7 @@ export class ReportsController {
     return this.reportsService.getWriteOffs(query, authorization);
   }
 
-  @Get('reports/products/abc-analysis')
+  @Get(ABC_ANALYSIS_REPORT_ROUTES)
   getAbcAnalysis(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -118,7 +204,7 @@ export class ReportsController {
     return this.reportsService.getAbcAnalysis(query, authorization);
   }
 
-  @Get('reports/products/transfers')
+  @Get(TRANSFER_REPORT_ROUTES)
   getTransfers(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -126,7 +212,7 @@ export class ReportsController {
     return this.reportsService.getTransfers(query, authorization);
   }
 
-  @Get('reports/sellers')
+  @Get(SELLER_REPORT_ROUTES)
   getSellers(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -134,7 +220,7 @@ export class ReportsController {
     return this.reportsService.getSellers(query, authorization);
   }
 
-  @Get('reports/seller-sales/:sellerId')
+  @Get(SELLER_SALES_REPORT_ROUTES)
   getSellerSales(
     @Param('sellerId') sellerId: string,
     @Query() query: Record<string, string | undefined>,
@@ -143,7 +229,7 @@ export class ReportsController {
     return this.reportsService.getSellerSales(sellerId, query, authorization);
   }
 
-  @Get('reports/sellers/:sellerId')
+  @Get(SELLER_DETAIL_REPORT_ROUTES)
   getSellerDetail(
     @Param('sellerId') sellerId: string,
     @Query() query: Record<string, string | undefined>,
@@ -152,7 +238,7 @@ export class ReportsController {
     return this.reportsService.getSellerDetail(sellerId, query, authorization);
   }
 
-  @Get('reports/customers')
+  @Get(CUSTOMER_REPORT_ROUTES)
   getCustomers(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -160,7 +246,7 @@ export class ReportsController {
     return this.reportsService.getCustomers(query, authorization);
   }
 
-  @Get('sellers/:sellerId/salary-settings')
+  @Get(SELLER_SALARY_SETTINGS_ROUTES)
   getSellerSalarySettings(
     @Param('sellerId') sellerId: string,
     @Headers('authorization') authorization?: string,
@@ -168,7 +254,7 @@ export class ReportsController {
     return this.reportsService.getSellerSalarySettings(sellerId, authorization);
   }
 
-  @Put('sellers/:sellerId/salary-settings')
+  @Put(SELLER_SALARY_SETTINGS_ROUTES)
   updateSellerSalarySettings(
     @Param('sellerId') sellerId: string,
     @Body() body: Record<string, unknown>,
@@ -181,7 +267,7 @@ export class ReportsController {
     );
   }
 
-  @Get('sellers/:sellerId/salary-report')
+  @Get(SELLER_SALARY_REPORT_ROUTES)
   getSellerSalaryReport(
     @Param('sellerId') sellerId: string,
     @Query() query: Record<string, string | undefined>,

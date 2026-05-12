@@ -5,16 +5,20 @@ import { ReportFilterDto } from './dto/report-filter.dto';
 export class ReportsMapper {
   toFilterDto(raw: Record<string, unknown>): ReportFilterDto {
     return {
-      from: this.toOptionalString(raw.from),
-      to: this.toOptionalString(raw.to),
-      shopIds: this.toStringArray(raw.shopIds ?? raw.shopId),
-      sellerIds: this.toIntArray(raw.sellerIds ?? raw.sellerId),
-      productIds: this.toIntArray(raw.productIds ?? raw.productId),
-      categoryIds: this.toIntArray(raw.categoryIds ?? raw.categoryId),
-      supplierIds: this.toIntArray(raw.supplierIds ?? raw.supplierId),
-      brandIds: this.toIntArray(raw.brandIds ?? raw.brandId),
+      from: this.toOptionalString(
+        raw.from ?? raw.date_from ?? raw.dateFrom ?? raw.start_date ?? raw.startDate,
+      ),
+      to: this.toOptionalString(
+        raw.to ?? raw.date_to ?? raw.dateTo ?? raw.end_date ?? raw.endDate,
+      ),
+      shopIds: this.toStringArray(raw.shopIds ?? raw.shop_ids ?? raw.shopId ?? raw.shop_id),
+      sellerIds: this.toIntArray(raw.sellerIds ?? raw.seller_ids ?? raw.sellerId ?? raw.seller_id),
+      productIds: this.toIntArray(raw.productIds ?? raw.product_ids ?? raw.productId ?? raw.product_id),
+      categoryIds: this.toIntArray(raw.categoryIds ?? raw.category_ids ?? raw.categoryId ?? raw.category_id),
+      supplierIds: this.toIntArray(raw.supplierIds ?? raw.supplier_ids ?? raw.supplierId ?? raw.supplier_id),
+      brandIds: this.toIntArray(raw.brandIds ?? raw.brand_ids ?? raw.brandId ?? raw.brand_id),
       page: this.toPositiveInt(raw.page),
-      perPage: this.toPositiveInt(raw.perPage),
+      perPage: this.toPositiveInt(raw.perPage ?? raw.per_page ?? raw.limit ?? raw.page_size),
     };
   }
 

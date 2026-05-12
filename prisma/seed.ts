@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { createDefaultCrmRolesForCompany } from '../src/roles/default-crm-roles';
 
 const connectionString = process.env.DATABASE_URL;
 
@@ -119,6 +120,8 @@ async function main() {
       },
     });
   }
+
+  await createDefaultCrmRolesForCompany(prisma, company.id);
 
   const adminPhoneVariants = [adminPhone, `+${adminPhone}`];
   const existingPlatformAdmins = await prisma.user.findMany({

@@ -1613,7 +1613,7 @@ export class ProductsService {
     const purchasePrice = this.toNumber(body.purchase_price);
     const markupPercent = this.toNumber(body.markup_percent);
     const salePrice = this.toNumber(body.sale_price);
-    const quantity = this.toInt(body.quantity) ?? 0;
+    const quantity = this.toNumber(body.quantity) ?? 0;
     const metadataInput = this.toJsonFieldValue(body.metadata);
     const stocks = Array.isArray(body.stocks)
       ? this.filterStockPayloadByContext(body.stocks, context)
@@ -1657,7 +1657,7 @@ export class ProductsService {
       }
 
       return (
-        sum + (this.toInt((stock as Record<string, unknown>).quantity) ?? 0)
+        sum + (this.toNumber((stock as Record<string, unknown>).quantity) ?? 0)
       );
     }, 0);
 
@@ -1754,7 +1754,7 @@ export class ProductsService {
                 .map((stock) => ({
                   branchCode:
                     this.optionalString(stock.branch_code) ?? 'default_branch',
-                  quantity: this.toInt(stock.quantity) ?? 0,
+                  quantity: this.toNumber(stock.quantity) ?? 0,
                   purchasePrice:
                     this.toNumber(stock.purchase_price) ?? purchasePrice ?? 0,
                   salePrice: this.toNumber(stock.sale_price) ?? salePrice ?? 0,
@@ -2729,6 +2729,10 @@ export class ProductsService {
     const description = this.optionalString(metadata.description) ?? '';
     const freePrice = this.toBooleanValue(metadata.free_price);
     const isVariative = this.toBooleanValue(metadata.is_variative);
+    const selectedAttributes = Array.isArray(metadata.selected_attributes)
+      ? metadata.selected_attributes
+      : [];
+    const variants = Array.isArray(metadata.variants) ? metadata.variants : [];
     const totalMeasurementValue = product.stocks.reduce(
       (sum, stock) => sum + stock.quantity,
       0,
@@ -2882,7 +2886,7 @@ export class ProductsService {
       },
       has_expiration_date: false,
       packages: [],
-      product_attributes: [],
+      product_attributes: selectedAttributes,
       supplier_id: primarySupplier ? String(primarySupplier.id) : '',
       supplier_ids: product.suppliers.length
         ? product.suppliers.map((item) => String(item.supplier.id))
@@ -2928,7 +2932,7 @@ export class ProductsService {
             wholesale_price: 0,
           }))
         : null,
-      variations: [],
+      variations: variants,
       base_name: product.name,
       variation_id: '',
       free_price: freePrice,
@@ -2994,14 +2998,21 @@ export class ProductsService {
       product.salePrice ?? 0,
     );
     const shopFreePrices = this.extractShopFreePrices(body, shipments);
+    const measurementUnitId =
+      this.optionalString(body.measurement_unit_id) ?? DEFAULT_MEASUREMENT_UNIT.id;
     const measurementUnit = {
       ...DEFAULT_MEASUREMENT_UNIT,
+      id: measurementUnitId,
       company_id: COMPANY_ID,
-      is_default: true,
+      is_default: measurementUnitId === DEFAULT_MEASUREMENT_UNIT.id,
     };
     const productType = this.resolveProductType(body.product_type_id);
     const isVariative = this.toBooleanValue(body.is_variative);
     const measurementType = this.optionalString(body.measurement_type);
+    const selectedAttributes = this.extractSelectedAttributes(
+      body.selected_attributes,
+    );
+    const variants = this.extractVariants(body.variants);
     const supportsStock = !this.isServiceProductType(productType);
     const stockSummaries = shipments.map((shipment) => {
       const shop = this.resolveShopByBranchCode(
@@ -3114,7 +3125,7 @@ export class ProductsService {
         total_retail_price: totalRetailPrice,
         total_supply_price: totalSupplyPrice,
       },
-      product_attributes: [],
+      product_attributes: selectedAttributes,
       product_supplier_stock: supportsStock
         ? stockSummaries.map((item) => ({
             supplier_id: item.supplierId,
@@ -3191,7 +3202,7 @@ export class ProductsService {
       supply_price: product.purchasePrice ?? 0,
       updated_at: '',
       variation_id: '',
-      variations: null,
+      variations: variants,
       wholesale_price: 0,
     };
   }
@@ -3594,8 +3605,8 @@ export class ProductsService {
       .map((item) => {
         const shopId = this.extractShopIdentifier(item);
         const quantity =
-          this.toInt(item.measurement_value) ??
-          this.toInt(item.total_measurement_value) ??
+          this.toNumber(item.measurement_value) ??
+          this.toNumber(item.total_measurement_value) ??
           0;
 
         return {
@@ -3606,7 +3617,7 @@ export class ProductsService {
           supplierId: this.optionalString(item.supplier_id),
           hasTrigger: this.toBooleanValue(item.has_trigger),
           smallLeftMeasurementValue:
-            this.toInt(item.small_left_measurement_value) ?? 0,
+            this.toNumber(item.small_left_measurement_value) ?? 0,
         };
       })
       .filter((item) => item.shopId.length > 0);
@@ -3797,7 +3808,7 @@ export class ProductsService {
       }
 
       const item = row as Record<string, unknown>;
-      const quantity = this.toInt(item.quantity) ?? 0;
+      const quantity = this.toNumber(item.quantity) ?? 0;
       const supplyPrice = this.toNumber(item.supply_price) ?? 0;
       const retailPrice = this.toNumber(item.retail_price) ?? 0;
       const name = this.optionalString(item.name);

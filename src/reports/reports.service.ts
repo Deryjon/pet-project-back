@@ -749,7 +749,13 @@ export class ReportsService {
     query: Record<string, string | undefined>,
     context: any,
   ) {
-    const and: Record<string, unknown>[] = [{ status: 'paid' }];
+    const and: Record<string, unknown>[] = [
+      {
+        status: {
+          in: ['paid', 'returned'],
+        },
+      },
+    ];
     if (context?.companyId) {
       and.push({ companyId: context.companyId });
     }
@@ -757,8 +763,8 @@ export class ReportsService {
       and.push({ branchCode: { in: context.allowedBranchCodes } });
     }
 
-    const from = this.parseDate(query.from);
-    const to = this.parseDate(query.to);
+    const from = this.parseDate(this.firstQueryValue(query, 'from', 'date_from', 'dateFrom', 'start_date', 'startDate'));
+    const to = this.parseDate(this.firstQueryValue(query, 'to', 'date_to', 'dateTo', 'end_date', 'endDate'));
     if (from || to) {
       and.push({
         paidAt: {
@@ -768,7 +774,7 @@ export class ReportsService {
       });
     }
 
-    const shopId = query.shopId?.trim();
+    const shopId = this.firstQueryValue(query, 'shopId', 'shop_id')?.trim();
     if (shopId) {
       const shop = await this.db.shop.findFirst({
         where: {
@@ -779,15 +785,15 @@ export class ReportsService {
       and.push({ branchCode: shop?.branchCode ?? shopId });
     }
 
-    const sellerId = this.toInt(query.sellerId);
+    const sellerId = this.toInt(this.firstQueryValue(query, 'sellerId', 'seller_id'));
     if (sellerId) {
       and.push({ userId: sellerId });
     }
 
-    const productId = this.toInt(query.productId);
-    const categoryId = this.toInt(query.categoryId);
-    const brandId = this.toInt(query.brandId);
-    const supplierId = this.toInt(query.supplierId);
+    const productId = this.toInt(this.firstQueryValue(query, 'productId', 'product_id'));
+    const categoryId = this.toInt(this.firstQueryValue(query, 'categoryId', 'category_id'));
+    const brandId = this.toInt(this.firstQueryValue(query, 'brandId', 'brand_id'));
+    const supplierId = this.toInt(this.firstQueryValue(query, 'supplierId', 'supplier_id'));
     if (productId || categoryId || brandId || supplierId) {
       const productWhere: Record<string, unknown> = {};
       if (categoryId) {
@@ -835,22 +841,22 @@ export class ReportsService {
       and.push({ companyId: context.companyId });
     }
 
-    const productId = this.toInt(query.productId);
+    const productId = this.toInt(this.firstQueryValue(query, 'productId', 'product_id'));
     if (productId) {
       and.push({ id: productId });
     }
 
-    const categoryId = this.toInt(query.categoryId);
+    const categoryId = this.toInt(this.firstQueryValue(query, 'categoryId', 'category_id'));
     if (categoryId) {
       and.push({ categoryId });
     }
 
-    const brandId = this.toInt(query.brandId);
+    const brandId = this.toInt(this.firstQueryValue(query, 'brandId', 'brand_id'));
     if (brandId) {
       and.push({ brandId });
     }
 
-    const supplierId = this.toInt(query.supplierId);
+    const supplierId = this.toInt(this.firstQueryValue(query, 'supplierId', 'supplier_id'));
     if (supplierId) {
       and.push({
         suppliers: {
@@ -861,7 +867,7 @@ export class ReportsService {
       });
     }
 
-    const shopId = this.optionalString(query.shopId);
+    const shopId = this.optionalString(this.firstQueryValue(query, 'shopId', 'shop_id'));
     if (shopId) {
       const shop = await this.db.shop.findFirst({
         where: {
@@ -890,8 +896,8 @@ export class ReportsService {
       and.push({ companyId: context.companyId });
     }
 
-    const from = this.parseDate(query.from);
-    const to = this.parseDate(query.to);
+    const from = this.parseDate(this.firstQueryValue(query, 'from', 'date_from', 'dateFrom', 'start_date', 'startDate'));
+    const to = this.parseDate(this.firstQueryValue(query, 'to', 'date_to', 'dateTo', 'end_date', 'endDate'));
     if (from || to) {
       and.push({
         createdAt: {
@@ -901,17 +907,17 @@ export class ReportsService {
       });
     }
 
-    const movementType = this.optionalString(query.movementType);
+    const movementType = this.optionalString(this.firstQueryValue(query, 'movementType', 'movement_type'));
     if (movementType) {
       and.push({ type: movementType });
     }
 
-    const productId = this.toInt(query.productId);
+    const productId = this.toInt(this.firstQueryValue(query, 'productId', 'product_id'));
     if (productId) {
       and.push({ productId });
     }
 
-    const shopId = this.optionalString(query.shopId);
+    const shopId = this.optionalString(this.firstQueryValue(query, 'shopId', 'shop_id'));
     if (shopId) {
       const shop = await this.db.shop.findFirst({
         where: {
@@ -922,9 +928,9 @@ export class ReportsService {
       and.push({ shopId: shop?.id ?? shopId });
     }
 
-    const categoryId = this.toInt(query.categoryId);
-    const brandId = this.toInt(query.brandId);
-    const supplierId = this.toInt(query.supplierId);
+    const categoryId = this.toInt(this.firstQueryValue(query, 'categoryId', 'category_id'));
+    const brandId = this.toInt(this.firstQueryValue(query, 'brandId', 'brand_id'));
+    const supplierId = this.toInt(this.firstQueryValue(query, 'supplierId', 'supplier_id'));
     if (categoryId || brandId || supplierId) {
       and.push({
         product: {
@@ -1016,16 +1022,18 @@ export class ReportsService {
       exchanges_count: 0,
     };
     const transactions = new Set<number>();
+    const returnTransactions = new Set<number>();
+    const exchangeTransactions = new Set<number>();
     let totalSupply = 0;
 
     for (const row of rows) {
       const sign = row.sale_type === 'return' ? -1 : 1;
       transactions.add(Number(row.sale_id));
       if (row.sale_type === 'return') {
-        metrics.returns_count += 1;
+        returnTransactions.add(Number(row.sale_id));
       }
       if (row.sale_type === 'exchange') {
-        metrics.exchanges_count += 1;
+        exchangeTransactions.add(Number(row.sale_id));
       }
 
       const gross = Number(row.retail_price_at_sale ?? 0);
@@ -1044,6 +1052,8 @@ export class ReportsService {
     }
 
     metrics.transactions_count = transactions.size;
+    metrics.returns_count = returnTransactions.size;
+    metrics.exchanges_count = exchangeTransactions.size;
     metrics.average_cheque =
       metrics.transactions_count > 0
         ? metrics.net_gross_sales / metrics.transactions_count
@@ -1642,20 +1652,42 @@ export class ReportsService {
 
   private buildAppliedFilters(query: Record<string, string | undefined>) {
     return {
-      from: query.from,
-      to: query.to,
-      shopId: query.shopId,
-      sellerId: query.sellerId,
-      categoryId: query.categoryId,
-      productId: query.productId,
-      brandId: query.brandId,
-      supplierId: query.supplierId,
+      from: this.firstQueryValue(
+        query,
+        'from',
+        'date_from',
+        'dateFrom',
+        'start_date',
+        'startDate',
+      ),
+      to: this.firstQueryValue(
+        query,
+        'to',
+        'date_to',
+        'dateTo',
+        'end_date',
+        'endDate',
+      ),
+      shopId: this.firstQueryValue(query, 'shopId', 'shop_id'),
+      sellerId: this.firstQueryValue(query, 'sellerId', 'seller_id'),
+      categoryId: this.firstQueryValue(query, 'categoryId', 'category_id'),
+      productId: this.firstQueryValue(query, 'productId', 'product_id'),
+      brandId: this.firstQueryValue(query, 'brandId', 'brand_id'),
+      supplierId: this.firstQueryValue(query, 'supplierId', 'supplier_id'),
     };
   }
 
   private paginate<T>(items: T[], query: Record<string, string | undefined>) {
     const page = Math.max(1, this.toInt(query.page) ?? 1);
-    const perPage = Math.max(1, Math.min(200, this.toInt(query.perPage) ?? 50));
+    const perPage = Math.max(
+      1,
+      Math.min(
+        200,
+        this.toInt(
+          this.firstQueryValue(query, 'perPage', 'per_page', 'limit', 'page_size'),
+        ) ?? 50,
+      ),
+    );
     const total = items.length;
     const start = (page - 1) * perPage;
     return {
@@ -1700,6 +1732,20 @@ export class ReportsService {
     }
 
     return parsed;
+  }
+
+  private firstQueryValue(
+    query: Record<string, string | undefined>,
+    ...keys: string[]
+  ) {
+    for (const key of keys) {
+      const value = query[key];
+      if (typeof value === 'string' && value.trim().length > 0) {
+        return value;
+      }
+    }
+
+    return undefined;
   }
 
   private parseDate(value?: string) {

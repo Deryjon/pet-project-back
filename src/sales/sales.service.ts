@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  InternalServerErrorException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -872,7 +873,7 @@ export class SalesService {
   ) {
     const context = await this.getRequestContext(authorization);
     const productId = this.toInt(body.product_id);
-    const quantity = this.toInt(body.quantity) ?? 1;
+    const quantity = this.toNumber(body.quantity) ?? 1;
     const salePrice = this.toNumber(body.sale_price);
 
     if (!productId) {
@@ -928,7 +929,7 @@ export class SalesService {
             product.purchasePrice && product.purchasePrice > 0
               ? salePrice / product.purchasePrice
               : null,
-        },
+        } as any,
       });
     } else {
       await this.prisma.saleItem.create({
@@ -951,7 +952,7 @@ export class SalesService {
             product.purchasePrice && product.purchasePrice > 0
               ? salePrice / product.purchasePrice
               : null,
-        },
+        } as any,
       });
     }
 
@@ -1286,7 +1287,7 @@ export class SalesService {
 
       const record = rawItem as Record<string, unknown>;
       const productId = this.toInt(record.product_id) ?? this.toInt(record.id);
-      const quantity = this.toInt(record.quantity);
+      const quantity = this.toNumber(record.quantity);
 
       if (!productId || !quantity || quantity <= 0) {
         throw new BadRequestException(
@@ -1355,7 +1356,7 @@ export class SalesService {
 
       const record = rawItem as Record<string, unknown>;
       const productId = this.toInt(record.product_id) ?? this.toInt(record.id);
-      const quantity = this.toInt(record.quantity);
+      const quantity = this.toNumber(record.quantity);
 
       if (!productId || !quantity || quantity <= 0) {
         throw new BadRequestException(
@@ -1529,13 +1530,19 @@ export class SalesService {
       args.originalSale.companyId ?? null,
     );
 
-    return this.prisma.sale.findUnique({
+    const sale = await this.prisma.sale.findUnique({
       where: { id: createdSale.id },
       include: {
         user: true,
         items: true,
       },
     });
+
+    if (!sale) {
+      throw new InternalServerErrorException('Adjustment sale was not created');
+    }
+
+    return sale;
   }
 
   private async applyStockDelta(
