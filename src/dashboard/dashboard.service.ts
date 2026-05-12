@@ -4,6 +4,13 @@ import { CompanySettingsService } from '../company-settings/company-settings.ser
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 
+const granularityLabels: Record<string, string> = {
+  hour: 'по часам',
+  day: 'по дням',
+  week: 'по неделям',
+  month: 'по месяцам',
+};
+
 @Injectable()
 export class DashboardService {
   private dashboardSettingsStore = new Map<string, Record<string, unknown>>();
@@ -22,6 +29,7 @@ export class DashboardService {
       currency?: string;
       productGroupField?: string;
       productField?: string;
+      reportPeriod?: string;
     },
     authorization?: string,
   ) {
@@ -29,6 +37,7 @@ export class DashboardService {
       ? await this.usersService.getRequestContext(authorization)
       : null;
     const startDate = this.parseStartDate(query.startDate);
+    const reportPeriod = (query.reportPeriod ?? '').trim().toLowerCase();
     const detalization = (query.detalization ?? 'hour').trim().toLowerCase();
     const companyId = context?.companyId ?? undefined;
     const allowedBranchCodes = context?.allowedBranchCodes as string[] | undefined;
@@ -70,13 +79,28 @@ export class DashboardService {
       shops
         .filter((shop) => shop.branchCode)
         .map((shop) => [shop.branchCode, shop]),
-    );
+    ); 
     const currencyCode =
       query.currency?.trim() ||
       this.companySettingsService.getDefaultCurrencyIsoCode(companyId);
-    const bucketStarts = this.buildBuckets(startDate, detalization);
+    const bucketStarts = this.buildBuckets(startDate, detalization, endDate);
     const shopTotals = new Map<string, number>(
       shops.map((shop) => [shop.name, 0]),
+    );
+    const bucketTotals = bucketStarts.map((bucketStart, index) => {
+      const nextBucketStart = bucketStarts[index + 1];
+      let bucketEndDate = new Date(bucketStart);
+
+      // Calculate end_date for each bucket based on detalization
+      switch (detalization) {
+        case 'month': bucketEndDate.setMonth(bucketEndDate.getMonth() + 1); bucketEndDate.setDate(bucketEndDate.getDate() - 1); break;
+        case 'week': bucketEndDate.setDate(bucketEndDate.getDate() + 6); break;
+        case 'day': bucketEndDate.setDate(bucketEndDate.getDate()); break;
+        case 'hour': default: bucketEndDate.setHours(bucketEndDate.getHours()); break;
+      }
+      const actualEndDate = nextBucketStart ? new Date(nextBucketStart.getTime() - 1) : bucketEndDate;
+
+      return { start_date: this.formatDateTime(bucketStart), end_date: this.formatDateTime(actualEndDate), total_price: 0 };
     );
     const bucketTotals = bucketStarts.map((bucketStart) => ({
       start_date: this.formatDateTime(bucketStart),
@@ -238,6 +262,7 @@ export class DashboardService {
       currency: currencyCode,
       seller_field: query.sellerField ?? 'sales_sum',
       product_group_field: query.productGroupField ?? 'name',
+      granularity_label: granularityLabels[detalization] || granularityLabels.hour,
       product_field: query.productField ?? 'net_sales',
     };
   }
@@ -296,35 +321,66 @@ export class DashboardService {
     return date;
   }
 
-  private buildEndDate(startDate: Date, detalization: string) {
+  private buildEndDate(startDate: Date, detalization: string, reportPeriod?: string) {
     const endDate = new Date(startDate);
 
-    if (detalization === 'day') {
-      endDate.setDate(endDate.getDate() + 30);
+    // If reportPeriod is specified, it takes precedence for the overall duration
+    if (reportPeriod === 'year') {
+      endDate.setFullYear(startDate.getFullYear() + 1);
+      return endDate;
+    }
+    if (reportPeriod === 'month') {
+      endDate.setMonth(startDate.getMonth() + 1);
+      return endDate;
+    }
+    if (reportPeriod === 'week') {
+      endDate.setDate(startDate.getDate() + 7);
       return endDate;
     }
 
-    endDate.setDate(endDate.getDate() + 1);
+    // Default durations based on detalization if no reportPeriod
+    switch (detalization) {
+      case 'month':
+        endDate.setFullYear(startDate.getFullYear() + 1); // Default to a year for monthly view
+        break;
+      case 'week':
+        endDate.setMonth(startDate.getMonth() + 3); // Default to 3 months for weekly view
+        break;
+      case 'day':
+        endDate.setDate(startDate.getDate() + 30); // Default to 30 days
+        break;
+      case 'hour':
+      default:
+        endDate.setDate(startDate.getDate() + 1); // Default to 1 day for hourly view
+        break;
+    }
     return endDate;
   }
 
-  private buildBuckets(startDate: Date, detalization: string) {
+  private buildBuckets(startDate: Date, detalization: string, endDate: Date) {
     const buckets: Date[] = [];
+    let current = new Date(startDate);
 
-    if (detalization === 'day') {
-      for (let index = 0; index < 30; index += 1) {
-        const bucket = new Date(startDate);
-        bucket.setDate(startDate.getDate() + index);
-        buckets.push(bucket);
+    while (current < endDate) {
+      buckets.push(new Date(current)); // Push the start of the current bucket
+
+      switch (detalization) {
+        case 'month':
+          current.setMonth(current.getMonth() + 1);
+          break;
+        case 'week':
+          current.setDate(current.getDate() + 7);
+          break;
+        case 'day':
+          current.setDate(current.getDate() + 1);
+          break;
+        case 'hour':
+        default:
+          current.setHours(current.getHours() + 1);
+          break;
       }
-
-      return buckets;
-    }
-
-    for (let hour = 0; hour < 24; hour += 1) {
-      const bucket = new Date(startDate);
-      bucket.setHours(hour, 0, 0, 0);
-      buckets.push(bucket);
+      // Reset minutes, seconds, milliseconds to ensure clean bucket boundaries
+      current.setMinutes(0, 0, 0);
     }
 
     return buckets;
@@ -335,6 +391,17 @@ export class DashboardService {
     value: Date,
     detalization: string,
   ) {
+    // For hour and day, direct comparison of components is fine
+    if (detalization === 'hour') {
+      return bucketStarts.findIndex(
+        (bucketStart) =>
+          bucketStart.getFullYear() === value.getFullYear() &&
+          bucketStart.getMonth() === value.getMonth() &&
+          bucketStart.getDate() === value.getDate() &&
+          bucketStart.getHours() === value.getHours(),
+      );
+    }
+
     if (detalization === 'day') {
       return bucketStarts.findIndex(
         (bucketStart) =>
@@ -343,14 +410,19 @@ export class DashboardService {
           bucketStart.getDate() === value.getDate(),
       );
     }
+    
+    // For week and month, we need to check if the value falls within the bucket's range
+    // A bucket starts at `bucketStarts[i]` and ends just before `bucketStarts[i+1]`
+    for (let i = 0; i < bucketStarts.length; i++) {
+      const bucketStart = bucketStarts[i];
+      const nextBucketStart = bucketStarts[i + 1];
 
-    return bucketStarts.findIndex(
-      (bucketStart) =>
-        bucketStart.getFullYear() === value.getFullYear() &&
-        bucketStart.getMonth() === value.getMonth() &&
-        bucketStart.getDate() === value.getDate() &&
-        bucketStart.getHours() === value.getHours(),
-    );
+      if (value >= bucketStart && (!nextBucketStart || value < nextBucketStart)) {
+        return i;
+      }
+    }
+
+    return -1; // Not found
   }
 
   private formatDateTime(value: Date) {
