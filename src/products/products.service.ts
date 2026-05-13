@@ -410,6 +410,8 @@ type FindProductsArgs = {
   supplyPriceTo?: number;
   retailPriceFrom?: number;
   retailPriceTo?: number;
+  wholesalePriceFrom?: number;
+  wholesalePriceTo?: number;
   wholesalePrice?: number;
   freePrice?: boolean;
   brandIds?: string[];
@@ -1402,6 +1404,8 @@ export class ProductsService {
       supplyPriceTo,
       retailPriceFrom,
       retailPriceTo,
+      wholesalePriceFrom,
+      wholesalePriceTo,
       wholesalePrice,
       freePrice,
       brandIds,
@@ -1432,6 +1436,8 @@ export class ProductsService {
         supplyPriceTo,
         retailPriceFrom,
         retailPriceTo,
+        wholesalePriceFrom,
+        wholesalePriceTo,
         wholesalePrice,
         freePrice,
       ),
@@ -1532,6 +1538,8 @@ export class ProductsService {
       supplyPriceTo,
       retailPriceFrom,
       retailPriceTo,
+      wholesalePriceFrom,
+      wholesalePriceTo,
       wholesalePrice,
       freePrice,
     }: Omit<FindProductsArgs, 'page' | 'limit' | 'statistics' | 'order'>,
@@ -1557,6 +1565,8 @@ export class ProductsService {
         supplyPriceTo,
         retailPriceFrom,
         retailPriceTo,
+        wholesalePriceFrom,
+        wholesalePriceTo,
         wholesalePrice,
         freePrice,
       ),
@@ -3221,6 +3231,8 @@ export class ProductsService {
     supplyPriceTo?: number,
     retailPriceFrom?: number,
     retailPriceTo?: number,
+    wholesalePriceFrom?: number,
+    wholesalePriceTo?: number,
     wholesalePrice?: number,
     freePrice?: boolean,
   ): Prisma.ProductWhereInput | undefined {
@@ -3392,11 +3404,25 @@ export class ProductsService {
       });
     }
 
-    if (wholesalePrice !== undefined) {
+    if (
+      wholesalePriceFrom !== undefined ||
+      wholesalePriceTo !== undefined ||
+      wholesalePrice !== undefined
+    ) {
       and.push({
         metadata: {
           path: ['wholesale_price'],
-          equals: wholesalePrice,
+          ...(wholesalePriceFrom !== undefined
+            ? { gte: wholesalePriceFrom }
+            : {}),
+          ...(wholesalePriceTo !== undefined
+            ? { lte: wholesalePriceTo }
+            : {}),
+          ...(wholesalePriceFrom === undefined &&
+          wholesalePriceTo === undefined &&
+          wholesalePrice !== undefined
+            ? { equals: wholesalePrice }
+            : {}),
         },
       });
     }
