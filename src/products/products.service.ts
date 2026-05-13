@@ -3225,6 +3225,7 @@ export class ProductsService {
     freePrice?: boolean,
   ): Prisma.ProductWhereInput | undefined {
     const and: Prisma.ProductWhereInput[] = [];
+    const normalizedStatus = this.normalizeCatalogStatus(status);
 
     if (search) {
       and.push({
@@ -3276,15 +3277,30 @@ export class ProductsService {
       });
     }
 
-    if (status === 'active') {
+    if (normalizedStatus === 'active') {
       and.push({
-        quantity: {
-          gt: 0,
+        archivedAt: null,
+      });
+    }
+
+    if (normalizedStatus === 'inactive') {
+      and.push({
+        archivedAt: {
+          not: null,
         },
       });
     }
 
-    if (status === 'inactive') {
+    if (normalizedStatus === 'small_left') {
+      and.push({
+        quantity: {
+          gt: 0,
+          lte: 5,
+        },
+      });
+    }
+
+    if (normalizedStatus === 'zero_left') {
       and.push({
         quantity: {
           lte: 0,
@@ -3292,13 +3308,20 @@ export class ProductsService {
       });
     }
 
-    if (archivedList) {
+    if (
+      normalizedStatus !== 'active' &&
+      normalizedStatus !== 'inactive' &&
+      archivedList
+    ) {
       and.push({
         archivedAt: {
           not: null,
         },
       });
-    } else {
+    } else if (
+      normalizedStatus !== 'active' &&
+      normalizedStatus !== 'inactive'
+    ) {
       and.push({
         archivedAt: null,
       });
@@ -3392,6 +3415,33 @@ export class ProductsService {
     }
 
     return and.length === 1 ? and[0] : { AND: and };
+  }
+
+  private normalizeCatalogStatus(
+    status?: string,
+  ): 'active' | 'inactive' | 'small_left' | 'zero_left' | undefined {
+    const normalized = status?.trim().toLowerCase();
+
+    switch (normalized) {
+      case '1':
+      case 'active':
+        return 'active';
+      case '0':
+      case 'inactive':
+        return 'inactive';
+      case 'small_left':
+      case 'small-left':
+      case 'low_stock':
+      case 'low-stock':
+        return 'small_left';
+      case 'zero_left':
+      case 'zero-left':
+      case 'zero_stock':
+      case 'zero-stock':
+        return 'zero_left';
+      default:
+        return undefined;
+    }
   }
 
   private buildProductOrderBy(
