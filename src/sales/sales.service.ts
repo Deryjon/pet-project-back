@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -779,7 +780,12 @@ export class SalesService {
         undefined,
     });
 
-    await this.applyStockDelta(originalSale.branchCode, returnItems, 1);
+    await this.applyStockDelta(originalSale.branchCode, returnItems, 1, {
+      companyId: originalSale.companyId,
+      userId: sellerId ?? originalSale.userId,
+      externalId: returnSale.number,
+      movementType: 'RETURN',
+    });
     await this.syncProductsQuantity(returnItems);
     await this.refreshBaseSaleStatus(originalSale.id);
 
@@ -841,8 +847,18 @@ export class SalesService {
         undefined,
     });
 
-    await this.applyStockDelta(originalSale.branchCode, returnItems, 1);
-    await this.applyStockDelta(originalSale.branchCode, exchangeItems, -1);
+    await this.applyStockDelta(originalSale.branchCode, returnItems, 1, {
+      companyId: originalSale.companyId,
+      userId: sellerId ?? originalSale.userId,
+      externalId: returnSale.number,
+      movementType: 'RETURN',
+    });
+    await this.applyStockDelta(originalSale.branchCode, exchangeItems, -1, {
+      companyId: originalSale.companyId,
+      userId: sellerId ?? originalSale.userId,
+      externalId: exchangeSale.number,
+      movementType: 'SALE',
+    });
     await this.syncProductsQuantity([...returnItems, ...exchangeItems]);
     await this.refreshBaseSaleStatus(originalSale.id);
 
@@ -1549,10 +1565,20 @@ export class SalesService {
     branchCode: string | null,
     items: Array<{ productId: number; quantity: number; salePrice: number }>,
     multiplier: 1 | -1,
+    meta?: {
+      companyId?: string | null;
+      userId?: number | null;
+      externalId?: string | null;
+      movementType?: 'SALE' | 'RETURN';
+    },
   ) {
     if (!branchCode) {
       return;
     }
+    const shopId = await this.resolveShopIdForBranchCode(
+      branchCode,
+      meta?.companyId ?? null,
+    );
 
     for (const item of items) {
       const stock = await this.prisma.productStock.findFirst({
@@ -1563,15 +1589,40 @@ export class SalesService {
       });
 
       if (stock) {
+        const beforeQuantity = stock.quantity;
+        const afterQuantity = stock.quantity + item.quantity * multiplier;
         await this.prisma.productStock.update({
           where: { id: stock.id },
           data: {
-            quantity: stock.quantity + item.quantity * multiplier,
+            quantity: afterQuantity,
           },
         });
+
+        if (shopId && meta?.companyId && meta?.userId && meta?.movementType) {
+          await this.createStockMovement(this.prisma, {
+            companyId: meta.companyId,
+            shopId,
+            productId: item.productId,
+            type: meta.movementType,
+            quantity: item.quantity,
+            beforeQuantity,
+            afterQuantity,
+            createdById: meta.userId,
+            externalId: meta.externalId ?? '',
+            supplyPrice: stock.purchasePrice ?? 0,
+            retailPrice: item.salePrice,
+            newRetailPrice: item.salePrice,
+            fromRetailPrice: stock.salePrice ?? 0,
+            fromSupplyPrice: stock.purchasePrice ?? 0,
+          });
+        }
       } else {
         const product = await this.prisma.product.findUnique({
           where: { id: item.productId },
+          select: {
+            purchasePrice: true,
+            salePrice: true,
+          },
         });
 
         await this.prisma.productStock.create({
@@ -1583,6 +1634,25 @@ export class SalesService {
             salePrice: item.salePrice,
           },
         });
+
+        if (shopId && meta?.companyId && meta?.userId && meta?.movementType) {
+          await this.createStockMovement(this.prisma, {
+            companyId: meta.companyId,
+            shopId,
+            productId: item.productId,
+            type: meta.movementType,
+            quantity: item.quantity,
+            beforeQuantity: 0,
+            afterQuantity: item.quantity * multiplier,
+            createdById: meta.userId,
+            externalId: meta.externalId ?? '',
+            supplyPrice: product?.purchasePrice ?? 0,
+            retailPrice: item.salePrice,
+            newRetailPrice: item.salePrice,
+            fromRetailPrice: product?.salePrice ?? 0,
+            fromSupplyPrice: product?.purchasePrice ?? 0,
+          });
+        }
       }
     }
   }
@@ -1612,6 +1682,81 @@ export class SalesService {
         },
       });
     }
+  }
+
+  private async resolveShopIdForBranchCode(
+    branchCode: string,
+    companyId?: string | null,
+  ) {
+    const shop = await this.prisma.shop.findFirst({
+      where: {
+        branchCode,
+        ...(companyId ? { companyId } : {}),
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    return shop?.id ?? null;
+  }
+
+  private getMovementDisplay(
+    type: 'SALE' | 'RETURN',
+  ): { code: string; label: string } {
+    switch (type) {
+      case 'RETURN':
+        return { code: 'return', label: 'Возврат' };
+      case 'SALE':
+      default:
+        return { code: 'sale', label: 'Продажа' };
+    }
+  }
+
+  private async createStockMovement(
+    tx: Prisma.TransactionClient | PrismaService,
+    input: {
+      companyId: string;
+      shopId: string;
+      productId: number;
+      type: 'SALE' | 'RETURN';
+      quantity: number;
+      beforeQuantity: number;
+      afterQuantity: number;
+      createdById: number;
+      externalId: string;
+      supplyPrice: number;
+      retailPrice: number;
+      newRetailPrice: number;
+      fromRetailPrice: number;
+      fromSupplyPrice: number;
+    },
+  ) {
+    const display = this.getMovementDisplay(input.type);
+
+    await tx.stockMovement.create({
+      data: {
+        companyId: input.companyId,
+        shopId: input.shopId,
+        productId: input.productId,
+        type: input.type,
+        displayTypeCode: display.code,
+        displayTypeLabel: display.label,
+        externalId: input.externalId,
+        quantity: input.quantity,
+        loadedMeasurementValue: input.afterQuantity,
+        beforeQuantity: input.beforeQuantity,
+        afterQuantity: input.afterQuantity,
+        fromShopId: input.shopId,
+        toShopId: input.shopId,
+        supplyPrice: input.supplyPrice,
+        retailPrice: input.retailPrice,
+        newRetailPrice: input.newRetailPrice,
+        fromRetailPrice: input.fromRetailPrice,
+        fromSupplyPrice: input.fromSupplyPrice,
+        createdById: input.createdById,
+      },
+    });
   }
 
   private async refreshBaseSaleStatus(saleId: number) {
@@ -1808,6 +1953,10 @@ export class SalesService {
 
   private async writeOffSaleItemsFromStock(
     sale: {
+      id: number;
+      number: string;
+      companyId?: string | null;
+      userId?: number | null;
       branchCode: string | null;
       items: {
         productId: number | null;
@@ -1819,6 +1968,13 @@ export class SalesService {
   ) {
     const branchCode = branchCodeOverride ?? sale.branchCode;
     if (!branchCode) {
+      return;
+    }
+    const shopId = await this.resolveShopIdForBranchCode(
+      branchCode,
+      sale.companyId ?? null,
+    );
+    if (!shopId || !sale.companyId || !sale.userId) {
       return;
     }
 
@@ -1848,6 +2004,8 @@ export class SalesService {
         });
 
         if (stock) {
+          const beforeQuantity = stock.quantity;
+          const afterQuantity = stock.quantity - item.quantity;
           await tx.productStock.update({
             where: { id: stock.id },
             data: {
@@ -1856,6 +2014,23 @@ export class SalesService {
               },
             },
           });
+
+          await this.createStockMovement(tx, {
+            companyId: sale.companyId,
+            shopId,
+            productId: item.productId,
+            type: 'SALE',
+            quantity: item.quantity,
+            beforeQuantity,
+            afterQuantity,
+            createdById: sale.userId,
+            externalId: sale.number,
+            supplyPrice: stock.purchasePrice ?? 0,
+            retailPrice: item.salePrice,
+            newRetailPrice: item.salePrice,
+            fromRetailPrice: stock.salePrice ?? 0,
+            fromSupplyPrice: stock.purchasePrice ?? 0,
+          });
           continue;
         }
 
@@ -1863,6 +2038,7 @@ export class SalesService {
           where: { id: item.productId },
           select: {
             purchasePrice: true,
+            salePrice: true,
           },
         });
 
@@ -1874,6 +2050,23 @@ export class SalesService {
             purchasePrice: product?.purchasePrice ?? 0,
             salePrice: item.salePrice,
           },
+        });
+
+        await this.createStockMovement(tx, {
+          companyId: sale.companyId,
+          shopId,
+          productId: item.productId,
+          type: 'SALE',
+          quantity: item.quantity,
+          beforeQuantity: 0,
+          afterQuantity: -item.quantity,
+          createdById: sale.userId,
+          externalId: sale.number,
+          supplyPrice: product?.purchasePrice ?? 0,
+          retailPrice: item.salePrice,
+          newRetailPrice: item.salePrice,
+          fromRetailPrice: product?.salePrice ?? 0,
+          fromSupplyPrice: product?.purchasePrice ?? 0,
         });
       }
 
@@ -1896,6 +2089,10 @@ export class SalesService {
   }
 
   private async restoreSaleStock(sale: {
+    id?: number;
+    number?: string;
+    companyId?: string | null;
+    userId?: number | null;
     branchCode: string | null;
     items: Array<{
       productId: number | null;
@@ -1908,6 +2105,13 @@ export class SalesService {
   }) {
     const branchCode = sale.branchCode;
     if (!branchCode) {
+      return;
+    }
+    const shopId = await this.resolveShopIdForBranchCode(
+      branchCode,
+      sale.companyId ?? null,
+    );
+    if (!shopId || !sale.companyId || !sale.userId) {
       return;
     }
 
@@ -1937,6 +2141,8 @@ export class SalesService {
         });
 
         if (stock) {
+          const beforeQuantity = stock.quantity;
+          const afterQuantity = stock.quantity + item.quantity;
           await tx.productStock.update({
             where: { id: stock.id },
             data: {
@@ -1945,6 +2151,23 @@ export class SalesService {
               },
             },
           });
+
+          await this.createStockMovement(tx, {
+            companyId: sale.companyId,
+            shopId,
+            productId: item.productId,
+            type: 'RETURN',
+            quantity: item.quantity,
+            beforeQuantity,
+            afterQuantity,
+            createdById: sale.userId,
+            externalId: sale.number ?? '',
+            supplyPrice: stock.purchasePrice ?? 0,
+            retailPrice: item.salePrice,
+            newRetailPrice: item.salePrice,
+            fromRetailPrice: stock.salePrice ?? 0,
+            fromSupplyPrice: stock.purchasePrice ?? 0,
+          });
           continue;
         }
 
@@ -1952,6 +2175,7 @@ export class SalesService {
           where: { id: item.productId },
           select: {
             purchasePrice: true,
+            salePrice: true,
           },
         });
 
@@ -1963,6 +2187,25 @@ export class SalesService {
             purchasePrice: item.product?.purchasePrice ?? product?.purchasePrice ?? 0,
             salePrice: item.salePrice,
           },
+        });
+
+        await this.createStockMovement(tx, {
+          companyId: sale.companyId,
+          shopId,
+          productId: item.productId,
+          type: 'RETURN',
+          quantity: item.quantity,
+          beforeQuantity: 0,
+          afterQuantity: item.quantity,
+          createdById: sale.userId,
+          externalId: sale.number ?? '',
+          supplyPrice:
+            item.product?.purchasePrice ?? product?.purchasePrice ?? 0,
+          retailPrice: item.salePrice,
+          newRetailPrice: item.salePrice,
+          fromRetailPrice: product?.salePrice ?? 0,
+          fromSupplyPrice:
+            item.product?.purchasePrice ?? product?.purchasePrice ?? 0,
         });
       }
 
