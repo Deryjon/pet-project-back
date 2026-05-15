@@ -2348,6 +2348,8 @@ export class ProductsService {
       page: number;
       fromCreatedAt?: string;
       toCreatedAt?: string;
+      movementType?: string;
+      shopId?: string;
     },
     authorization?: string,
   ) {
@@ -2370,36 +2372,75 @@ export class ProductsService {
       product.stocks,
       context?.allowedBranchCodes,
     );
-    const salesSummary = await this.buildProductSalesSummary(
-      product.id,
-      context,
-      {
-        fromCreatedAt: query.fromCreatedAt,
-        toCreatedAt: query.toCreatedAt,
-      },
-    );
     const safeLimit = Math.max(1, Math.trunc(query.limit || 10));
     const safePage = Math.max(1, Math.trunc(query.page || 1));
-    const startIndex = (safePage - 1) * safeLimit;
-    const pagedMovements = salesSummary.movements.slice(
-      startIndex,
-      startIndex + safeLimit,
+    const movementWhere = await this.buildProductMovementWhere(
+      product.id,
+      query,
+      context,
     );
+    const [count, stockMovements] = await this.prisma.$transaction([
+      this.prisma.stockMovement.count({
+        where: movementWhere,
+      }),
+      this.prisma.stockMovement.findMany({
+        where: movementWhere,
+        include: {
+          shop: {
+            select: {
+              id: true,
+              name: true,
+              branchCode: true,
+            },
+          },
+          createdBy: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+            },
+          },
+          order: {
+            select: {
+              id: true,
+              orderNumber: true,
+              orderType: true,
+              status: true,
+              createdAt: true,
+            },
+          },
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
+        skip: (safePage - 1) * safeLimit,
+        take: safeLimit,
+      }),
+    ]);
+    const movementStats = await this.prisma.stockMovement.findMany({
+      where: movementWhere,
+      select: {
+        type: true,
+        quantity: true,
+      },
+    });
+    const pagedMovements = stockMovements.map((movement) =>
+      this.toLegacyProductMovementItem(movement),
+    );
+    const stats = this.buildProductMovementStats(movementStats);
 
     return {
       total_measurement_value: visibleStocks.reduce(
         (sum, stock) => sum + stock.quantity,
         0,
       ),
-      imported:
-        visibleStocks.reduce((sum, stock) => sum + stock.quantity, 0) +
-        salesSummary.sold,
-      sold: salesSummary.sold,
-      transfer_arrived: 0,
+      imported: stats.imported,
+      sold: stats.sold,
+      transfer_arrived: stats.transferArrived,
       transfer_returned: 0,
-      transfered: 0,
-      written_off: 0,
-      count: salesSummary.movements.length,
+      transfered: stats.transferred,
+      written_off: stats.writtenOff,
+      count,
       movements: pagedMovements,
       supply_price_history: null,
       accepted_order: 0,
@@ -4820,6 +4861,264 @@ export class ProductsService {
     };
   }
 
+  private async buildProductMovementWhere(
+    productId: number,
+    query: {
+      fromCreatedAt?: string;
+      toCreatedAt?: string;
+      movementType?: string;
+      shopId?: string;
+    },
+    context: any,
+  ): Promise<Prisma.StockMovementWhereInput> {
+    const and: Prisma.StockMovementWhereInput[] = [{ productId }];
+    const createdAt = this.buildCreatedAtFilter(
+      query.fromCreatedAt,
+      query.toCreatedAt,
+    );
+
+    if (context?.companyId) {
+      and.push({ companyId: context.companyId });
+    }
+
+    if (createdAt) {
+      and.push({ createdAt });
+    }
+
+    const normalizedMovementType = this.normalizeProductMovementType(
+      query.movementType,
+    );
+    if (normalizedMovementType) {
+      and.push({ type: normalizedMovementType });
+    }
+
+    const resolvedShopIds = await this.resolveMovementShopFilter(
+      query.shopId,
+      context,
+    );
+    if (resolvedShopIds?.length) {
+      and.push({
+        shopId: {
+          in: resolvedShopIds,
+        },
+      });
+    } else if (context?.userType === 'company' && context.allowedShopIds?.length) {
+      and.push({
+        shopId: {
+          in: context.allowedShopIds,
+        },
+      });
+    }
+
+    return and.length === 1 ? and[0] : { AND: and };
+  }
+
+  private normalizeProductMovementType(value?: string) {
+    const normalized = value?.trim().toUpperCase();
+    if (!normalized) {
+      return undefined;
+    }
+
+    const supportedTypes = new Set([
+      'SALE',
+      'RETURN',
+      'WRITE_OFF',
+      'PURCHASE',
+      'TRANSFER',
+    ]);
+
+    return supportedTypes.has(normalized)
+      ? (normalized as
+          | 'SALE'
+          | 'RETURN'
+          | 'WRITE_OFF'
+          | 'PURCHASE'
+          | 'TRANSFER')
+      : undefined;
+  }
+
+  private async resolveMovementShopFilter(shopId: string | undefined, context: any) {
+    const normalizedShopId = shopId?.trim();
+    if (!normalizedShopId) {
+      return undefined;
+    }
+
+    const shops = await this.prisma.shop.findMany({
+      where: {
+        ...(context?.companyId ? { companyId: context.companyId } : {}),
+        OR: [{ id: normalizedShopId }, { branchCode: normalizedShopId }],
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    const resolvedShopIds = shops.map((shop) => shop.id);
+    if (!resolvedShopIds.length) {
+      return [normalizedShopId];
+    }
+
+    if (context?.userType !== 'company') {
+      return resolvedShopIds;
+    }
+
+    return resolvedShopIds.filter((id) => context.allowedShopIds.includes(id));
+  }
+
+  private toLegacyProductMovementItem(
+    movement: {
+      id: string;
+      type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER';
+      quantity: Prisma.Decimal | number;
+      beforeQuantity: Prisma.Decimal | number;
+      afterQuantity: Prisma.Decimal | number;
+      createdAt: Date;
+      shop?: {
+        id: string;
+        name: string;
+        branchCode: string;
+      } | null;
+      createdBy?: {
+        id: number;
+        firstName: string | null;
+        lastName: string | null;
+      } | null;
+      order?: {
+        id: string;
+        orderNumber: string;
+        orderType: string;
+        status: string;
+        createdAt: Date;
+      } | null;
+    },
+  ) {
+    const afterQuantity = Number(movement.afterQuantity ?? 0);
+
+    return {
+      internal_id: 0,
+      id: movement.id,
+      type: this.mapProductMovementTypeToCode(
+        movement.type,
+        movement.order?.orderType,
+        movement.order?.status,
+      ),
+      type_label: this.mapProductMovementTypeToLegacyType(
+        movement.type,
+        movement.order?.orderType,
+        movement.order?.status,
+      ),
+      created_at: this.formatDateTime(movement.createdAt),
+      external_id: movement.order?.orderNumber ?? '',
+      measurement_value: Number(movement.quantity ?? 0),
+      loaded_measurement_value: afterQuantity,
+      from_shop: movement.shop?.id ?? '',
+      to_shop: movement.shop?.id ?? '',
+      supply_price: 0,
+      retail_price: 0,
+      new_retail_price: 0,
+      from_retail_price: 0,
+      from_supply_price: 0,
+    };
+  }
+
+  private mapProductMovementTypeToCode(
+    type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER',
+    orderType?: string,
+    orderStatus?: string,
+  ) {
+    switch (type) {
+      case 'RETURN':
+        return 'return';
+      case 'PURCHASE':
+        return 'import';
+      case 'WRITE_OFF':
+        return 'write_off';
+      case 'TRANSFER':
+        return 'transfer';
+      case 'SALE':
+        if (orderType === 'RETURN' || orderStatus === 'RETURNED') {
+          return 'return';
+        }
+        if (orderStatus === 'PARKED') {
+          return 'parked';
+        }
+        if (orderStatus === 'DRAFT') {
+          return 'order';
+        }
+        return 'sale';
+    }
+  }
+
+  private mapProductMovementTypeToLegacyType(
+    type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER',
+    orderType?: string,
+    orderStatus?: string,
+  ) {
+    switch (type) {
+      case 'RETURN':
+        return 'Возврат';
+      case 'PURCHASE':
+        return 'Импорт';
+      case 'WRITE_OFF':
+        return 'Списание';
+      case 'TRANSFER':
+        return 'Трансфер';
+      case 'SALE':
+        if (orderType === 'RETURN' || orderStatus === 'RETURNED') {
+          return 'Возврат';
+        }
+        if (orderStatus === 'PARKED') {
+          return 'Отложка';
+        }
+        if (orderStatus === 'DRAFT') {
+          return 'Заказ';
+        }
+        return 'Продажа';
+    }
+  }
+
+  private buildProductMovementStats(
+    movements: Array<{
+      type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER';
+      quantity: Prisma.Decimal | number;
+    }>,
+  ) {
+    return movements.reduce(
+      (acc, movement) => {
+        const quantity = Number(movement.quantity ?? 0);
+
+        switch (movement.type) {
+          case 'SALE':
+            acc.sold += quantity;
+            break;
+          case 'RETURN':
+            acc.returned += quantity;
+            break;
+          case 'WRITE_OFF':
+            acc.writtenOff += quantity;
+            break;
+          case 'PURCHASE':
+            acc.imported += quantity;
+            break;
+          case 'TRANSFER':
+            acc.transferred += quantity;
+            acc.transferArrived += quantity;
+            break;
+        }
+
+        return acc;
+      },
+      {
+        imported: 0,
+        sold: 0,
+        returned: 0,
+        transferArrived: 0,
+        transferred: 0,
+        writtenOff: 0,
+      },
+    );
+  }
+
   private parseDateBoundary(value: string | undefined, field: string) {
     const normalized = value?.trim();
     if (!normalized) {
@@ -5841,3 +6140,4 @@ export class ProductsService {
     return undefined;
   }
 }
+

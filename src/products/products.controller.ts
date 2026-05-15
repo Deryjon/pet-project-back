@@ -383,6 +383,8 @@ export class ProductsController {
     @Query('page') page?: string,
     @Query('from_created_at') fromCreatedAt?: string,
     @Query('to_created_at') toCreatedAt?: string,
+    @Query('movement_type') movementType?: string,
+    @Query('shop_id') shopId?: string,
     @Headers('authorization') authorization?: string,
   ) {
     return this.productsService.getProductMovement(
@@ -392,6 +394,8 @@ export class ProductsController {
         page: Number(page) || 1,
         fromCreatedAt: fromCreatedAt?.trim(),
         toCreatedAt: toCreatedAt?.trim(),
+        movementType: movementType?.trim(),
+        shopId: shopId?.trim(),
       },
       authorization,
     );
