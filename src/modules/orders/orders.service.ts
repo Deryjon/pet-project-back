@@ -431,6 +431,9 @@ export class OrdersService {
 
         const beforeQuantity = new Prisma.Decimal(stock.quantity);
         const afterQuantity = beforeQuantity.minus(quantity);
+        const supplyPrice = stock.purchasePrice ?? 0;
+        const retailPrice = Number(item.price ?? stock.salePrice ?? 0);
+        const fromRetailPrice = stock.salePrice ?? 0;
 
         await tx.productStock.update({
           where: {
@@ -450,9 +453,20 @@ export class OrdersService {
             productId: item.productId,
             orderId: order.id,
             type: 'SALE',
+            displayTypeCode: 'sale',
+            displayTypeLabel: 'Продажа',
+            externalId: order.orderNumber,
             quantity: item.quantity,
+            loadedMeasurementValue: afterQuantity,
             beforeQuantity,
             afterQuantity,
+            fromShopId: order.shopId,
+            toShopId: order.shopId,
+            supplyPrice,
+            retailPrice,
+            newRetailPrice: retailPrice,
+            fromRetailPrice,
+            fromSupplyPrice: supplyPrice,
             createdById: context.userId,
           },
         });

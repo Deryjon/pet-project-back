@@ -4,7 +4,6 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 enum UserType {
@@ -117,6 +116,7 @@ model Shop {
   cashboxes      Cashbox[]
   orders         Order[]
   stockMovements StockMovement[]
+  supplyPriceHistory ProductSupplyPriceHistory[]
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
@@ -153,6 +153,7 @@ model User {
   soldSaleItems      SaleItem[]           @relation("SaleItemSeller")
   orders             Order[]
   stockMovements     StockMovement[]
+  supplyPriceHistory ProductSupplyPriceHistory[]
   auditLogs          AuditLog[]
   createdPayments    Payment[]           @relation("PaymentCreatedBy")
   platformActionLogs PlatformActionLog[]
@@ -317,6 +318,7 @@ model Product {
   saleItems        SaleItem[]
   orderItems       OrderItem[]
   stockMovements   StockMovement[]
+  supplyPriceHistory ProductSupplyPriceHistory[]
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -581,9 +583,20 @@ model StockMovement {
   productId      Int
   orderId        String?
   type           StockMovementType
+  displayTypeCode String           @default("")
+  displayTypeLabel String          @default("")
+  externalId     String            @default("")
   quantity       Decimal           @db.Decimal(12, 3)
+  loadedMeasurementValue Decimal   @default(0) @db.Decimal(12, 3)
   beforeQuantity Decimal           @db.Decimal(12, 3)
   afterQuantity  Decimal           @db.Decimal(12, 3)
+  fromShopId     String            @default("")
+  toShopId       String            @default("")
+  supplyPrice    Decimal           @default(0) @db.Decimal(12, 2)
+  retailPrice    Decimal           @default(0) @db.Decimal(12, 2)
+  newRetailPrice Decimal           @default(0) @db.Decimal(12, 2)
+  fromRetailPrice Decimal          @default(0) @db.Decimal(12, 2)
+  fromSupplyPrice Decimal          @default(0) @db.Decimal(12, 2)
   createdById    Int
   company        Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
   shop           Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
@@ -596,6 +609,23 @@ model StockMovement {
   @@index([shopId])
   @@index([productId])
   @@index([orderId])
+}
+
+model ProductSupplyPriceHistory {
+  id            String   @id @default(uuid())
+  productId      Int
+  shopId         String
+  supplyPrice    Decimal  @db.Decimal(12, 2)
+  supplyCurrency String   @default("")
+  oldSupplyPrice Decimal  @default(0) @db.Decimal(12, 2)
+  createdById    Int?
+  product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  shop           Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdBy      User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt      DateTime @default(now())
+
+  @@index([productId, createdAt])
+  @@index([shopId, createdAt])
 }
 
 model AuditLog {

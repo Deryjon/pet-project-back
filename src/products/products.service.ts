@@ -862,8 +862,10 @@ export class ProductsService {
     const result = await this.applyImportRows(
       rows,
       companyId,
+      shopId,
       branchCode,
       onMatchPolicy,
+      writeContext.userId,
     );
 
     IMPORT_SESSIONS.set(importId, {
@@ -922,8 +924,10 @@ export class ProductsService {
           .filter((item) => item.action !== 'error')
           .map((item) => item.raw),
         session.companyId,
+        session.shopId,
         session.branchCode,
         session.onMatchPolicy,
+        writeContext.userId,
       );
       session.result = {
         ...result,
@@ -2424,6 +2428,50 @@ export class ProductsService {
         quantity: true,
       },
     });
+    const supplyPriceHistory = await this.prisma.productSupplyPriceHistory.findMany({
+      where: {
+        productId: product.id,
+        ...(context?.userType === 'company' && context.allowedShopIds?.length
+          ? {
+              shopId: {
+                in: context.allowedShopIds,
+              },
+            }
+          : {}),
+      },
+      include: {
+        shop: {
+          select: {
+            id: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+    const acceptedOrderAggregate = await this.prisma.orderItem.aggregate({
+      where: {
+        productId: product.id,
+        order: {
+          status: {
+            in: ['DRAFT', 'PARKED'],
+          },
+          orderType: 'SALE',
+          ...(context?.companyId ? { companyId: context.companyId } : {}),
+          ...(context?.userType === 'company' && context.allowedShopIds?.length
+            ? {
+                shopId: {
+                  in: context.allowedShopIds,
+                },
+              }
+            : {}),
+        },
+      },
+      _sum: {
+        quantity: true,
+      },
+    });
     const pagedMovements = stockMovements.map((movement) =>
       this.toLegacyProductMovementItem(movement),
     );
@@ -2442,8 +2490,15 @@ export class ProductsService {
       written_off: stats.writtenOff,
       count,
       movements: pagedMovements,
-      supply_price_history: null,
-      accepted_order: 0,
+      supply_price_history: supplyPriceHistory.map((item) => ({
+        product_id: product.publicId,
+        shop_id: item.shop.id,
+        supply_price: Number(item.supplyPrice ?? 0),
+        supply_currency: item.supplyCurrency,
+        old_supply_price: Number(item.oldSupplyPrice ?? 0),
+        created_at: item.createdAt.toISOString(),
+      })),
+      accepted_order: Number(acceptedOrderAggregate._sum.quantity ?? 0),
     };
   }
 
@@ -4258,8 +4313,10 @@ export class ProductsService {
   private async applyImportRows(
     rows: ImportRowInput[],
     companyId: string,
+    shopId: string,
     branchCode: string,
     onMatchPolicy: ImportOnMatchPolicy,
+    createdById: number,
   ) {
     let createdCount = 0;
     let updatedCount = 0;
@@ -4297,8 +4354,10 @@ export class ProductsService {
                 matchedProduct.id,
                 row,
                 companyId,
+                shopId,
                 branchCode,
                 onMatchPolicy,
+                createdById,
               );
 
               return {
@@ -4311,7 +4370,9 @@ export class ProductsService {
             const createdProduct = await this.applyImportCreate(
               row,
               companyId,
+              shopId,
               branchCode,
+              createdById,
             );
             return {
               action: 'create' as const,
@@ -4373,94 +4434,127 @@ export class ProductsService {
   private async applyImportCreate(
     row: ImportRowInput,
     companyId: string,
+    shopId: string,
     branchCode: string,
+    createdById: number,
   ) {
     const identifiers = await this.resolveIdentifiersForImportCreate(
       row,
       companyId,
     );
-    const createdProduct = await this.prisma.product.create({
-      data: {
-        company: {
-          connect: {
-            id: companyId,
+    const createdProduct = await this.prisma.$transaction(async (tx) => {
+      const product = await tx.product.create({
+        data: {
+          company: {
+            connect: {
+              id: companyId,
+            },
           },
-        },
-        name:
-          row.name ||
-          identifiers.sku ||
-          identifiers.barcode ||
-          `Imported ${Date.now()}`,
-        sku: identifiers.sku,
-        barcode: identifiers.barcode,
-        purchasePrice: row.supplyPrice,
-        salePrice: row.retailPrice,
-        quantity: row.quantity,
-        unit: row.measurementUnit,
-        metadata: this.buildImportMetadata(companyId, row.description ?? ''),
-        category: row.categoryName
-          ? {
-              connectOrCreate: {
-                where: {
-                  companyId_name: {
+          name:
+            row.name ||
+            identifiers.sku ||
+            identifiers.barcode ||
+            `Imported ${Date.now()}`,
+          sku: identifiers.sku,
+          barcode: identifiers.barcode,
+          purchasePrice: row.supplyPrice,
+          salePrice: row.retailPrice,
+          quantity: row.quantity,
+          unit: row.measurementUnit,
+          metadata: this.buildImportMetadata(companyId, row.description ?? ''),
+          category: row.categoryName
+            ? {
+                connectOrCreate: {
+                  where: {
+                    companyId_name: {
+                      companyId,
+                      name: row.categoryName,
+                    },
+                  },
+                  create: {
                     companyId,
                     name: row.categoryName,
                   },
                 },
-                create: {
-                  companyId,
-                  name: row.categoryName,
-                },
-              },
-            }
-          : undefined,
-        brand: row.brandName
-          ? {
-              connectOrCreate: {
-                where: {
-                  companyId_name: {
+              }
+            : undefined,
+          brand: row.brandName
+            ? {
+                connectOrCreate: {
+                  where: {
+                    companyId_name: {
+                      companyId,
+                      name: row.brandName,
+                    },
+                  },
+                  create: {
                     companyId,
                     name: row.brandName,
                   },
                 },
-                create: {
-                  companyId,
-                  name: row.brandName,
-                },
-              },
-            }
-          : undefined,
-        suppliers: row.supplier
-          ? {
-              create: [
-                {
-                  supplier: {
-                    connectOrCreate: {
-                      where: {
-                        companyId_name: {
+              }
+            : undefined,
+          suppliers: row.supplier
+            ? {
+                create: [
+                  {
+                    supplier: {
+                      connectOrCreate: {
+                        where: {
+                          companyId_name: {
+                            companyId,
+                            name: row.supplier,
+                          },
+                        },
+                        create: {
                           companyId,
                           name: row.supplier,
                         },
                       },
-                      create: {
-                        companyId,
-                        name: row.supplier,
-                      },
                     },
                   },
-                },
-              ],
-            }
-          : undefined,
-        stocks: {
-          create: {
-            branchCode,
-            quantity: row.quantity,
-            purchasePrice: row.supplyPrice,
-            salePrice: row.retailPrice,
+                ],
+              }
+            : undefined,
+          stocks: {
+            create: {
+              branchCode,
+              quantity: row.quantity,
+              purchasePrice: row.supplyPrice,
+              salePrice: row.retailPrice,
+            },
           },
         },
-      },
+      });
+
+      await this.recordSupplyPriceHistory(tx, {
+        productId: product.id,
+        shopId,
+        supplyPrice: row.supplyPrice,
+        oldSupplyPrice: 0,
+        createdById,
+      });
+
+      await this.createStockMovementRecord(tx, {
+        companyId,
+        shopId,
+        productId: product.id,
+        type: 'PURCHASE',
+        quantity: row.quantity,
+        beforeQuantity: 0,
+        afterQuantity: row.quantity,
+        createdById,
+        externalId: '',
+        fromShopId: shopId,
+        toShopId: shopId,
+        supplyPrice: row.supplyPrice,
+        retailPrice: row.retailPrice,
+        newRetailPrice: row.retailPrice,
+        fromRetailPrice: 0,
+        fromSupplyPrice: 0,
+      });
+
+      return product;
     });
 
     return createdProduct;
@@ -4470,8 +4564,10 @@ export class ProductsService {
     productId: number,
     row: ImportRowInput,
     companyId: string,
+    shopId: string,
     branchCode: string,
     onMatchPolicy: ImportOnMatchPolicy,
+    createdById: number,
   ): Promise<Array<{ field: string; reason: string }>> {
     const changedFields: Array<{ field: string; reason: string }> = [];
 
@@ -4494,6 +4590,12 @@ export class ProductsService {
           branchCode,
         },
       });
+      const previousSupplyPrice =
+        existingStock?.purchasePrice ?? existingProduct.purchasePrice ?? 0;
+      const previousRetailPrice =
+        existingStock?.salePrice ?? existingProduct.salePrice ?? 0;
+      const beforeQuantity = existingStock?.quantity ?? 0;
+      const afterQuantity = beforeQuantity + row.quantity;
 
       if (existingStock) {
         await tx.productStock.update({
@@ -4501,7 +4603,7 @@ export class ProductsService {
             id: existingStock.id,
           },
           data: {
-            quantity: existingStock.quantity + row.quantity,
+            quantity: afterQuantity,
             purchasePrice: row.supplyPrice,
             salePrice: row.retailPrice,
           },
@@ -4515,7 +4617,7 @@ export class ProductsService {
           data: {
             productId,
             branchCode,
-            quantity: row.quantity,
+            quantity: afterQuantity,
             purchasePrice: row.supplyPrice,
             salePrice: row.retailPrice,
           },
@@ -4634,6 +4736,35 @@ export class ProductsService {
           reason: 'updated_from_file_by_policy',
         });
       }
+
+      if (previousSupplyPrice !== row.supplyPrice) {
+        await this.recordSupplyPriceHistory(tx, {
+          productId,
+          shopId,
+          supplyPrice: row.supplyPrice,
+          oldSupplyPrice: previousSupplyPrice,
+          createdById,
+        });
+      }
+
+      await this.createStockMovementRecord(tx, {
+        companyId,
+        shopId,
+        productId,
+        type: 'PURCHASE',
+        quantity: row.quantity,
+        beforeQuantity,
+        afterQuantity,
+        createdById,
+        externalId: '',
+        fromShopId: shopId,
+        toShopId: shopId,
+        supplyPrice: row.supplyPrice,
+        retailPrice: row.retailPrice,
+        newRetailPrice: row.retailPrice,
+        fromRetailPrice: previousRetailPrice,
+        fromSupplyPrice: previousSupplyPrice,
+      });
     });
 
     if (this.shouldUseFileValue(onMatchPolicy.name) && row.name) {
@@ -4965,13 +5096,103 @@ export class ProductsService {
     return resolvedShopIds.filter((id) => context.allowedShopIds.includes(id));
   }
 
+  private async recordSupplyPriceHistory(
+    tx: Prisma.TransactionClient,
+    input: {
+      productId: number;
+      shopId: string;
+      supplyPrice: number;
+      oldSupplyPrice: number;
+      createdById: number;
+    },
+  ) {
+    await tx.productSupplyPriceHistory.create({
+      data: {
+        productId: input.productId,
+        shopId: input.shopId,
+        supplyPrice: input.supplyPrice,
+        oldSupplyPrice: input.oldSupplyPrice,
+        createdById: input.createdById,
+      },
+    });
+  }
+
+  private async createStockMovementRecord(
+    tx: Prisma.TransactionClient,
+    input: {
+      companyId: string;
+      shopId: string;
+      productId: number;
+      orderId?: string;
+      type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER';
+      quantity: number;
+      beforeQuantity: number;
+      afterQuantity: number;
+      createdById: number;
+      externalId: string;
+      fromShopId: string;
+      toShopId: string;
+      supplyPrice: number;
+      retailPrice: number;
+      newRetailPrice: number;
+      fromRetailPrice: number;
+      fromSupplyPrice: number;
+      orderType?: string;
+      orderStatus?: string;
+    },
+  ) {
+    await tx.stockMovement.create({
+      data: {
+        companyId: input.companyId,
+        shopId: input.shopId,
+        productId: input.productId,
+        orderId: input.orderId,
+        type: input.type,
+        displayTypeCode: this.mapProductMovementTypeToCode(
+          input.type,
+          input.orderType,
+          input.orderStatus,
+        ),
+        displayTypeLabel: this.mapProductMovementTypeToLegacyType(
+          input.type,
+          input.orderType,
+          input.orderStatus,
+        ),
+        externalId: input.externalId,
+        quantity: input.quantity,
+        loadedMeasurementValue: input.afterQuantity,
+        beforeQuantity: input.beforeQuantity,
+        afterQuantity: input.afterQuantity,
+        fromShopId: input.fromShopId,
+        toShopId: input.toShopId,
+        supplyPrice: input.supplyPrice,
+        retailPrice: input.retailPrice,
+        newRetailPrice: input.newRetailPrice,
+        fromRetailPrice: input.fromRetailPrice,
+        fromSupplyPrice: input.fromSupplyPrice,
+        createdById: input.createdById,
+      },
+    });
+  }
+
   private toLegacyProductMovementItem(
     movement: {
       id: string;
       type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER';
+      displayTypeCode: string;
+      displayTypeLabel: string;
+      externalId: string;
       quantity: Prisma.Decimal | number;
+      loadedMeasurementValue: Prisma.Decimal | number;
       beforeQuantity: Prisma.Decimal | number;
       afterQuantity: Prisma.Decimal | number;
+      fromShopId: string;
+      toShopId: string;
+      supplyPrice: Prisma.Decimal | number;
+      retailPrice: Prisma.Decimal | number;
+      newRetailPrice: Prisma.Decimal | number;
+      fromRetailPrice: Prisma.Decimal | number;
+      fromSupplyPrice: Prisma.Decimal | number;
       createdAt: Date;
       shop?: {
         id: string;
@@ -4992,32 +5213,36 @@ export class ProductsService {
       } | null;
     },
   ) {
-    const afterQuantity = Number(movement.afterQuantity ?? 0);
-
     return {
       internal_id: 0,
       id: movement.id,
-      type: this.mapProductMovementTypeToCode(
-        movement.type,
-        movement.order?.orderType,
-        movement.order?.status,
-      ),
-      type_label: this.mapProductMovementTypeToLegacyType(
-        movement.type,
-        movement.order?.orderType,
-        movement.order?.status,
-      ),
+      type:
+        movement.displayTypeCode ||
+        this.mapProductMovementTypeToCode(
+          movement.type,
+          movement.order?.orderType,
+          movement.order?.status,
+        ),
+      type_label:
+        movement.displayTypeLabel ||
+        this.mapProductMovementTypeToLegacyType(
+          movement.type,
+          movement.order?.orderType,
+          movement.order?.status,
+        ),
       created_at: this.formatDateTime(movement.createdAt),
-      external_id: movement.order?.orderNumber ?? '',
+      external_id: movement.externalId || movement.order?.orderNumber || '',
       measurement_value: Number(movement.quantity ?? 0),
-      loaded_measurement_value: afterQuantity,
-      from_shop: movement.shop?.id ?? '',
-      to_shop: movement.shop?.id ?? '',
-      supply_price: 0,
-      retail_price: 0,
-      new_retail_price: 0,
-      from_retail_price: 0,
-      from_supply_price: 0,
+      loaded_measurement_value: Number(
+        movement.loadedMeasurementValue ?? movement.afterQuantity ?? 0,
+      ),
+      from_shop: movement.fromShopId || movement.shop?.id || '',
+      to_shop: movement.toShopId || movement.shop?.id || '',
+      supply_price: Number(movement.supplyPrice ?? 0),
+      retail_price: Number(movement.retailPrice ?? 0),
+      new_retail_price: Number(movement.newRetailPrice ?? 0),
+      from_retail_price: Number(movement.fromRetailPrice ?? 0),
+      from_supply_price: Number(movement.fromSupplyPrice ?? 0),
     };
   }
 
