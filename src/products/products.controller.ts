@@ -9,8 +9,11 @@ import {
   Post,
   Put,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -341,6 +344,21 @@ export class ProductsController {
     @Headers('authorization') authorization?: string,
   ) {
     return this.productsService.createCatalogProduct(body, authorization);
+  }
+
+  @Post('v2/product/photo')
+  @UseInterceptors(FileInterceptor('photo'))
+  uploadProductPhoto(
+    @Headers('authorization') authorization: string | undefined,
+    @UploadedFile()
+    file?: {
+      originalname: string;
+      mimetype: string;
+      size: number;
+      buffer: Buffer;
+    },
+  ) {
+    return this.productsService.uploadProductPhoto(authorization, file);
   }
 
   @Put('v2/product/:id')

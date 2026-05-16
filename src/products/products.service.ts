@@ -7,9 +7,20 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
+import { promises as fs } from 'fs';
+import { extname, join } from 'path';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
+
+const ALLOWED_PRODUCT_PHOTO_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+]);
+
+const MAX_PRODUCT_PHOTO_SIZE_BYTES = 10 * 1024 * 1024;
 
 type CatalogProductWithRelations = Prisma.ProductGetPayload<{
   include: {
@@ -426,6 +437,46 @@ export class ProductsService {
     private readonly companySettingsService: CompanySettingsService,
     private readonly usersService: UsersService,
   ) {}
+
+  async uploadProductPhoto(
+    authorization: string | undefined,
+    file?: {
+      originalname: string;
+      mimetype: string;
+      size: number;
+      buffer: Buffer;
+    },
+  ) {
+    await this.getRequestContext(authorization);
+
+    if (!file) {
+      throw new BadRequestException('Product photo file is required');
+    }
+
+    if (!ALLOWED_PRODUCT_PHOTO_MIME_TYPES.has(file.mimetype)) {
+      throw new BadRequestException(
+        'Only jpg, jpeg, png and webp files are allowed',
+      );
+    }
+
+    if (file.size > MAX_PRODUCT_PHOTO_SIZE_BYTES) {
+      throw new BadRequestException('Product photo size must be 10MB or less');
+    }
+
+    const uploadsDirectory = join(process.cwd(), 'uploads', 'products');
+    await fs.mkdir(uploadsDirectory, { recursive: true });
+
+    const extension = extname(file.originalname).toLowerCase() || '.jpg';
+    const fileName = `${randomUUID()}${extension}`;
+    const filePath = join(uploadsDirectory, fileName);
+
+    await fs.writeFile(filePath, file.buffer);
+
+    return {
+      message: 'Product photo uploaded',
+      url: this.buildProductPhotoUrl(fileName),
+    };
+  }
 
   private async getRequestContext(authorization?: string) {
     return authorization
@@ -6363,6 +6414,14 @@ export class ProductsService {
     }
 
     return undefined;
+  }
+
+  private buildProductPhotoUrl(fileName: string) {
+    const origin =
+      process.env.APP_URL?.trim() ||
+      `http://localhost:${process.env.PORT?.trim() || '3001'}`;
+
+    return `${origin}/uploads/products/${fileName}`;
   }
 }
 
