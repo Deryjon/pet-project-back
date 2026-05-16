@@ -1671,7 +1671,7 @@ export class ProductsService {
     const name = this.requireString(body.name, 'name');
     const sku = this.optionalString(body.sku);
     const barcode = this.optionalString(body.barcode);
-    const photo = this.optionalString(body.photo);
+    const photo = this.normalizeProductPhotoValue(this.optionalString(body.photo));
     const productType = this.optionalString(body.product_type);
     const variantType = this.optionalString(body.variant_type);
     const unit = this.optionalString(body.unit);
@@ -1922,7 +1922,7 @@ export class ProductsService {
         name,
         sku,
         barcode,
-        photo: imageUrl,
+        photo: this.normalizeProductPhotoValue(imageUrl),
         productType,
         variantType,
         unit,
@@ -2174,7 +2174,9 @@ export class ProductsService {
         name: this.optionalString(body.name) ?? existingProduct.name,
         sku: this.optionalString(body.sku) ?? existingProduct.sku,
         barcode: this.optionalString(body.barcode) ?? existingProduct.barcode,
-        photo: this.extractFirstImage(body.images) ?? existingProduct.photo,
+        photo:
+          this.normalizeProductPhotoValue(this.extractFirstImage(body.images)) ??
+          this.normalizeProductPhotoValue(existingProduct.photo),
         productType,
         variantType: isVariative ? 'variative' : 'simple',
         unit:
@@ -2633,7 +2635,7 @@ export class ProductsService {
   }) {
     return {
       id: product.id,
-      photo: product.photo,
+      photo: this.normalizeProductPhotoValue(product.photo),
       name: product.name,
       sku: product.sku,
       barcode: product.barcode,
@@ -2855,7 +2857,7 @@ export class ProductsService {
       shop_free_prices: null,
       brand_name: product.brand?.name ?? null,
       category_name: product.category?.name ?? null,
-      photo: product.photo,
+      photo: this.normalizeProductPhotoValue(product.photo),
       is_archived: Boolean(product.archivedAt),
     };
   }
@@ -2935,8 +2937,10 @@ export class ProductsService {
       is_marked: false,
       name: product.name,
       sku: product.sku ?? '',
-      main_image_url: product.photo ?? '',
-      images: product.photo ? [{ url: product.photo }] : null,
+      main_image_url: this.normalizeProductPhotoValue(product.photo) ?? '',
+      images: product.photo
+        ? [{ url: this.normalizeProductPhotoValue(product.photo) ?? product.photo }]
+        : null,
       barcode: product.barcode ?? '',
       additional_barcodes: null,
       categories: product.category
@@ -6406,14 +6410,41 @@ export class ProductsService {
 
     const firstImage = value[0];
     if (typeof firstImage === 'string') {
-      return firstImage;
+      return this.normalizeProductPhotoValue(firstImage);
     }
 
     if (firstImage && typeof firstImage === 'object') {
-      return this.optionalString((firstImage as Record<string, unknown>).url);
+      return this.normalizeProductPhotoValue(
+        this.optionalString((firstImage as Record<string, unknown>).url),
+      );
     }
 
     return undefined;
+  }
+
+  private normalizeProductPhotoValue(value: string | null | undefined) {
+    const src = String(value ?? '').trim();
+    if (!src) {
+      return undefined;
+    }
+
+    if (/^(https?:)?\/\//i.test(src) || src.startsWith('data:')) {
+      return src;
+    }
+
+    if (src.startsWith('/uploads/')) {
+      const origin =
+        process.env.APP_URL?.trim() ||
+        `http://localhost:${process.env.PORT?.trim() || '3001'}`;
+
+      return `${origin}${src}`;
+    }
+
+    if (!src.includes('/')) {
+      return this.buildProductPhotoUrl(src);
+    }
+
+    return src;
   }
 
   private buildProductPhotoUrl(fileName: string) {
