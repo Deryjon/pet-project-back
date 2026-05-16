@@ -1977,6 +1977,8 @@ export class SalesService {
     if (!shopId || !sale.companyId || !sale.userId) {
       return;
     }
+    const companyId = sale.companyId;
+    const createdById = sale.userId;
 
     const productIds = [
       ...new Set(
@@ -2016,14 +2018,14 @@ export class SalesService {
           });
 
           await this.createStockMovement(tx, {
-            companyId: sale.companyId,
+            companyId,
             shopId,
             productId: item.productId,
             type: 'SALE',
             quantity: item.quantity,
             beforeQuantity,
             afterQuantity,
-            createdById: sale.userId,
+            createdById,
             externalId: sale.number,
             supplyPrice: stock.purchasePrice ?? 0,
             retailPrice: item.salePrice,
@@ -2053,14 +2055,14 @@ export class SalesService {
         });
 
         await this.createStockMovement(tx, {
-          companyId: sale.companyId,
+          companyId,
           shopId,
           productId: item.productId,
           type: 'SALE',
           quantity: item.quantity,
           beforeQuantity: 0,
           afterQuantity: -item.quantity,
-          createdById: sale.userId,
+          createdById,
           externalId: sale.number,
           supplyPrice: product?.purchasePrice ?? 0,
           retailPrice: item.salePrice,
@@ -2114,6 +2116,8 @@ export class SalesService {
     if (!shopId || !sale.companyId || !sale.userId) {
       return;
     }
+    const companyId = sale.companyId;
+    const createdById = sale.userId;
 
     const productIds = [
       ...new Set(
@@ -2153,14 +2157,14 @@ export class SalesService {
           });
 
           await this.createStockMovement(tx, {
-            companyId: sale.companyId,
+            companyId,
             shopId,
             productId: item.productId,
             type: 'RETURN',
             quantity: item.quantity,
             beforeQuantity,
             afterQuantity,
-            createdById: sale.userId,
+            createdById,
             externalId: sale.number ?? '',
             supplyPrice: stock.purchasePrice ?? 0,
             retailPrice: item.salePrice,
@@ -2190,14 +2194,14 @@ export class SalesService {
         });
 
         await this.createStockMovement(tx, {
-          companyId: sale.companyId,
+          companyId,
           shopId,
           productId: item.productId,
           type: 'RETURN',
           quantity: item.quantity,
           beforeQuantity: 0,
           afterQuantity: item.quantity,
-          createdById: sale.userId,
+          createdById,
           externalId: sale.number ?? '',
           supplyPrice:
             item.product?.purchasePrice ?? product?.purchasePrice ?? 0,
