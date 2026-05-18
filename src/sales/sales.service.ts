@@ -25,18 +25,7 @@ const DEFAULT_MEASUREMENT_UNIT = {
 const SHOP_BY_BRANCH_CODE: Record<
   string,
   { shop_id: string; shop_name: string; id?: string; aliases?: string[] }
-> = {
-  main: {
-    id: 'eaca6237-dc5c-4d4b-83e5-62a1eeb9a89a',
-    shop_id: '11dc3536-e1ce-447b-aedb-ce3784c4b1ad',
-    shop_name: 'Samarqand Darvoza',
-  },
-  a: {
-    id: '5a256a71-34c1-42a0-a84d-1061bf84eb6c',
-    shop_id: 'be25385b-8db2-4d96-8240-f1bb6bb3420c',
-    shop_name: 'Globus Mall',
-  },
-};
+> = {};
 
 @Injectable()
 export class SalesService {
@@ -706,9 +695,7 @@ export class SalesService {
       this.toInt(body.user_id) ?? this.toInt(body.seller_id);
 
     if (!requestedPaymentMethod && !requestedSellerId) {
-      throw new BadRequestException(
-        'payment_method or user_id is required',
-      );
+      throw new BadRequestException('payment_method or user_id is required');
     }
 
     let resolvedSellerId: number | undefined;
@@ -869,8 +856,9 @@ export class SalesService {
       returned_total: returnSale.payableTotal,
       exchange_total: exchangeSale.payableTotal,
       balance_due: Number(
-        ((exchangeSale.payableTotal ?? 0) - (returnSale.payableTotal ?? 0))
-          .toFixed(2),
+        (
+          (exchangeSale.payableTotal ?? 0) - (returnSale.payableTotal ?? 0)
+        ).toFixed(2),
       ),
       return_order: this.toSaleListItem(returnSale, context),
       exchange_order: this.toSaleListItem(exchangeSale, context),
@@ -1144,7 +1132,7 @@ export class SalesService {
   async removeOrder(id: string, authorization?: string) {
     const context = await this.getRequestContext(authorization);
     const saleId = this.parseEntityId(id, 'order id');
-    const sale = await this.prisma.sale.findUnique({
+    const sale = (await this.prisma.sale.findUnique({
       where: { id: saleId },
       include: {
         items: {
@@ -1158,7 +1146,7 @@ export class SalesService {
         },
         user: true,
       },
-    }) as any;
+    })) as any;
 
     if (!sale) {
       throw new NotFoundException('Order not found');
@@ -1254,7 +1242,9 @@ export class SalesService {
     const seller = await this.prisma.user.findFirst({
       where: {
         id: requestedSellerId,
-        ...(originalSale.companyId ? { companyId: originalSale.companyId } : {}),
+        ...(originalSale.companyId
+          ? { companyId: originalSale.companyId }
+          : {}),
       },
     });
 
@@ -1282,10 +1272,13 @@ export class SalesService {
     fieldName: string,
   ) {
     if (!Array.isArray(rawItems) || rawItems.length === 0) {
-      throw new BadRequestException(`${fieldName} must contain at least one item`);
+      throw new BadRequestException(
+        `${fieldName} must contain at least one item`,
+      );
     }
 
-    const returnableQuantities = await this.getReturnableQuantities(originalSale);
+    const returnableQuantities =
+      await this.getReturnableQuantities(originalSale);
     const normalizedItems: Array<{
       productId: number;
       name: string;
@@ -1323,7 +1316,8 @@ export class SalesService {
 
       const availableQuantity = returnableQuantities.get(productId) ?? 0;
       const alreadyRequestedQuantity =
-        normalizedItems.find((item) => item.productId === productId)?.quantity ?? 0;
+        normalizedItems.find((item) => item.productId === productId)
+          ?.quantity ?? 0;
 
       if (alreadyRequestedQuantity + quantity > availableQuantity) {
         throw new BadRequestException(
@@ -1389,9 +1383,7 @@ export class SalesService {
       }
 
       const salePrice =
-        this.toNumber(record.sale_price) ??
-        product.salePrice ??
-        0;
+        this.toNumber(record.sale_price) ?? product.salePrice ?? 0;
 
       if (salePrice <= 0) {
         throw new BadRequestException(
@@ -1413,7 +1405,8 @@ export class SalesService {
         .filter((item) => item.productId === productId)
         .reduce((sum, item) => sum + item.quantity, 0);
       const alreadyRequestedQuantity =
-        normalizedItems.find((item) => item.productId === productId)?.quantity ?? 0;
+        normalizedItems.find((item) => item.productId === productId)
+          ?.quantity ?? 0;
 
       if (
         alreadyRequestedQuantity + quantity >
@@ -1657,9 +1650,7 @@ export class SalesService {
     }
   }
 
-  private async syncProductsQuantity(
-    items: Array<{ productId: number }>,
-  ) {
+  private async syncProductsQuantity(items: Array<{ productId: number }>) {
     const uniqueProductIds = [...new Set(items.map((item) => item.productId))];
 
     for (const productId of uniqueProductIds) {
@@ -1701,9 +1692,10 @@ export class SalesService {
     return shop?.id ?? null;
   }
 
-  private getMovementDisplay(
-    type: 'SALE' | 'RETURN',
-  ): { code: string; label: string } {
+  private getMovementDisplay(type: 'SALE' | 'RETURN'): {
+    code: string;
+    label: string;
+  } {
     switch (type) {
       case 'RETURN':
         return { code: 'return', label: 'Возврат' };
@@ -1888,17 +1880,24 @@ export class SalesService {
       (await (this.prisma as any).sellerSalarySettings?.findUnique?.({
         where: { userId: sellerId },
       }));
-    const retailTotal = sale.items.reduce((sum, item) => sum + item.lineTotal, 0);
+    const retailTotal = sale.items.reduce(
+      (sum, item) => sum + item.lineTotal,
+      0,
+    );
     const flatDiscount = sale.discountAmount || 0;
     const percentDiscount = sale.discountPercent || 0;
 
     for (const item of sale.items as any[]) {
-      const retailPriceAtSale = Number(item.lineTotal || item.quantity * item.salePrice || 0);
+      const retailPriceAtSale = Number(
+        item.lineTotal || item.quantity * item.salePrice || 0,
+      );
       const percentPart = retailPriceAtSale * (percentDiscount / 100);
       const flatPart =
         retailTotal > 0 ? (flatDiscount * retailPriceAtSale) / retailTotal : 0;
       const discountAmount = Number((percentPart + flatPart).toFixed(2));
-      const finalPrice = Number(Math.max(0, retailPriceAtSale - discountAmount).toFixed(2));
+      const finalPrice = Number(
+        Math.max(0, retailPriceAtSale - discountAmount).toFixed(2),
+      );
 
       let unitSupplyPrice = 0;
       if (typeof item.productId === 'number') {
@@ -1919,7 +1918,9 @@ export class SalesService {
         unitSupplyPrice = stock?.purchasePrice ?? product?.purchasePrice ?? 0;
       }
 
-      const supplyPriceAtSale = Number((unitSupplyPrice * item.quantity).toFixed(2));
+      const supplyPriceAtSale = Number(
+        (unitSupplyPrice * item.quantity).toFixed(2),
+      );
       const profitAtSale = Number((finalPrice - supplyPriceAtSale).toFixed(2));
       const markupAtSale =
         supplyPriceAtSale > 0
@@ -2188,7 +2189,8 @@ export class SalesService {
             productId: item.productId,
             branchCode,
             quantity: item.quantity,
-            purchasePrice: item.product?.purchasePrice ?? product?.purchasePrice ?? 0,
+            purchasePrice:
+              item.product?.purchasePrice ?? product?.purchasePrice ?? 0,
             salePrice: item.salePrice,
           },
         });
@@ -2574,7 +2576,8 @@ export class SalesService {
           discount_amount: 0,
           discount_percent: 0,
           measurement_value: item.quantity,
-          returned_measurement_value: sale.saleType === 'return' ? item.quantity : 0,
+          returned_measurement_value:
+            sale.saleType === 'return' ? item.quantity : 0,
           measurement_type: '',
           sequence_number: index + 1,
           is_returned: sale.saleType === 'return',
@@ -3244,7 +3247,11 @@ export class SalesService {
       isActive?: boolean;
     } | null,
   ) {
-    if (!settings || settings.bonusEnabled === false || settings.isActive === false) {
+    if (
+      !settings ||
+      settings.bonusEnabled === false ||
+      settings.isActive === false
+    ) {
       return 0;
     }
 
