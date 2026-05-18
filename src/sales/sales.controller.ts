@@ -145,8 +145,11 @@ export class SalesController {
   }
 
   @Get('new-sale/:id')
-  findDraft(@Param('id', ParseIntPipe) id: number) {
-    return this.salesService.findDraft(id);
+  findDraft(
+    @Param('id', ParseIntPipe) id: number,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.findDraft(id, authorization);
   }
 
   @Post('new-sale/:id/items')
@@ -162,8 +165,9 @@ export class SalesController {
   updateDiscount(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
   ) {
-    return this.salesService.updateDiscount(id, body);
+    return this.salesService.updateDiscount(id, body, authorization);
   }
 
   @Post('new-sale/:id/pay')
@@ -176,6 +180,7 @@ export class SalesController {
   }
 
   @Post('new-sale/:id/park')
+  @Post('new-sale/:id/leave')
   parkDraft(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,

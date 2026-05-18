@@ -44,7 +44,9 @@ export class SalesService {
   async findAll(authorization?: string) {
     const context = await this.getRequestContext(authorization);
     const sales = await this.prisma.sale.findMany({
-      where: this.buildSaleScope(context),
+      where: {
+        AND: [this.buildSaleScope(context) ?? {}, { isDraft: false }],
+      },
       include: {
         user: true,
         items: true,
@@ -70,54 +72,13 @@ export class SalesService {
 
   async createDraft(authorization?: string) {
     const context = await this.getRequestContext(authorization);
-    const sale = await this.prisma.sale.create({
-      data: {
-        companyId:
-          context?.userType === 'company'
-            ? (context.companyId ?? undefined)
-            : undefined,
-        number: this.generateOrderNumber(),
-        branchCode: context?.currentBranchCode ?? undefined,
-        userId: context?.userId ?? undefined,
-      },
-    });
+    const sale = await this.getOrCreateOpenSale(context);
 
     return this.toDraftSummary(sale);
   }
 
   async findParkedSales(authorization?: string) {
-    const context = await this.getRequestContext(authorization);
-    const sales = await this.prisma.sale.findMany({
-      where: {
-        AND: [
-          this.buildSaleScope(context) ?? {},
-          {
-            isDraft: true,
-            status: 'parked',
-          },
-        ],
-      },
-      include: {
-        user: true,
-        items: true,
-      },
-      orderBy: {
-        updatedAt: 'desc',
-      },
-    });
-    const shopLookup = await this.buildShopLookupByBranchCodes(
-      sales
-        .map((sale) => sale.branchCode)
-        .filter((value): value is string => !!value),
-      context?.companyId,
-    );
-    const paymentTypeLookup = await this.buildPaymentTypeLookup(
-      context?.companyId,
-    );
-
-    return sales.map((sale) =>
-      this.toSaleListItem(sale, context, shopLookup, paymentTypeLookup),
-    );
+    return this.findDraftSales(authorization);
   }
 
   async findDraftSales(authorization?: string) {
@@ -128,7 +89,9 @@ export class SalesService {
           this.buildSaleScope(context) ?? {},
           {
             isDraft: true,
-            status: 'draft',
+            status: {
+              in: ['draft', 'parked'],
+            },
             items: {
               some: {},
             },
@@ -161,21 +124,7 @@ export class SalesService {
   async createOrder(body: Record<string, unknown>, authorization?: string) {
     const context = await this.getRequestContext(authorization);
     const shopId = this.optionalString(body.shop_id) ?? '';
-    const branchCode = await this.resolveScopedBranchCode(shopId, context);
-
-    const sale = await this.prisma.sale.create({
-      data: {
-        companyId:
-          context?.userType === 'company'
-            ? (context.companyId ?? undefined)
-            : undefined,
-        number: this.generateOrderNumber(),
-        status: 'draft',
-        isDraft: true,
-        branchCode: branchCode ?? context?.currentBranchCode ?? undefined,
-        userId: context?.userId ?? undefined,
-      },
-    });
+    const sale = await this.getOrCreateOpenSale(context, shopId);
 
     return {
       session_id: randomUUID(),
@@ -865,8 +814,10 @@ export class SalesService {
     };
   }
 
-  async findDraft(id: number) {
+  async findDraft(id: number, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
     const sale = await this.findSaleOrThrow(id);
+    this.assertSaleAccess(sale, context);
     return this.toDraftResponse(sale);
   }
 
@@ -961,11 +912,17 @@ export class SalesService {
     }
 
     await this.recalculateSale(id);
-    return this.findDraft(id);
+    return this.findDraft(id, authorization);
   }
 
-  async updateDiscount(id: number, body: Record<string, unknown>) {
+  async updateDiscount(
+    id: number,
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
     const sale = await this.findSaleOrThrow(id);
+    this.assertSaleAccess(sale, context);
 
     if (!sale.isDraft) {
       throw new BadRequestException('Cannot update paid sale');
@@ -983,7 +940,7 @@ export class SalesService {
     });
 
     await this.recalculateSale(id);
-    return this.findDraft(id);
+    return this.findDraft(id, authorization);
   }
 
   async pay(id: number, body: Record<string, unknown>, authorization?: string) {
@@ -1045,13 +1002,26 @@ export class SalesService {
     this.assertSaleAccess(sale, context);
 
     if (!sale.isDraft) {
-      throw new BadRequestException('Only draft sale can be parked');
+      throw new BadRequestException('Only draft sale can be closed');
+    }
+
+    const hasItems = sale.items.length > 0;
+    if (!hasItems) {
+      await this.prisma.sale.delete({
+        where: { id },
+      });
+
+      return {
+        success: true,
+        action: 'deleted',
+        id,
+      };
     }
 
     const updatedSale = await this.prisma.sale.update({
       where: { id },
       data: {
-        status: 'parked',
+        status: 'draft',
         parkNote:
           this.optionalString(body.park_note) ??
           this.optionalString(body.note) ??
@@ -1066,22 +1036,17 @@ export class SalesService {
     const shouldCreateNewDraft = this.toBoolean(body.create_new_draft) ?? false;
 
     if (!shouldCreateNewDraft) {
-      return this.toDraftResponse(updatedSale as any);
+      return {
+        success: true,
+        action: 'drafted',
+        sale: this.toDraftResponse(updatedSale as any),
+      };
     }
 
-    const newDraft = await this.prisma.sale.create({
-      data: {
-        companyId:
-          context?.userType === 'company'
-            ? (context.companyId ?? undefined)
-            : undefined,
-        number: this.generateOrderNumber(),
-        status: 'draft',
-        isDraft: true,
-        branchCode: context?.currentBranchCode ?? sale.branchCode ?? undefined,
-        userId: context?.userId ?? sale.userId ?? undefined,
-      },
-    });
+    const newDraft = await this.getOrCreateOpenSale(
+      context,
+      sale.branchCode ?? undefined,
+    );
 
     return {
       parked_sale: this.toDraftResponse(updatedSale as any),
@@ -1094,14 +1059,23 @@ export class SalesService {
     const sale = await this.findSaleOrThrow(id);
     this.assertSaleAccess(sale, context);
 
-    if (!sale.isDraft || sale.status !== 'parked') {
-      throw new BadRequestException('Only parked sale can be resumed');
+    if (
+      !sale.isDraft ||
+      !['draft', 'parked', 'open'].includes(sale.status ?? '')
+    ) {
+      throw new BadRequestException('Only draft sale can be resumed');
     }
+
+    await this.normalizeOpenSalesForContext(
+      context,
+      sale.branchCode ?? undefined,
+      sale.id,
+    );
 
     const updatedSale = await this.prisma.sale.update({
       where: { id },
       data: {
-        status: 'draft',
+        status: 'open',
         userId: context?.userId ?? sale.userId ?? undefined,
         branchCode: context?.currentBranchCode ?? sale.branchCode ?? undefined,
       },
@@ -2233,6 +2207,125 @@ export class SalesService {
     });
   }
 
+  private async getOrCreateOpenSale(context: any, shopId?: string) {
+    const branchCode = await this.resolveScopedBranchCode(shopId, context);
+    await this.normalizeOpenSalesForContext(context, branchCode);
+
+    const existingSale = await this.prisma.sale.findFirst({
+      where: this.buildOpenSaleWhere(context, branchCode),
+      include: {
+        user: true,
+        items: true,
+      },
+      orderBy: {
+        updatedAt: 'desc',
+      },
+    });
+
+    if (existingSale && existingSale.items.length > 0) {
+      return existingSale;
+    }
+
+    if (existingSale && existingSale.items.length === 0) {
+      await this.prisma.sale.delete({
+        where: { id: existingSale.id },
+      });
+    }
+
+    return this.prisma.sale.create({
+      data: {
+        companyId:
+          context?.userType === 'company'
+            ? (context.companyId ?? undefined)
+            : undefined,
+        number: this.generateOrderNumber(),
+        status: 'open',
+        isDraft: true,
+        branchCode: branchCode ?? context?.currentBranchCode ?? undefined,
+        userId: context?.userId ?? undefined,
+      },
+      include: {
+        user: true,
+        items: true,
+      },
+    });
+  }
+
+  private async normalizeOpenSalesForContext(
+    context: any,
+    branchCode?: string,
+    keepSaleId?: number,
+  ) {
+    const openSales = await this.prisma.sale.findMany({
+      where: this.buildOpenSaleWhere(context, branchCode, keepSaleId),
+      include: {
+        items: true,
+      },
+      orderBy: {
+        updatedAt: 'desc',
+      },
+    });
+
+    if (!openSales.length) {
+      return;
+    }
+
+    const salesWithItems = openSales.filter((sale) => sale.items.length > 0);
+    const reusableSaleId = salesWithItems[0]?.id;
+    const deleteIds = openSales
+      .filter((sale) => sale.items.length === 0)
+      .map((sale) => sale.id);
+    const draftIds = openSales
+      .filter(
+        (sale) => sale.items.length > 0 && sale.id !== reusableSaleId,
+      )
+      .map((sale) => sale.id);
+
+    if (deleteIds.length) {
+      await this.prisma.sale.deleteMany({
+        where: {
+          id: {
+            in: deleteIds,
+          },
+        },
+      });
+    }
+
+    if (draftIds.length) {
+      await this.prisma.sale.updateMany({
+        where: {
+          id: {
+            in: draftIds,
+          },
+        },
+        data: {
+          status: 'draft',
+        },
+      });
+    }
+  }
+
+  private buildOpenSaleWhere(
+    context: any,
+    branchCode?: string,
+    keepSaleId?: number,
+  ): Prisma.SaleWhereInput {
+    return {
+      AND: [
+        this.buildSaleScope(context) ?? {},
+        {
+          isDraft: true,
+          status: 'open',
+          ...(typeof context?.userId === 'number'
+            ? { userId: context.userId }
+            : {}),
+          ...(branchCode ? { branchCode } : {}),
+          ...(keepSaleId ? { id: { not: keepSaleId } } : {}),
+        },
+      ],
+    };
+  }
+
   private async findSaleOrThrow(id: number) {
     const sale = await this.prisma.sale.findUnique({
       where: { id },
@@ -3062,7 +3155,7 @@ export class SalesService {
     query: Record<string, string | undefined>,
     context: any,
   ) {
-    const andFilters: Record<string, unknown>[] = [];
+    const andFilters: Record<string, unknown>[] = [{ isDraft: false }];
     const scope = this.buildSaleScope(context);
 
     if (scope) {
