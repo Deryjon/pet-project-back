@@ -180,7 +180,9 @@ export class SalesController {
   }
 
   @Post('new-sale/:id/park')
+  @Post('v2/new-sale/:id/park')
   @Post('new-sale/:id/leave')
+  @Post('v2/new-sale/:id/leave')
   parkDraft(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
