@@ -277,7 +277,7 @@ export class SalesService {
     };
   }
 
-  async searchOrderStats(
+  async searchOrderStats( 
     query: Record<string, string | undefined>,
     authorization?: string,
   ) {
@@ -2993,10 +2993,7 @@ export class SalesService {
   }
 
   private generateOrderNumber() {
-    const randomSuffix = Math.floor(Math.random() * 1000)
-      .toString()
-      .padStart(3, '0');
-    return `${Date.now()}${randomSuffix}`;
+    return Date.now().toString().slice(-12);
   }
 
   private getSignedSaleAmount(sale: {
