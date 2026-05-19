@@ -943,6 +943,69 @@ export class SalesService {
     return this.findDraft(id, authorization);
   }
 
+  async updateItem(
+    id: number,
+    itemId: number,
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const sale = await this.findSaleOrThrow(id);
+    this.assertSaleAccess(sale, context);
+
+    if (!sale.isDraft) {
+      throw new BadRequestException('Cannot update paid sale');
+    }
+
+    const item = await this.prisma.saleItem.findFirst({
+      where: {
+        id: itemId,
+        saleId: id,
+      },
+    });
+
+    if (!item) {
+      throw new NotFoundException('Sale item not found');
+    }
+
+    const quantity = this.toNumber(body.quantity);
+    if (!quantity || quantity <= 0) {
+      throw new BadRequestException('quantity must be greater than 0');
+    }
+
+    const salePrice = this.toNumber(body.sale_price) ?? item.salePrice;
+    const product = item.productId
+      ? await this.prisma.product.findFirst({
+          where: this.buildProductScope(
+            {
+              id: item.productId,
+            },
+            context,
+          ),
+        })
+      : null;
+    const purchasePrice = product?.purchasePrice ?? 0;
+
+    await this.prisma.saleItem.update({
+      where: { id: itemId },
+      data: {
+        quantity,
+        salePrice,
+        sellerId: sale.userId ?? item.sellerId ?? undefined,
+        lineTotal: quantity * salePrice,
+        retailPriceAtSale: quantity * salePrice,
+        finalPrice: quantity * salePrice,
+        supplyPriceAtSale: quantity * purchasePrice,
+        profitAtSale: quantity * salePrice - quantity * purchasePrice,
+        markupAtSale:
+          purchasePrice > 0 ? salePrice / purchasePrice : null,
+      } as any,
+    });
+
+    await this.recalculateSale(id);
+    return this.findDraft(id, authorization);
+  }
+
   async updateDiscount(
     id: number,
     body: Record<string, unknown>,
