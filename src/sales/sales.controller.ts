@@ -161,6 +161,17 @@ export class SalesController {
     return this.salesService.addItem(id, body, authorization);
   }
 
+  @Delete('new-sale/:id/items/:itemId')
+  @Delete('v1/new-sale/:id/items/:itemId')
+  @Delete('v2/new-sale/:id/items/:itemId')
+  removeItem(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('itemId', ParseIntPipe) itemId: number,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.removeItem(id, itemId, authorization);
+  }
+
   @Put('new-sale/:id/discount')
   updateDiscount(
     @Param('id', ParseIntPipe) id: number,

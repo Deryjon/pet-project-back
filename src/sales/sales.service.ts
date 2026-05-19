@@ -915,6 +915,34 @@ export class SalesService {
     return this.findDraft(id, authorization);
   }
 
+  async removeItem(id: number, itemId: number, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
+    const sale = await this.findSaleOrThrow(id);
+    this.assertSaleAccess(sale, context);
+
+    if (!sale.isDraft) {
+      throw new BadRequestException('Cannot update paid sale');
+    }
+
+    const item = await this.prisma.saleItem.findFirst({
+      where: {
+        id: itemId,
+        saleId: id,
+      },
+    });
+
+    if (!item) {
+      throw new NotFoundException('Sale item not found');
+    }
+
+    await this.prisma.saleItem.delete({
+      where: { id: itemId },
+    });
+
+    await this.recalculateSale(id);
+    return this.findDraft(id, authorization);
+  }
+
   async updateDiscount(
     id: number,
     body: Record<string, unknown>,
