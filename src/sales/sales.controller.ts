@@ -180,10 +180,23 @@ export class SalesController {
   }
 
   @Post('new-sale/:id/park')
+  @Post('v1/new-sale/:id/park')
   @Post('v2/new-sale/:id/park')
   @Post('new-sale/:id/leave')
+  @Post('v1/new-sale/:id/leave')
   @Post('v2/new-sale/:id/leave')
   parkDraft(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.parkDraft(id, body, authorization);
+  }
+
+  @Post('leave-sale/:id')
+  @Post('v1/leave-sale/:id')
+  @Post('v2/leave-sale/:id')
+  leaveDraft(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
