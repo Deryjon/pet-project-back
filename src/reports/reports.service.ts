@@ -92,7 +92,7 @@ export class ReportsService {
     const context = await this.getContext(authorization);
     const sales = await this.loadReportSales(query, context);
     const shops = await this.loadReportShops(context, query);
-    const shopMap = new Map(
+    const shopMap = new Map<string, any>(
       shops.map((shop) => [shop.branchCode, shop] as const),
     );
     const grouped = new Map<string, any[]>();
@@ -118,7 +118,6 @@ export class ReportsService {
               ? {
                   id: shop.id,
                   name: shop.name,
-                  branchCode: shop.branchCode,
                 }
               : undefined,
           ),
