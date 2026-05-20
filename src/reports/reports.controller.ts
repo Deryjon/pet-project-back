@@ -94,6 +94,12 @@ const SELLER_SALARY_REPORT_ROUTES = versioned([
   'sellers/:sellerId/salary-report',
   'reports/sellers/:sellerId/salary-report',
 ]);
+const GENERAL_REPORT_ROUTES = versioned(['general-report']);
+const GENERAL_REPORT_TABLE_ROUTES = versioned(['general-report-table']);
+const GENERAL_SALES_REPORT_ROUTES = versioned(['general-sales-report']);
+const GENERAL_PRODUCT_REPORT_ROUTES = versioned(['general-product-report']);
+const GENERAL_SELLER_REPORT_ROUTES = versioned(['general-seller-report']);
+const GENERAL_CUSTOMER_REPORT_ROUTES = versioned(['general-customer-report']);
 
 @Controller()
 export class ReportsController {
@@ -105,6 +111,54 @@ export class ReportsController {
     @Headers('authorization') authorization?: string,
   ) {
     return this.reportsService.getSummary(query, authorization);
+  }
+
+  @Get(GENERAL_REPORT_ROUTES)
+  getGeneralReport(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.reportsService.getGeneralReport(query, authorization);
+  }
+
+  @Get(GENERAL_REPORT_TABLE_ROUTES)
+  getGeneralReportTable(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.reportsService.getGeneralReportTable(query, authorization);
+  }
+
+  @Get(GENERAL_SALES_REPORT_ROUTES)
+  getGeneralSalesReport(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.reportsService.getGeneralSalesReport(query, authorization);
+  }
+
+  @Get(GENERAL_PRODUCT_REPORT_ROUTES)
+  getGeneralProductReport(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.reportsService.getGeneralProductReport(query, authorization);
+  }
+
+  @Get(GENERAL_SELLER_REPORT_ROUTES)
+  getGeneralSellerReport(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.reportsService.getGeneralSellerReport(query, authorization);
+  }
+
+  @Get(GENERAL_CUSTOMER_REPORT_ROUTES)
+  getGeneralCustomerReport(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.reportsService.getGeneralCustomerReport(query, authorization);
   }
 
   @Get(SHOP_REPORT_ROUTES)

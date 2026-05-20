@@ -54,6 +54,311 @@ export class ReportsService {
     };
   }
 
+  async getGeneralReport(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const sales = await this.loadReportSales(query, context);
+    const shops = await this.loadReportShops(context, query);
+    const summary = this.buildSummaryMetrics(sales);
+    const shopStats = shops.map((shop) =>
+      this.toGeneralReportMetrics(
+        this.buildSummaryMetrics(
+          sales.filter((sale: any) => sale.branchCode === shop.branchCode),
+        ),
+        shop,
+      ),
+    );
+
+    return {
+      ...this.toGeneralReportMetrics(summary),
+      shop_stats: shopStats,
+      sales_per_square: 0,
+      target: 0,
+      left_products_start_date: 0,
+      left_products_supply_price_start_date: 0,
+      left_products_retail_price_start_date: 0,
+      left_products_end_date: 0,
+      left_products_supply_price_end_date: 0,
+      left_products_retail_price_end_date: 0,
+    };
+  }
+
+  async getGeneralReportTable(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const sales = await this.loadReportSales(query, context);
+    const shops = await this.loadReportShops(context, query);
+    const shopMap = new Map(
+      shops.map((shop) => [shop.branchCode, shop] as const),
+    );
+    const grouped = new Map<string, any[]>();
+
+    for (const sale of sales) {
+      const date = this.toPlotDate(sale.paidAt ?? sale.createdAt);
+      const branchCode = sale.branchCode ?? '';
+      const key = `${date}__${branchCode}`;
+      const bucket = grouped.get(key) ?? [];
+      bucket.push(sale);
+      grouped.set(key, bucket);
+    }
+
+    const rows = [...grouped.entries()]
+      .map(([key, bucket]) => {
+        const [date, branchCode] = key.split('__');
+        const shop = shopMap.get(branchCode);
+        return {
+          date,
+          ...this.toGeneralReportMetrics(
+            this.buildSummaryMetrics(bucket),
+            shop
+              ? {
+                  id: shop.id,
+                  name: shop.name,
+                  branchCode: shop.branchCode,
+                }
+              : undefined,
+          ),
+          target: 0,
+        };
+      })
+      .sort((a, b) =>
+        a.date === b.date
+          ? String(a.shop_name).localeCompare(String(b.shop_name))
+          : String(a.date).localeCompare(String(b.date)),
+      );
+    const paginated = this.paginate(rows, query);
+
+    return {
+      shop_stats_by_date: paginated.items,
+      count: rows.length,
+      Err: null,
+    };
+  }
+
+  async getGeneralSalesReport(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const sales = await this.loadReportSales(query, context);
+    const shops = await this.loadReportShops(context, query);
+    const field = this.optionalString(query.field) ?? 'gross_sales';
+    const shopStats = shops
+      .map((shop) => {
+        const summary = this.buildSummaryMetrics(
+          sales.filter((sale: any) => sale.branchCode === shop.branchCode),
+        );
+        return {
+          shop_id: shop.id,
+          shop_name: shop.name,
+          value: this.resolveGeneralSalesField(summary, field),
+        };
+      })
+      .sort((a, b) => b.value - a.value);
+
+    return {
+      shop_stats: shopStats,
+      shop_plot: this.buildGeneralShopPlot(
+        sales,
+        shops,
+        (bucket) => this.resolveGeneralSalesField(this.buildSummaryMetrics(bucket), field),
+      ),
+      value: shopStats.reduce((sum, item) => sum + item.value, 0),
+      record_date: '',
+    };
+  }
+
+  async getGeneralProductReport(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const sales = await this.loadReportSales(query, context);
+    const shops = await this.loadReportShops(context, query);
+    const field = this.optionalString(query.field) ?? 'sold_with_discount';
+    const plotShops = await this.loadReportShops(context, query, [
+      'plot_shop_ids',
+      'shop_ids',
+      'shopId',
+      'shop_id',
+    ]);
+    const productGroups = new Map<string, any>();
+    const categoryGroups = new Map<string, any>();
+    const shopStats = shops.map((shop) => ({
+      shop_id: shop.id,
+      shop_name: shop.name,
+      value: this.calculateProductMetric(
+        sales.filter((sale: any) => sale.branchCode === shop.branchCode),
+        field,
+      ),
+    }));
+
+    for (const sale of sales) {
+      const sign = this.getSaleSign(sale);
+      for (const item of sale.items) {
+        if (sign < 0) {
+          continue;
+        }
+        const productKey = String(item.productId ?? item.name);
+        const categoryKey = String(item.product?.category?.id ?? 'unknown');
+        const productValue = this.resolveProductRankingValue(item, query);
+        const categoryValue = this.resolveCategoryRankingValue(item, query);
+        const existingProduct = productGroups.get(productKey) ?? {
+          id: item.productId ? String(item.productId) : '',
+          name: item.name,
+          sku: item.sku ?? item.product?.sku ?? '',
+          barcode: item.barcode ?? item.product?.barcode ?? '',
+          measurement_value: 0,
+          retail_price: 0,
+          main_image_url: '',
+          value: 0,
+          base_name: item.name,
+        };
+        existingProduct.value += productValue;
+        productGroups.set(productKey, existingProduct);
+
+        const existingCategory = categoryGroups.get(categoryKey) ?? {
+          category_id: item.product?.category?.id
+            ? String(item.product.category.id)
+            : '',
+          name: item.product?.category?.name ?? '',
+          measurement_value: 0,
+          value: 0,
+        };
+        existingCategory.value += categoryValue;
+        categoryGroups.set(categoryKey, existingCategory);
+      }
+    }
+
+    return {
+      shop_stats: shopStats,
+      shop_plot: this.buildGeneralShopPlot(
+        sales,
+        plotShops,
+        (bucket) => this.calculateProductMetric(bucket, field),
+      ),
+      value: this.calculateProductMetric(sales, field),
+      current_left_products: null,
+      top_products: [...productGroups.values()]
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 10),
+      top_categories: [...categoryGroups.values()]
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 10),
+      record_date: '',
+    };
+  }
+
+  async getGeneralSellerReport(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const filter = this.reportsMapper.toFilterDto(query);
+    const sellersReport = await this.sellerReportsService.getSellers(
+      filter,
+      authorization,
+    );
+    const topSellers = (sellersReport.rows ?? []).map((row: any) => ({
+      seller_id: String(row.seller_id),
+      name: row.seller_name,
+      net_profit: Number(row.gross_profit ?? 0),
+      net_sales: Number(row.net_gross_sales ?? 0),
+      average_cheque: Number(row.average_cheque ?? 0),
+      average_sold_measurement_value:
+        Number(row.transactions_count ?? 0) > 0
+          ? Number(row.products_sold ?? 0) / Number(row.transactions_count ?? 0)
+          : 0,
+      average_price:
+        Number(row.products_sold ?? 0) > 0
+          ? Number(row.net_gross_sales ?? 0) / Number(row.products_sold ?? 0)
+          : 0,
+      total_sold_measurement_value: Number(row.products_sold ?? 0),
+    }));
+
+    return {
+      top_sellers: topSellers,
+      count_others: 0,
+      other_sellers: null,
+    };
+  }
+
+  async getGeneralCustomerReport(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const sales = await this.loadReportSales(query, context);
+    const shops = await this.loadReportShops(context, query);
+    const plotShops = await this.loadReportShops(context, query, [
+      'plot_shop_ids',
+      'shop_ids',
+      'shopId',
+      'shop_id',
+    ]);
+    const customers = new Map<string, { count: number; amount: number }>();
+
+    for (const sale of sales) {
+      const key = (sale.clientName ?? '').trim();
+      if (!key || sale.saleType === 'return') {
+        continue;
+      }
+      const existing = customers.get(key) ?? { count: 0, amount: 0 };
+      existing.count += 1;
+      existing.amount += this.getSaleNetAmount(sale);
+      customers.set(key, existing);
+    }
+
+    const topClientEntry = [...customers.entries()].sort(
+      (a, b) => b[1].count - a[1].count,
+    )[0];
+    const topTransactionEntry = [...customers.entries()].sort(
+      (a, b) => b[1].amount - a[1].amount,
+    )[0];
+
+    return {
+      shop_plot: this.buildGeneralShopPlot(
+        sales,
+        plotShops,
+        () => 0,
+      ),
+      top_client: topClientEntry
+        ? {
+            customer_id: '',
+            name: topClientEntry[0],
+            purchase_amount: topClientEntry[1].count,
+          }
+        : {
+            customer_id: '',
+            name: '',
+            purchase_amount: 0,
+          },
+      top_transaction: topTransactionEntry
+        ? {
+            customer_id: '',
+            name: topTransactionEntry[0],
+            total_price: topTransactionEntry[1].amount,
+          }
+        : {
+            customer_id: '',
+            name: '',
+            total_price: 0,
+          },
+      record_date: '',
+      shop_stats: shops.map((shop) => ({
+        shop_id: shop.id,
+        shop_name: shop.name,
+        new: 0,
+        returned: 0,
+      })),
+      new_count: 0,
+      returned_count: 0,
+    };
+  }
+
   async getShops(
     query: Record<string, string | undefined>,
     authorization?: string,
@@ -693,6 +998,41 @@ export class ReportsService {
     });
   }
 
+  private async loadReportShops(
+    context: any,
+    query: Record<string, string | undefined>,
+    keys = ['shop_ids', 'shopId', 'shop_id'],
+  ) {
+    const requestedShopIds = this.extractQueryStringArray(query, ...keys);
+    const where: Record<string, unknown> = {};
+
+    if (context?.companyId) {
+      where.companyId = context.companyId;
+    }
+
+    if (requestedShopIds.length) {
+      where.OR = [
+        { id: { in: requestedShopIds } },
+        { branchCode: { in: requestedShopIds } },
+      ];
+    }
+
+    const shops = await this.db.shop.findMany({
+      where,
+      orderBy: { name: 'asc' },
+    });
+
+    if (shops.length) {
+      return shops;
+    }
+
+    return requestedShopIds.map((shopId) => ({
+      id: shopId,
+      name: shopId,
+      branchCode: shopId,
+    }));
+  }
+
   private async loadReportProducts(
     query: Record<string, string | undefined>,
     context: any,
@@ -774,15 +1114,13 @@ export class ReportsService {
       });
     }
 
-    const shopId = this.firstQueryValue(query, 'shopId', 'shop_id')?.trim();
-    if (shopId) {
-      const shop = await this.db.shop.findFirst({
-        where: {
-          ...(context?.companyId ? { companyId: context.companyId } : {}),
-          OR: [{ id: shopId }, { branchCode: shopId }],
-        },
-      });
-      and.push({ branchCode: shop?.branchCode ?? shopId });
+    const branchCodes = await this.resolveShopBranchCodesFromQuery(query, context, [
+      'shop_ids',
+      'shopId',
+      'shop_id',
+    ]);
+    if (branchCodes.length) {
+      and.push({ branchCode: { in: branchCodes } });
     }
 
     const sellerId = this.toInt(this.firstQueryValue(query, 'sellerId', 'seller_id'));
@@ -867,18 +1205,18 @@ export class ReportsService {
       });
     }
 
-    const shopId = this.optionalString(this.firstQueryValue(query, 'shopId', 'shop_id'));
-    if (shopId) {
-      const shop = await this.db.shop.findFirst({
-        where: {
-          ...(context?.companyId ? { companyId: context.companyId } : {}),
-          OR: [{ id: shopId }, { branchCode: shopId }],
-        },
-      });
+    const branchCodes = await this.resolveShopBranchCodesFromQuery(query, context, [
+      'shop_ids',
+      'shopId',
+      'shop_id',
+    ]);
+    if (branchCodes.length) {
       and.push({
         stocks: {
           some: {
-            branchCode: shop?.branchCode ?? shopId,
+            branchCode: {
+              in: branchCodes,
+            },
           },
         },
       });
@@ -917,15 +1255,13 @@ export class ReportsService {
       and.push({ productId });
     }
 
-    const shopId = this.optionalString(this.firstQueryValue(query, 'shopId', 'shop_id'));
-    if (shopId) {
-      const shop = await this.db.shop.findFirst({
-        where: {
-          ...(context?.companyId ? { companyId: context.companyId } : {}),
-          OR: [{ id: shopId }, { branchCode: shopId }],
-        },
-      });
-      and.push({ shopId: shop?.id ?? shopId });
+    const shopIds = await this.resolveShopIdsFromQuery(query, context, [
+      'shop_ids',
+      'shopId',
+      'shop_id',
+    ]);
+    if (shopIds.length) {
+      and.push({ shopId: { in: shopIds } });
     }
 
     const categoryId = this.toInt(this.firstQueryValue(query, 'categoryId', 'category_id'));
@@ -1648,6 +1984,247 @@ export class ReportsService {
       return Math.min(100, Math.round(summary.net_gross_sales > 0 ? 100 : 0));
     }
     return Math.min(100, Math.round((summary.net_gross_sales / target) * 100));
+  }
+
+  private toGeneralReportMetrics(summary: any, shop?: { id: string; name: string }) {
+    const salesSupplyPrice = Math.max(
+      0,
+      Number(summary.gross_sales ?? 0) -
+        Number(summary.net_gross_sales ?? 0) -
+        Number(summary.discount_sum ?? 0) +
+        Number(summary.gross_profit ?? 0),
+    );
+
+    return {
+      ...(shop
+        ? {
+            shop_id: shop.id,
+            shop_name: shop.name,
+          }
+        : {}),
+      gross_sales: Number(summary.gross_sales ?? 0),
+      discount_sum: Number(summary.discount_sum ?? 0),
+      discount_percent: Number(summary.discount_percent ?? 0),
+      products_returned: 0,
+      products_exchanged: 0,
+      returned_supply_price: 0,
+      returned_discount_price: 0,
+      returned_retail_price: 0,
+      sales_supply_price: salesSupplyPrice,
+      net_gross_sales: Number(summary.net_gross_sales ?? 0),
+      gross_profit: Number(summary.gross_profit ?? 0),
+      average_cheque: Number(summary.average_cheque ?? 0),
+      average_price:
+        Number(summary.products_sold ?? 0) > 0
+          ? Number(summary.net_gross_sales ?? 0) / Number(summary.products_sold ?? 0)
+          : 0,
+      sales: 0,
+      average_measurement_value:
+        Number(summary.transactions_count ?? 0) > 0
+          ? Number(summary.products_sold ?? 0) / Number(summary.transactions_count ?? 0)
+          : 0,
+      average_discount: 0,
+      average_extra_charge: Number(summary.average_extra_charge ?? 0),
+      products_sold: Number(summary.products_sold ?? 0),
+      imported_measurement_value: 0,
+      imported_retail_price: 0,
+      imported_supply_price: 0,
+      transactions_count: Number(summary.transactions_count ?? 0),
+      orders_count: Number(summary.transactions_count ?? 0),
+      returns_count: Number(summary.returns_count ?? 0),
+      exchanges_count: Number(summary.exchanges_count ?? 0),
+      sales_per_square: 0,
+      left_products_start_date: 0,
+      left_products_supply_price_start_date: 0,
+      left_products_retail_price_start_date: 0,
+      left_products_end_date: 0,
+      left_products_supply_price_end_date: 0,
+      left_products_retail_price_end_date: 0,
+    };
+  }
+
+  private resolveGeneralSalesField(summary: any, field: string) {
+    switch (field) {
+      case 'net_gross_sales':
+        return Number(summary.net_gross_sales ?? 0);
+      case 'gross_profit':
+        return Number(summary.gross_profit ?? 0);
+      case 'discount_sum':
+        return Number(summary.discount_sum ?? 0);
+      case 'transactions_count':
+        return Number(summary.transactions_count ?? 0);
+      case 'products_sold':
+        return Number(summary.products_sold ?? 0);
+      case 'gross_sales':
+      default:
+        return Number(summary.gross_sales ?? 0);
+    }
+  }
+
+  private calculateProductMetric(sales: any[], field: string) {
+    let value = 0;
+
+    for (const sale of sales) {
+      const sign = this.getSaleSign(sale);
+      for (const item of sale.items) {
+        if (sign < 0) {
+          continue;
+        }
+        if (field === 'sold_with_discount') {
+          value += this.getItemDiscount(item) > 0 ? Number(item.quantity ?? 0) : 0;
+          continue;
+        }
+        if (field === 'sold_qty') {
+          value += Number(item.quantity ?? 0);
+          continue;
+        }
+        value += this.getItemFinalPrice(item);
+      }
+    }
+
+    return value;
+  }
+
+  private resolveProductRankingValue(
+    item: any,
+    query: Record<string, string | undefined>,
+  ) {
+    const field = this.optionalString(query.top_product_field) ?? 'sold_qty';
+    switch (field) {
+      case 'gross_profit':
+        return this.getItemProfit(item);
+      case 'net_gross_sales':
+        return this.getItemFinalPrice(item);
+      case 'sold_qty':
+      default:
+        return Number(item.quantity ?? 0);
+    }
+  }
+
+  private resolveCategoryRankingValue(
+    item: any,
+    query: Record<string, string | undefined>,
+  ) {
+    const field = this.optionalString(query.top_category_field) ?? 'sold_qty';
+    switch (field) {
+      case 'gross_profit':
+        return this.getItemProfit(item);
+      case 'net_gross_sales':
+        return this.getItemFinalPrice(item);
+      case 'sold_qty':
+      default:
+        return Number(item.quantity ?? 0);
+    }
+  }
+
+  private buildGeneralShopPlot(
+    sales: any[],
+    shops: any[],
+    valueResolver: (sales: any[]) => number,
+  ) {
+    const dayMap = new Map<string, Record<string, number>>();
+
+    for (const sale of sales) {
+      const day = this.toPlotDate(sale.paidAt ?? sale.createdAt);
+      const bucket = dayMap.get(day) ?? {};
+      dayMap.set(day, bucket);
+    }
+
+    if (!dayMap.size) {
+      const startDate = this.toPlotDate(this.parseDate(undefined) ?? new Date());
+      const empty: Record<string, number | string> = {
+        start_date: startDate,
+      };
+      for (const shop of shops) {
+        empty[shop.name] = 0;
+      }
+      return [empty];
+    }
+
+    return [...dayMap.keys()]
+      .sort((a, b) => a.localeCompare(b))
+      .map((day) => {
+        const row: Record<string, number | string> = {
+          start_date: day,
+        };
+        for (const shop of shops) {
+          row[shop.name] = valueResolver(
+            sales.filter((sale: any) => {
+              const saleDay = this.toPlotDate(sale.paidAt ?? sale.createdAt);
+              return saleDay === day && sale.branchCode === shop.branchCode;
+            }),
+          );
+        }
+        return row;
+      });
+  }
+
+  private toPlotDate(value: Date | string) {
+    const date = new Date(value);
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(date.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day} 00:00:00`;
+  }
+
+  private extractQueryStringArray(
+    query: Record<string, string | undefined>,
+    ...keys: string[]
+  ) {
+    for (const key of keys) {
+      const value = query[key];
+      if (typeof value === 'string' && value.trim().length > 0) {
+        return value
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean);
+      }
+    }
+    return [] as string[];
+  }
+
+  private async resolveShopBranchCodesFromQuery(
+    query: Record<string, string | undefined>,
+    context: any,
+    keys: string[],
+  ) {
+    const shopKeys = this.extractQueryStringArray(query, ...keys);
+    if (!shopKeys.length) {
+      return [];
+    }
+    const shops = await this.db.shop.findMany({
+      where: {
+        ...(context?.companyId ? { companyId: context.companyId } : {}),
+        OR: [{ id: { in: shopKeys } }, { branchCode: { in: shopKeys } }],
+      },
+      select: {
+        branchCode: true,
+      },
+    });
+    return shops.length
+      ? shops.map((shop: any) => shop.branchCode).filter(Boolean)
+      : shopKeys;
+  }
+
+  private async resolveShopIdsFromQuery(
+    query: Record<string, string | undefined>,
+    context: any,
+    keys: string[],
+  ) {
+    const shopKeys = this.extractQueryStringArray(query, ...keys);
+    if (!shopKeys.length) {
+      return [];
+    }
+    const shops = await this.db.shop.findMany({
+      where: {
+        ...(context?.companyId ? { companyId: context.companyId } : {}),
+        OR: [{ id: { in: shopKeys } }, { branchCode: { in: shopKeys } }],
+      },
+      select: {
+        id: true,
+      },
+    });
+    return shops.length ? shops.map((shop: any) => shop.id) : shopKeys;
   }
 
   private buildAppliedFilters(query: Record<string, string | undefined>) {
