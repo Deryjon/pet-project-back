@@ -2624,6 +2624,7 @@ export class SalesService {
       createdAt: Date;
       updatedAt: Date;
       isDraft: boolean;
+      discountPercent: number;
       total: number;
       payableTotal: number;
       discountAmount: number;
@@ -2638,6 +2639,8 @@ export class SalesService {
         quantity: number;
         salePrice: number;
         lineTotal: number;
+        discountAmount?: number;
+        finalPrice?: number;
         product: {
           id: number;
           name: string;
@@ -2670,7 +2673,100 @@ export class SalesService {
     const payment = sale.paymentMethod
       ? paymentTypeLookup.get(sale.paymentMethod)
       : undefined;
-    const paidAmount = sale.payableTotal || sale.total || 0;
+    const retailTotal = sale.items.reduce(
+      (sum, item) => sum + (item.lineTotal || item.quantity * item.salePrice || 0),
+      0,
+    );
+    const orderItems = sale.items.map((item, index) => {
+      const baseTotal = Number(item.lineTotal || item.quantity * item.salePrice || 0);
+      const percentPart = baseTotal * ((sale.discountPercent || 0) / 100);
+      const flatPart =
+        retailTotal > 0 ? ((sale.discountAmount || 0) * baseTotal) / retailTotal : 0;
+      const fallbackDiscountAmount = Number((percentPart + flatPart).toFixed(2));
+      const discountAmount = Number(
+        (
+          sale.isDraft
+            ? fallbackDiscountAmount
+            : (item.discountAmount ?? fallbackDiscountAmount)
+        ).toFixed(2),
+      );
+      const finalPrice = Number(
+        (
+          sale.isDraft
+            ? Math.max(0, baseTotal - fallbackDiscountAmount)
+            : (item.finalPrice ?? Math.max(0, baseTotal - discountAmount))
+        ).toFixed(2),
+      );
+      const discountPercent =
+        baseTotal > 0 ? Number(((discountAmount / baseTotal) * 100).toFixed(2)) : 0;
+
+      return {
+        id: String(item.id),
+        sellers: sale.user
+          ? [
+              {
+                id: randomUUID(),
+                seller_id: String(sale.user.id),
+                seller: {
+                  name: `${sale.user.firstName} ${sale.user.lastName}`.trim(),
+                  first_name: sale.user.firstName,
+                  last_name: sale.user.lastName,
+                },
+                item_id: '',
+              },
+            ]
+          : [],
+        product: item.product ? this.toOrderProductResponse(item.product) : null,
+        product_id: item.productId ? String(item.productId) : '',
+        product_type_id: item.product?.productType ?? DEFAULT_PRODUCT_TYPE_ID,
+        product_variant_id: '',
+        name: item.name,
+        sku: item.sku ?? '',
+        barcode: item.barcode ?? '',
+        retail_price: item.salePrice,
+        supply_price: item.product?.purchasePrice ?? 0,
+        total_price: finalPrice,
+        price: item.salePrice,
+        sale_price: item.salePrice,
+        rounding_price: 0,
+        discount_value: discountAmount,
+        discount_unit: discountAmount > 0 ? 'amount' : '',
+        discount_amount: discountAmount,
+        discount_percent: discountPercent,
+        measurement_value: item.quantity,
+        returned_measurement_value: sale.saleType === 'return' ? item.quantity : 0,
+        measurement_type: '',
+        sequence_number: index + 1,
+        is_returned: sale.saleType === 'return',
+        has_manual_discount: discountAmount > 0,
+        promo_id: '',
+        promo_ids: null,
+        promo_shorts: null,
+        used_wholesale_price: false,
+        return_days_with_discount: 0,
+        free_price: false,
+        order_detail_id: '',
+        marking_codes: null,
+        marking_code_infos: null,
+        order_product_id: 0,
+        sale_order_item_id: '',
+      };
+    });
+    const totalDiscountAmount = Number(
+      orderItems.reduce((sum, item) => sum + item.discount_amount, 0).toFixed(2),
+    );
+    const paidAmount = Number((sale.payableTotal || sale.total || 0).toFixed(2));
+    const totalPrice = Number(
+      (
+        sale.isDraft
+          ? orderItems.reduce((sum, item) => sum + item.total_price, 0)
+          : paidAmount
+      ).toFixed(2),
+    );
+    const hasDiscount =
+      totalDiscountAmount > 0 ||
+      sale.discountAmount > 0 ||
+      sale.discountPercent > 0;
 
     return {
       id: String(sale.id),
@@ -2708,8 +2804,11 @@ export class SalesService {
           id: shop.shop_id,
           name: shop.shop_name,
         },
-        total_price: sale.total,
-        has_discount: sale.discountAmount > 0,
+        total_price: totalPrice,
+        subtotal_price: sale.total,
+        discount_amount: totalDiscountAmount,
+        discount_percent: sale.discountPercent,
+        has_discount: hasDiscount,
         total_products_measurement_value: sale.items.reduce(
           (sum, item) => sum + item.quantity,
           0,
@@ -2724,60 +2823,7 @@ export class SalesService {
         comment: '',
         created_at: this.formatDateTime(sale.createdAt),
         created_at_utc: '',
-        order_items: sale.items.map((item, index) => ({
-          id: String(item.id),
-          sellers: sale.user
-            ? [
-                {
-                  id: randomUUID(),
-                  seller_id: String(sale.user.id),
-                  seller: {
-                    name: `${sale.user.firstName} ${sale.user.lastName}`.trim(),
-                    first_name: sale.user.firstName,
-                    last_name: sale.user.lastName,
-                  },
-                  item_id: '',
-                },
-              ]
-            : [],
-          product: item.product
-            ? this.toOrderProductResponse(item.product)
-            : null,
-          product_id: item.productId ? String(item.productId) : '',
-          product_type_id: item.product?.productType ?? DEFAULT_PRODUCT_TYPE_ID,
-          product_variant_id: '',
-          name: item.name,
-          sku: item.sku ?? '',
-          barcode: item.barcode ?? '',
-          retail_price: item.salePrice,
-          supply_price: item.product?.purchasePrice ?? 0,
-          total_price: item.lineTotal,
-          price: item.salePrice,
-          sale_price: item.salePrice,
-          rounding_price: 0,
-          discount_value: 0,
-          discount_unit: '',
-          discount_amount: 0,
-          discount_percent: 0,
-          measurement_value: item.quantity,
-          returned_measurement_value:
-            sale.saleType === 'return' ? item.quantity : 0,
-          measurement_type: '',
-          sequence_number: index + 1,
-          is_returned: sale.saleType === 'return',
-          has_manual_discount: false,
-          promo_id: '',
-          promo_ids: null,
-          promo_shorts: null,
-          used_wholesale_price: false,
-          return_days_with_discount: 0,
-          free_price: false,
-          order_detail_id: '',
-          marking_codes: null,
-          marking_code_infos: null,
-          order_product_id: 0,
-          sale_order_item_id: '',
-        })),
+        order_items: orderItems,
         order_payments:
           !sale.isDraft && sale.paymentMethod
             ? [
