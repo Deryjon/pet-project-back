@@ -58,6 +58,172 @@ export class ClientsService {
     };
   }
 
+  async createClient(
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const shopId = await this.resolveRegistrationShopId(
+      body.registration_shop_id,
+      context,
+    );
+    const groupIds = await this.resolveGroupIds(body.group_ids, context.companyId);
+    const tagIds = await this.resolveTagIds(body.tag_ids, context.companyId);
+    const client = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.client.create({
+        data: {
+          companyId: context.companyId,
+          code: await this.generateClientCode(context.companyId, tx),
+          firstName: this.requireString(body.first_name, 'first_name'),
+          lastName: this.optionalBodyString(body.last_name),
+          middleName: this.optionalBodyString(body.middle_name),
+          phone: this.requireString(body.phone, 'phone'),
+          gender: this.parseBodyGender(body.gender),
+          birthDate: this.parseNullableDateOnly(body.birth_date),
+          maritalStatus: this.optionalBodyString(body.marital_status),
+          address: this.optionalBodyString(body.address),
+          socialLinks: this.parseStringArrayBody(body.social_links),
+          relatives: this.parseStringArrayBody(body.relatives),
+          registrationShopId: shopId,
+          registeredAt:
+            this.parseNullableDateTime(body.registered_at) ?? new Date(),
+          balanceUzs: this.toDecimal(body.balance_uzs),
+          debtUzs: new Prisma.Decimal(0),
+          totalPurchasesUzs: this.toDecimal(body.total_purchases_uzs),
+          lastPurchaseAt: this.parseNullableDateTime(body.last_purchase_at),
+          visitsCount: this.parseBodyInt(body.visits_count, 0),
+          smsNotifications: this.parseBoolean(body.sms_notifications, false),
+          phoneNotifications: this.parseBoolean(
+            body.phone_notifications,
+            false,
+          ),
+          socialNotifications: this.parseBoolean(
+            body.social_notifications,
+            false,
+          ),
+          emailNotifications: this.parseBoolean(
+            body.email_notifications,
+            false,
+          ),
+          groups: groupIds.length
+            ? {
+                create: groupIds.map((groupId) => ({ groupId })),
+              }
+            : undefined,
+          tags: tagIds.length
+            ? {
+                create: tagIds.map((tagId) => ({ tagId })),
+              }
+            : undefined,
+        },
+      });
+
+      return created;
+    });
+
+    return this.findOne(client.id, authorization);
+  }
+
+  async updateClient(
+    id: string,
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    await this.findClientOrThrow(id, context.companyId);
+    const shopId =
+      body.registration_shop_id !== undefined
+        ? await this.resolveRegistrationShopId(body.registration_shop_id, context)
+        : undefined;
+    const groupIds =
+      body.group_ids !== undefined
+        ? await this.resolveGroupIds(body.group_ids, context.companyId)
+        : null;
+    const tagIds =
+      body.tag_ids !== undefined
+        ? await this.resolveTagIds(body.tag_ids, context.companyId)
+        : null;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.client.update({
+        where: { id },
+        data: {
+          ...(body.first_name !== undefined
+            ? { firstName: this.requireString(body.first_name, 'first_name') }
+            : {}),
+          ...(body.last_name !== undefined
+            ? { lastName: this.optionalBodyString(body.last_name) }
+            : {}),
+          ...(body.middle_name !== undefined
+            ? { middleName: this.optionalBodyString(body.middle_name) }
+            : {}),
+          ...(body.phone !== undefined
+            ? { phone: this.requireString(body.phone, 'phone') }
+            : {}),
+          ...(body.gender !== undefined
+            ? { gender: this.parseBodyGender(body.gender) }
+            : {}),
+          ...(body.birth_date !== undefined
+            ? { birthDate: this.parseNullableDateOnly(body.birth_date) }
+            : {}),
+          ...(body.marital_status !== undefined
+            ? { maritalStatus: this.optionalBodyString(body.marital_status) }
+            : {}),
+          ...(body.address !== undefined
+            ? { address: this.optionalBodyString(body.address) }
+            : {}),
+          ...(body.social_links !== undefined
+            ? { socialLinks: this.parseStringArrayBody(body.social_links) }
+            : {}),
+          ...(body.relatives !== undefined
+            ? { relatives: this.parseStringArrayBody(body.relatives) }
+            : {}),
+          ...(body.registration_shop_id !== undefined
+            ? { registrationShopId: shopId }
+            : {}),
+          ...(body.registered_at !== undefined
+            ? { registeredAt: this.parseNullableDateTime(body.registered_at) ?? new Date() }
+            : {}),
+          ...(body.balance_uzs !== undefined
+            ? { balanceUzs: this.toDecimal(body.balance_uzs) }
+            : {}),
+          ...(body.sms_notifications !== undefined
+            ? { smsNotifications: this.parseBoolean(body.sms_notifications, false) }
+            : {}),
+          ...(body.phone_notifications !== undefined
+            ? { phoneNotifications: this.parseBoolean(body.phone_notifications, false) }
+            : {}),
+          ...(body.social_notifications !== undefined
+            ? { socialNotifications: this.parseBoolean(body.social_notifications, false) }
+            : {}),
+          ...(body.email_notifications !== undefined
+            ? { emailNotifications: this.parseBoolean(body.email_notifications, false) }
+            : {}),
+        },
+      });
+
+      if (groupIds !== null) {
+        await tx.clientGroupLink.deleteMany({ where: { clientId: id } });
+        if (groupIds.length) {
+          await tx.clientGroupLink.createMany({
+            data: groupIds.map((groupId) => ({ clientId: id, groupId })),
+          });
+        }
+      }
+
+      if (tagIds !== null) {
+        await tx.clientTagLink.deleteMany({ where: { clientId: id } });
+        if (tagIds.length) {
+          await tx.clientTagLink.createMany({
+            data: tagIds.map((tagId) => ({ clientId: id, tagId })),
+          });
+        }
+      }
+    });
+
+    return this.findOne(id, authorization);
+  }
+
   async findOne(id: string, authorization?: string) {
     const context = await this.getContext(authorization);
     const client = await this.findClientOrThrow(id, context.companyId);
@@ -309,6 +475,59 @@ export class ClientsService {
     };
   }
 
+  async createDebt(
+    clientId: string,
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    await this.findClientOrThrow(clientId, context.companyId);
+    const shopId =
+      body.shop_id !== undefined
+        ? await this.resolveDebtShopId(body.shop_id, context)
+        : null;
+    const amount = this.toDecimal(body.amount_uzs);
+    const debt = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.clientDebt.create({
+        data: {
+          companyId: context.companyId,
+          clientId,
+          shopId,
+          amountUzs: amount,
+          remainingAmountUzs: amount,
+          repaidAmountUzs: new Prisma.Decimal(0),
+          dueDate: this.parseNullableDateOnly(body.due_date),
+          status: ClientDebtStatus.unpaid,
+          receiptUrl: this.optionalBodyString(body.receipt_url),
+        },
+      });
+      const aggregate = await tx.clientDebt.aggregate({
+        where: { companyId: context.companyId, clientId },
+        _sum: { remainingAmountUzs: true },
+      });
+      await tx.client.update({
+        where: { id: clientId },
+        data: {
+          debtUzs: aggregate._sum.remainingAmountUzs ?? new Prisma.Decimal(0),
+        },
+      });
+      return created;
+    });
+
+    return {
+      id: debt.id,
+      client_id: debt.clientId,
+      amount_uzs: this.decimalToNumber(debt.amountUzs),
+      remaining_amount_uzs: this.decimalToNumber(debt.remainingAmountUzs),
+      repaid_amount_uzs: this.decimalToNumber(debt.repaidAmountUzs),
+      due_date: this.toDateOnly(debt.dueDate),
+      status: debt.status,
+      shop: null,
+      created_at: debt.createdAt.toISOString(),
+      receipt_url: debt.receiptUrl,
+    };
+  }
+
   async repayDebt(
     clientId: string,
     debtId: string,
@@ -442,6 +661,21 @@ export class ClientsService {
     return groups.map((group) => ({ id: group.id, name: group.name }));
   }
 
+  async createGroup(
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const group = await this.prisma.clientGroup.create({
+      data: {
+        companyId: context.companyId,
+        name: this.requireString(body.name, 'name'),
+      },
+    });
+
+    return { id: group.id, name: group.name };
+  }
+
   async getTags(authorization?: string) {
     const context = await this.getContext(authorization);
     const tags = await this.prisma.clientTag.findMany({
@@ -450,6 +684,21 @@ export class ClientsService {
     });
 
     return tags.map((tag) => ({ id: tag.id, name: tag.name }));
+  }
+
+  async createTag(
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const tag = await this.prisma.clientTag.create({
+      data: {
+        companyId: context.companyId,
+        name: this.requireString(body.name, 'name'),
+      },
+    });
+
+    return { id: tag.id, name: tag.name };
   }
 
   async getFilters(authorization?: string) {
@@ -484,6 +733,78 @@ export class ClientsService {
 
   private async getContext(authorization?: string) {
     return this.usersService.getRequestContext(authorization);
+  }
+
+  private async generateClientCode(companyId: string, tx: Prisma.TransactionClient) {
+    const count = await tx.client.count({
+      where: { companyId },
+    });
+    return String(100000000000 + count + 1);
+  }
+
+  private async resolveRegistrationShopId(
+    input: unknown,
+    context: ClientContext,
+  ) {
+    const shopId = this.optionalBodyString(input);
+    if (!shopId) {
+      return null;
+    }
+    if (
+      context.allowedShopIds.length &&
+      !context.allowedShopIds.includes(shopId)
+    ) {
+      throw new BadRequestException('registration_shop_id is not accessible');
+    }
+    const shop = await this.prisma.shop.findFirst({
+      where: {
+        id: shopId,
+        companyId: context.companyId,
+      },
+      select: { id: true },
+    });
+    if (!shop) {
+      throw new BadRequestException('registration_shop_id is invalid');
+    }
+    return shop.id;
+  }
+
+  private async resolveDebtShopId(input: unknown, context: ClientContext) {
+    const shopId = this.optionalBodyString(input);
+    if (!shopId) {
+      return null;
+    }
+    return this.resolveRegistrationShopId(shopId, context);
+  }
+
+  private async resolveGroupIds(input: unknown, companyId: string) {
+    const ids = this.parseIdArrayBody(input);
+    if (!ids.length) {
+      return [];
+    }
+    const groups = await this.prisma.clientGroup.findMany({
+      where: { companyId, id: { in: ids } },
+      select: { id: true },
+    });
+    if (groups.length !== ids.length) {
+      throw new BadRequestException('Some group_ids are invalid');
+    }
+    return ids;
+  }
+
+  private async resolveTagIds(input: unknown, companyId: string) {
+    const ids = this.parseIdArrayBody(input);
+    if (!ids.length) {
+      return [];
+    }
+    const tags = await this.prisma.clientTag.findMany({
+      where: { companyId, id: { in: ids } },
+      select: { id: true },
+    });
+    if (tags.length !== ids.length) {
+      throw new BadRequestException('Some tag_ids are invalid');
+    }
+    return ids;
   }
 
   private async findClientOrThrow(id: string, companyId: string) {
@@ -910,5 +1231,88 @@ export class ClientsService {
     if (value === 'true') return true;
     if (value === 'false') return false;
     return fallback;
+  }
+
+  private optionalBodyString(value: unknown) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+
+  private parseBodyGender(value: unknown) {
+    if (value === undefined || value === null || value === '') {
+      return ClientGender.unknown;
+    }
+    if (typeof value !== 'string') {
+      throw new BadRequestException('gender must be a string');
+    }
+    if (!Object.values(ClientGender).includes(value as ClientGender)) {
+      throw new BadRequestException(`Invalid gender value: ${value}`);
+    }
+    return value as ClientGender;
+  }
+
+  private parseNullableDateOnly(value: unknown) {
+    if (value === undefined || value === null || value === '') {
+      return null;
+    }
+    if (typeof value !== 'string') {
+      throw new BadRequestException('Date value must be a string');
+    }
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new BadRequestException(`Invalid date value: ${value}`);
+    }
+    return parsed;
+  }
+
+  private parseStringArrayBody(value: unknown) {
+    if (value === undefined || value === null) {
+      return [];
+    }
+    if (!Array.isArray(value)) {
+      throw new BadRequestException('Expected array value');
+    }
+    return value
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  private parseIdArrayBody(value: unknown) {
+    if (value === undefined || value === null) {
+      return [];
+    }
+    if (!Array.isArray(value)) {
+      throw new BadRequestException('Expected array value');
+    }
+    return value
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  private toDecimal(value: unknown) {
+    if (value === undefined || value === null || value === '') {
+      return new Prisma.Decimal(0);
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      throw new BadRequestException('Numeric value is invalid');
+    }
+    return new Prisma.Decimal(parsed);
+  }
+
+  private parseBodyInt(value: unknown, fallback: number) {
+    if (value === undefined || value === null || value === '') {
+      return fallback;
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      throw new BadRequestException('Integer value is invalid');
+    }
+    return Math.max(0, Math.floor(parsed));
   }
 }

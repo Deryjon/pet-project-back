@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Headers,
+  Patch,
   Param,
   Post,
   Query,
@@ -16,6 +17,14 @@ import { ClientsService } from './clients.service';
 @UseGuards(JwtAuthGuard, CompanyAccessGuard)
 export class ClientsController {
   constructor(private readonly clientsService: ClientsService) {}
+
+  @Post('clients')
+  createClient(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.clientsService.createClient(body, authorization);
+  }
 
   @Get('clients')
   findAll(
@@ -35,9 +44,25 @@ export class ClientsController {
     return this.clientsService.getGroups(authorization);
   }
 
+  @Post('client-groups')
+  createGroup(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.clientsService.createGroup(body, authorization);
+  }
+
   @Get('client-tags')
   getTags(@Headers('authorization') authorization?: string) {
     return this.clientsService.getTags(authorization);
+  }
+
+  @Post('client-tags')
+  createTag(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.clientsService.createTag(body, authorization);
   }
 
   @Get('clients/:id')
@@ -46,6 +71,15 @@ export class ClientsController {
     @Headers('authorization') authorization?: string,
   ) {
     return this.clientsService.findOne(id, authorization);
+  }
+
+  @Patch('clients/:id')
+  updateClient(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.clientsService.updateClient(id, body, authorization);
   }
 
   @Get('clients/:id/notes')
@@ -88,6 +122,15 @@ export class ClientsController {
     @Headers('authorization') authorization?: string,
   ) {
     return this.clientsService.getDebts(id, authorization);
+  }
+
+  @Post('clients/:id/debts')
+  createDebt(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.clientsService.createDebt(id, body, authorization);
   }
 
   @Post('clients/:id/debts/:debtId/repayment')
