@@ -159,6 +159,20 @@ const DEFAULT_COMPANY_TARIFF: CompanyTariff = {
 
 const DEFAULT_COMPANY_PAYMENT_TYPES: CompanyPaymentType[] = [
   {
+    id: '31f8fd23-2497-4769-9341-e8c4b97bdb11',
+    company_id: DEFAULT_COMPANY_ID,
+    name: 'Долг',
+    token: '',
+    is_editable: false,
+    dont_show_in_make_payment: false,
+    dont_show_in_settings: true,
+    is_cash_payment_type: false,
+    payment_type: {
+      id: '00ed9cff-9576-432f-849b-7bbcc2fed640',
+      name: 'Кастомный',
+    },
+  },
+  {
     id: '41839fa3-4121-4572-ab19-394e3a7319fe',
     company_id: DEFAULT_COMPANY_ID,
     name: 'Наличные',
@@ -1868,6 +1882,7 @@ export class CompanySettingsService {
 
   private async getPersistedCompanyPaymentTypes(companyId: string) {
     await this.ensureCompanyPaymentTypesSeeded(companyId);
+    await this.ensureDebtCompanyPaymentType(companyId);
     const paymentTypes = await this.db.companyPaymentType.findMany({
       where: {
         companyId,
@@ -1931,6 +1946,37 @@ export class CompanySettingsService {
         };
       }),
       skipDuplicates: true,
+    });
+  }
+
+  private async ensureDebtCompanyPaymentType(companyId: string) {
+    await this.db.companyPaymentType.upsert({
+      where: {
+        companyId_name: {
+          companyId,
+          name: 'Долг',
+        },
+      },
+      update: {
+        token: '',
+        isEditable: false,
+        dontShowInMakePayment: false,
+        dontShowInSettings: true,
+        isCashPaymentType: false,
+        paymentTypeId: '00ed9cff-9576-432f-849b-7bbcc2fed640',
+        paymentTypeName: 'Кастомный',
+      },
+      create: {
+        companyId,
+        name: 'Долг',
+        token: '',
+        isEditable: false,
+        dontShowInMakePayment: false,
+        dontShowInSettings: true,
+        isCashPaymentType: false,
+        paymentTypeId: '00ed9cff-9576-432f-849b-7bbcc2fed640',
+        paymentTypeName: 'Кастомный',
+      },
     });
   }
 

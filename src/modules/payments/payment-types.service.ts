@@ -10,6 +10,8 @@ import { CreatePaymentTypeDto } from './dto/create-payment-type.dto';
 
 @Injectable()
 export class PaymentTypesService {
+  private static readonly DEFAULT_DEBT_PAYMENT_TYPE_NAME = 'Долг';
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
@@ -17,6 +19,7 @@ export class PaymentTypesService {
 
   async create(dto: CreatePaymentTypeDto, authorization?: string) {
     const context = await this.getCompanyContext(authorization);
+    await this.ensureDefaultPaymentTypes(context.companyId);
 
     try {
       const paymentType = await this.prisma.paymentType.create({
@@ -44,6 +47,7 @@ export class PaymentTypesService {
 
   async findAll(authorization?: string) {
     const context = await this.getCompanyContext(authorization);
+    await this.ensureDefaultPaymentTypes(context.companyId);
     const paymentTypes = await this.prisma.paymentType.findMany({
       where: {
         companyId: context.companyId,
@@ -91,5 +95,26 @@ export class PaymentTypesService {
       createdAt: paymentType.createdAt,
       updatedAt: paymentType.updatedAt,
     };
+  }
+
+  private async ensureDefaultPaymentTypes(companyId: string) {
+    await this.prisma.paymentType.upsert({
+      where: {
+        companyId_name: {
+          companyId,
+          name: PaymentTypesService.DEFAULT_DEBT_PAYMENT_TYPE_NAME,
+        },
+      },
+      update: {
+        isActive: true,
+        isCash: false,
+      },
+      create: {
+        companyId,
+        name: PaymentTypesService.DEFAULT_DEBT_PAYMENT_TYPE_NAME,
+        isCash: false,
+        isActive: true,
+      },
+    });
   }
 }
