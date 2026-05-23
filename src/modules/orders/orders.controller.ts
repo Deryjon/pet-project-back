@@ -17,6 +17,7 @@ import { AddOrderItemDto } from './dto/add-order-item.dto';
 import { AddPaymentDto } from './dto/add-payment.dto';
 import { ApplyDiscountDto } from './dto/apply-discount.dto';
 import { AttachCustomerDto } from './dto/attach-customer.dto';
+import { CompleteOrderDto } from './dto/complete-order.dto';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderCommentDto } from './dto/update-order-comment.dto';
 import { UpdateOrderItemDto } from './dto/update-order-item.dto';
@@ -162,8 +163,9 @@ export class OrdersController {
   @Permissions('orders.complete')
   complete(
     @Param('id') id: string,
+    @Body() dto: CompleteOrderDto,
     @Headers('authorization') authorization?: string,
   ) {
-    return this.ordersService.complete(id, authorization);
+    return this.ordersService.complete(id, dto, authorization);
   }
 }

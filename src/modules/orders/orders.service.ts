@@ -11,6 +11,7 @@ import { AddOrderItemDto } from './dto/add-order-item.dto';
 import { AddPaymentDto } from './dto/add-payment.dto';
 import { ApplyDiscountDto } from './dto/apply-discount.dto';
 import { AttachCustomerDto } from './dto/attach-customer.dto';
+import { CompleteOrderDto } from './dto/complete-order.dto';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderCommentDto } from './dto/update-order-comment.dto';
 import { UpdateOrderItemDto } from './dto/update-order-item.dto';
@@ -343,6 +344,8 @@ export class OrdersService {
       throw new BadRequestException('customerId is required');
     }
 
+    await this.findClientForCompanyOrThrow(customerId, context.companyId);
+
     const updatedOrder = await this.prisma.order.update({
       where: {
         id: order.id,
@@ -383,7 +386,11 @@ export class OrdersService {
     return this.toOrderResponse(updatedOrder);
   }
 
-  async complete(id: string, authorization?: string) {
+  async complete(
+    id: string,
+    dto: CompleteOrderDto,
+    authorization?: string,
+  ) {
     const context = await this.getCompanyContext(authorization);
 
     const completedOrder = await this.prisma.$transaction(async (tx) => {
@@ -396,6 +403,7 @@ export class OrdersService {
           items: true,
           payments: true,
           shop: true,
+          customer: true,
         },
       });
 
@@ -412,8 +420,19 @@ export class OrdersService {
       }
 
       const paidAmount = this.sumOrderPayments(order.payments);
-      if (paidAmount.lt(order.totalPrice)) {
-        throw new BadRequestException('Order is not fully paid');
+      const remainingDebtAmount = order.totalPrice.minus(paidAmount);
+      const shouldCreateDebt = remainingDebtAmount.gt(0);
+
+      if (shouldCreateDebt && !order.customerId) {
+        throw new BadRequestException(
+          'Customer must be attached before completing an order with debt',
+        );
+      }
+
+      if (shouldCreateDebt && !dto.allowDebt) {
+        throw new BadRequestException(
+          'Order is not fully paid. Pass allowDebt=true to complete with client debt',
+        );
       }
 
       for (const item of order.items) {
@@ -506,6 +525,81 @@ export class OrdersService {
         });
       }
 
+      let createdDebt:
+        | {
+            id: string;
+            client_id: string;
+            amount_uzs: number;
+            remaining_amount_uzs: number;
+            repaid_amount_uzs: number;
+            due_date: string | null;
+            status: string;
+            created_at: string;
+            receipt_url: string | null;
+          }
+        | null = null;
+
+      if (shouldCreateDebt && order.customerId) {
+        const debt = await tx.clientDebt.create({
+          data: {
+            companyId: context.companyId,
+            clientId: order.customerId,
+            shopId: order.shopId,
+            amountUzs: remainingDebtAmount,
+            remainingAmountUzs: remainingDebtAmount,
+            repaidAmountUzs: new Prisma.Decimal(0),
+            dueDate: this.parseOptionalDateOnly(dto.dueDate),
+            receiptUrl: this.optionalString(dto.receiptUrl),
+          },
+        });
+
+        const aggregate = await tx.clientDebt.aggregate({
+          where: {
+            companyId: context.companyId,
+            clientId: order.customerId,
+          },
+          _sum: {
+            remainingAmountUzs: true,
+          },
+        });
+
+        await tx.client.update({
+          where: {
+            id: order.customerId,
+          },
+          data: {
+            debtUzs: aggregate._sum.remainingAmountUzs ?? new Prisma.Decimal(0),
+          },
+        });
+
+        createdDebt = {
+          id: debt.id,
+          client_id: debt.clientId,
+          amount_uzs: this.decimalToNumber(debt.amountUzs),
+          remaining_amount_uzs: this.decimalToNumber(debt.remainingAmountUzs),
+          repaid_amount_uzs: this.decimalToNumber(debt.repaidAmountUzs),
+          due_date: this.toDateOnly(debt.dueDate),
+          status: debt.status,
+          created_at: debt.createdAt.toISOString(),
+          receipt_url: debt.receiptUrl,
+        };
+
+        await this.createAuditLog(
+          tx,
+          context,
+          'client.debt_created_from_order',
+          'ClientDebt',
+          debt.id,
+          {
+            orderId: order.id,
+            orderNumber: order.orderNumber,
+            clientId: order.customerId,
+            amountUzs: remainingDebtAmount.toString(),
+            dueDate: dto.dueDate ?? null,
+          },
+        );
+      }
+
       await tx.order.update({
         where: {
           id: order.id,
@@ -523,16 +617,20 @@ export class OrdersService {
       await this.createAuditLog(
         tx,
         context,
-        'order.completed',
-        'Order',
-        order.id,
-        {
-          paidAmount: paidAmount.toString(),
-          totalPrice: order.totalPrice.toString(),
-        },
+          'order.completed',
+          'Order',
+          order.id,
+          {
+            paidAmount: paidAmount.toString(),
+            totalPrice: order.totalPrice.toString(),
+            remainingDebtAmount: shouldCreateDebt
+              ? remainingDebtAmount.toString()
+              : '0',
+            debtCreated: shouldCreateDebt,
+          },
       );
 
-      return this.findOrderByIdForResponse(order.id, context, tx);
+      return this.findOrderByIdForResponse(order.id, context, tx, createdDebt);
     });
 
     return this.toOrderResponse(completedOrder);
@@ -773,6 +871,26 @@ export class OrdersService {
     return paymentType;
   }
 
+  private async findClientForCompanyOrThrow(clientId: string, companyId: string) {
+    const normalizedClientId = clientId.trim();
+    if (!normalizedClientId) {
+      throw new BadRequestException('customerId is required');
+    }
+
+    const client = await this.prisma.client.findFirst({
+      where: {
+        id: normalizedClientId,
+        companyId,
+      },
+    });
+
+    if (!client) {
+      throw new NotFoundException('Client not found');
+    }
+
+    return client;
+  }
+
   private resolveProductSalePrice(product: {
     salePrice: number | null;
     discountPrice: number | null;
@@ -951,6 +1069,17 @@ export class OrdersService {
     id: string,
     context: { companyId: string; allowedShopIds: string[] },
     tx: any = this.prisma,
+    debt: {
+      id: string;
+      client_id: string;
+      amount_uzs: number;
+      remaining_amount_uzs: number;
+      repaid_amount_uzs: number;
+      due_date: string | null;
+      status: string;
+      created_at: string;
+      receipt_url: string | null;
+    } | null = null,
   ) {
     const order = await tx.order.findFirst({
       where: {
@@ -964,7 +1093,10 @@ export class OrdersService {
       throw new NotFoundException('Order not found');
     }
 
-    return order;
+    return {
+      ...order,
+      createdDebt: debt,
+    };
   }
 
   private toPositiveDecimal(value: number, fieldName: string) {
@@ -1020,10 +1152,15 @@ export class OrdersService {
       shop: true,
       cashbox: true,
       user: true,
+      customer: true,
     };
   }
 
   private toOrderResponse(order: any) {
+    const totalPrice = this.decimalToNumber(order.totalPrice);
+    const paidAmount = this.decimalToNumber(order.paidAmount);
+    const remainingDebtAmount = Math.max(0, totalPrice - paidAmount);
+
     return {
       id: order.id,
       companyId: order.companyId,
@@ -1034,10 +1171,21 @@ export class OrdersService {
       orderType: order.orderType,
       status: order.status,
       customerId: order.customerId,
-      customer: null,
-      totalPrice: this.decimalToNumber(order.totalPrice),
+      customer: order.customer
+        ? {
+            id: order.customer.id,
+            code: order.customer.code,
+            firstName: order.customer.firstName,
+            lastName: order.customer.lastName,
+            middleName: order.customer.middleName,
+            phone: order.customer.phone,
+          }
+        : null,
+      totalPrice,
       discountAmount: this.decimalToNumber(order.discountAmount),
-      paidAmount: this.decimalToNumber(order.paidAmount),
+      ...(paidAmount > 0 ? { paidAmount } : {}),
+      remainingDebtAmount,
+      createdDebt: order.createdDebt ?? null,
       comment: order.comment,
       versionNumber: order.versionNumber,
       completedAt: order.completedAt,
@@ -1088,6 +1236,43 @@ export class OrdersService {
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
     };
+  }
+
+  private parseOptionalDateOnly(value?: string) {
+    if (!value) {
+      return null;
+    }
+
+    const normalized = value.trim();
+    if (!normalized) {
+      return null;
+    }
+
+    const date = new Date(normalized);
+    if (Number.isNaN(date.getTime())) {
+      throw new BadRequestException('dueDate must be a valid date');
+    }
+
+    return new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+    );
+  }
+
+  private toDateOnly(value?: Date | null) {
+    if (!value) {
+      return null;
+    }
+
+    return value.toISOString().slice(0, 10);
+  }
+
+  private optionalString(value?: string | null) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+
+    const normalized = value.trim();
+    return normalized ? normalized : null;
   }
 
   private decimalToNumber(value: unknown) {
