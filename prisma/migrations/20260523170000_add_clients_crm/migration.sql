@@ -21,7 +21,7 @@ BEGIN
 END $$;
 
 -- CreateTable
-CREATE TABLE "Client" (
+CREATE TABLE IF NOT EXISTS "Client" (
   "id" TEXT NOT NULL,
   "companyId" TEXT NOT NULL,
   "code" TEXT NOT NULL,
@@ -52,8 +52,7 @@ CREATE TABLE "Client" (
   CONSTRAINT "Client_pkey" PRIMARY KEY ("id")
 );
 
--- CreateTable
-CREATE TABLE "ClientGroup" (
+CREATE TABLE IF NOT EXISTS "ClientGroup" (
   "id" TEXT NOT NULL,
   "companyId" TEXT NOT NULL,
   "name" TEXT NOT NULL,
@@ -63,8 +62,7 @@ CREATE TABLE "ClientGroup" (
   CONSTRAINT "ClientGroup_pkey" PRIMARY KEY ("id")
 );
 
--- CreateTable
-CREATE TABLE "ClientGroupLink" (
+CREATE TABLE IF NOT EXISTS "ClientGroupLink" (
   "clientId" TEXT NOT NULL,
   "groupId" TEXT NOT NULL,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -72,8 +70,7 @@ CREATE TABLE "ClientGroupLink" (
   CONSTRAINT "ClientGroupLink_pkey" PRIMARY KEY ("clientId","groupId")
 );
 
--- CreateTable
-CREATE TABLE "ClientTag" (
+CREATE TABLE IF NOT EXISTS "ClientTag" (
   "id" TEXT NOT NULL,
   "companyId" TEXT NOT NULL,
   "name" TEXT NOT NULL,
@@ -83,8 +80,7 @@ CREATE TABLE "ClientTag" (
   CONSTRAINT "ClientTag_pkey" PRIMARY KEY ("id")
 );
 
--- CreateTable
-CREATE TABLE "ClientTagLink" (
+CREATE TABLE IF NOT EXISTS "ClientTagLink" (
   "clientId" TEXT NOT NULL,
   "tagId" TEXT NOT NULL,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -92,8 +88,7 @@ CREATE TABLE "ClientTagLink" (
   CONSTRAINT "ClientTagLink_pkey" PRIMARY KEY ("clientId","tagId")
 );
 
--- CreateTable
-CREATE TABLE "ClientNote" (
+CREATE TABLE IF NOT EXISTS "ClientNote" (
   "id" TEXT NOT NULL,
   "companyId" TEXT NOT NULL,
   "clientId" TEXT NOT NULL,
@@ -105,8 +100,7 @@ CREATE TABLE "ClientNote" (
   CONSTRAINT "ClientNote_pkey" PRIMARY KEY ("id")
 );
 
--- CreateTable
-CREATE TABLE "ClientDebt" (
+CREATE TABLE IF NOT EXISTS "ClientDebt" (
   "id" TEXT NOT NULL,
   "companyId" TEXT NOT NULL,
   "clientId" TEXT NOT NULL,
@@ -123,8 +117,7 @@ CREATE TABLE "ClientDebt" (
   CONSTRAINT "ClientDebt_pkey" PRIMARY KEY ("id")
 );
 
--- CreateTable
-CREATE TABLE "ClientDebtRepayment" (
+CREATE TABLE IF NOT EXISTS "ClientDebtRepayment" (
   "id" TEXT NOT NULL,
   "companyId" TEXT NOT NULL,
   "clientId" TEXT NOT NULL,
@@ -136,8 +129,7 @@ CREATE TABLE "ClientDebtRepayment" (
   CONSTRAINT "ClientDebtRepayment_pkey" PRIMARY KEY ("id")
 );
 
--- CreateTable
-CREATE TABLE "ClientCard" (
+CREATE TABLE IF NOT EXISTS "ClientCard" (
   "id" TEXT NOT NULL,
   "companyId" TEXT NOT NULL,
   "clientId" TEXT NOT NULL,
@@ -153,117 +145,222 @@ CREATE TABLE "ClientCard" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "Client_companyId_code_key" ON "Client"("companyId", "code");
-CREATE INDEX "Client_companyId_idx" ON "Client"("companyId");
-CREATE INDEX "Client_companyId_phone_idx" ON "Client"("companyId", "phone");
-CREATE INDEX "Client_registrationShopId_idx" ON "Client"("registrationShopId");
-CREATE INDEX "Client_registeredAt_idx" ON "Client"("registeredAt");
+CREATE UNIQUE INDEX IF NOT EXISTS "Client_companyId_code_key" ON "Client"("companyId", "code");
+CREATE INDEX IF NOT EXISTS "Client_companyId_idx" ON "Client"("companyId");
+CREATE INDEX IF NOT EXISTS "Client_companyId_phone_idx" ON "Client"("companyId", "phone");
+CREATE INDEX IF NOT EXISTS "Client_registrationShopId_idx" ON "Client"("registrationShopId");
+CREATE INDEX IF NOT EXISTS "Client_registeredAt_idx" ON "Client"("registeredAt");
 
-CREATE UNIQUE INDEX "ClientGroup_companyId_name_key" ON "ClientGroup"("companyId", "name");
-CREATE INDEX "ClientGroup_companyId_idx" ON "ClientGroup"("companyId");
-CREATE INDEX "ClientGroupLink_groupId_idx" ON "ClientGroupLink"("groupId");
+CREATE UNIQUE INDEX IF NOT EXISTS "ClientGroup_companyId_name_key" ON "ClientGroup"("companyId", "name");
+CREATE INDEX IF NOT EXISTS "ClientGroup_companyId_idx" ON "ClientGroup"("companyId");
+CREATE INDEX IF NOT EXISTS "ClientGroupLink_groupId_idx" ON "ClientGroupLink"("groupId");
 
-CREATE UNIQUE INDEX "ClientTag_companyId_name_key" ON "ClientTag"("companyId", "name");
-CREATE INDEX "ClientTag_companyId_idx" ON "ClientTag"("companyId");
-CREATE INDEX "ClientTagLink_tagId_idx" ON "ClientTagLink"("tagId");
+CREATE UNIQUE INDEX IF NOT EXISTS "ClientTag_companyId_name_key" ON "ClientTag"("companyId", "name");
+CREATE INDEX IF NOT EXISTS "ClientTag_companyId_idx" ON "ClientTag"("companyId");
+CREATE INDEX IF NOT EXISTS "ClientTagLink_tagId_idx" ON "ClientTagLink"("tagId");
 
-CREATE INDEX "ClientNote_companyId_clientId_idx" ON "ClientNote"("companyId", "clientId");
-CREATE INDEX "ClientNote_createdById_idx" ON "ClientNote"("createdById");
+CREATE INDEX IF NOT EXISTS "ClientNote_companyId_clientId_idx" ON "ClientNote"("companyId", "clientId");
+CREATE INDEX IF NOT EXISTS "ClientNote_createdById_idx" ON "ClientNote"("createdById");
 
-CREATE INDEX "ClientDebt_companyId_clientId_idx" ON "ClientDebt"("companyId", "clientId");
-CREATE INDEX "ClientDebt_shopId_idx" ON "ClientDebt"("shopId");
-CREATE INDEX "ClientDebt_status_idx" ON "ClientDebt"("status");
+CREATE INDEX IF NOT EXISTS "ClientDebt_companyId_clientId_idx" ON "ClientDebt"("companyId", "clientId");
+CREATE INDEX IF NOT EXISTS "ClientDebt_shopId_idx" ON "ClientDebt"("shopId");
+CREATE INDEX IF NOT EXISTS "ClientDebt_status_idx" ON "ClientDebt"("status");
 
-CREATE INDEX "ClientDebtRepayment_companyId_clientId_idx" ON "ClientDebtRepayment"("companyId", "clientId");
-CREATE INDEX "ClientDebtRepayment_debtId_idx" ON "ClientDebtRepayment"("debtId");
-CREATE INDEX "ClientDebtRepayment_createdById_idx" ON "ClientDebtRepayment"("createdById");
+CREATE INDEX IF NOT EXISTS "ClientDebtRepayment_companyId_clientId_idx" ON "ClientDebtRepayment"("companyId", "clientId");
+CREATE INDEX IF NOT EXISTS "ClientDebtRepayment_debtId_idx" ON "ClientDebtRepayment"("debtId");
+CREATE INDEX IF NOT EXISTS "ClientDebtRepayment_createdById_idx" ON "ClientDebtRepayment"("createdById");
 
-CREATE UNIQUE INDEX "ClientCard_companyId_number_key" ON "ClientCard"("companyId", "number");
-CREATE INDEX "ClientCard_companyId_clientId_idx" ON "ClientCard"("companyId", "clientId");
+CREATE UNIQUE INDEX IF NOT EXISTS "ClientCard_companyId_number_key" ON "ClientCard"("companyId", "number");
+CREATE INDEX IF NOT EXISTS "ClientCard_companyId_clientId_idx" ON "ClientCard"("companyId", "clientId");
 
-CREATE INDEX "Order_customerId_idx" ON "Order"("customerId");
+CREATE INDEX IF NOT EXISTS "Order_customerId_idx" ON "Order"("customerId");
 
 -- AddForeignKey
-ALTER TABLE "Client"
-ADD CONSTRAINT "Client_companyId_fkey"
-FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'Client_companyId_fkey') THEN
+    ALTER TABLE "Client"
+    ADD CONSTRAINT "Client_companyId_fkey"
+    FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "Client"
-ADD CONSTRAINT "Client_registrationShopId_fkey"
-FOREIGN KEY ("registrationShopId") REFERENCES "Shop"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'Client_registrationShopId_fkey') THEN
+    ALTER TABLE "Client"
+    ADD CONSTRAINT "Client_registrationShopId_fkey"
+    FOREIGN KEY ("registrationShopId") REFERENCES "Shop"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "ClientGroup"
-ADD CONSTRAINT "ClientGroup_companyId_fkey"
-FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ClientGroup_companyId_fkey') THEN
+    ALTER TABLE "ClientGroup"
+    ADD CONSTRAINT "ClientGroup_companyId_fkey"
+    FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "ClientGroupLink"
-ADD CONSTRAINT "ClientGroupLink_clientId_fkey"
-FOREIGN KEY ("clientId") REFERENCES "Client"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ClientGroupLink_clientId_fkey') THEN
+    ALTER TABLE "ClientGroupLink"
+    ADD CONSTRAINT "ClientGroupLink_clientId_fkey"
+    FOREIGN KEY ("clientId") REFERENCES "Client"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "ClientGroupLink"
-ADD CONSTRAINT "ClientGroupLink_groupId_fkey"
-FOREIGN KEY ("groupId") REFERENCES "ClientGroup"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ClientGroupLink_groupId_fkey') THEN
+    ALTER TABLE "ClientGroupLink"
+    ADD CONSTRAINT "ClientGroupLink_groupId_fkey"
+    FOREIGN KEY ("groupId") REFERENCES "ClientGroup"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "ClientTag"
-ADD CONSTRAINT "ClientTag_companyId_fkey"
-FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ClientTag_companyId_fkey') THEN
+    ALTER TABLE "ClientTag"
+    ADD CONSTRAINT "ClientTag_companyId_fkey"
+    FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "ClientTagLink"
-ADD CONSTRAINT "ClientTagLink_clientId_fkey"
-FOREIGN KEY ("clientId") REFERENCES "Client"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ClientTagLink_clientId_fkey') THEN
+    ALTER TABLE "ClientTagLink"
+    ADD CONSTRAINT "ClientTagLink_clientId_fkey"
+    FOREIGN KEY ("clientId") REFERENCES "Client"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "ClientTagLink"
-ADD CONSTRAINT "ClientTagLink_tagId_fkey"
-FOREIGN KEY ("tagId") REFERENCES "ClientTag"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ClientTagLink_tagId_fkey') THEN
+    ALTER TABLE "ClientTagLink"
+    ADD CONSTRAINT "ClientTagLink_tagId_fkey"
+    FOREIGN KEY ("tagId") REFERENCES "ClientTag"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "ClientNote"
-ADD CONSTRAINT "ClientNote_companyId_fkey"
-FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ClientNote_companyId_fkey') THEN
+    ALTER TABLE "ClientNote"
+    ADD CONSTRAINT "ClientNote_companyId_fkey"
+    FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "ClientNote"
-ADD CONSTRAINT "ClientNote_clientId_fkey"
-FOREIGN KEY ("clientId") REFERENCES "Client"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ClientNote_clientId_fkey') THEN
+    ALTER TABLE "ClientNote"
+    ADD CONSTRAINT "ClientNote_clientId_fkey"
+    FOREIGN KEY ("clientId") REFERENCES "Client"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "ClientNote"
-ADD CONSTRAINT "ClientNote_createdById_fkey"
-FOREIGN KEY ("createdById") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ClientNote_createdById_fkey') THEN
+    ALTER TABLE "ClientNote"
+    ADD CONSTRAINT "ClientNote_createdById_fkey"
+    FOREIGN KEY ("createdById") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "ClientDebt"
-ADD CONSTRAINT "ClientDebt_companyId_fkey"
-FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ClientDebt_companyId_fkey') THEN
+    ALTER TABLE "ClientDebt"
+    ADD CONSTRAINT "ClientDebt_companyId_fkey"
+    FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "ClientDebt"
-ADD CONSTRAINT "ClientDebt_clientId_fkey"
-FOREIGN KEY ("clientId") REFERENCES "Client"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ClientDebt_clientId_fkey') THEN
+    ALTER TABLE "ClientDebt"
+    ADD CONSTRAINT "ClientDebt_clientId_fkey"
+    FOREIGN KEY ("clientId") REFERENCES "Client"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "ClientDebt"
-ADD CONSTRAINT "ClientDebt_shopId_fkey"
-FOREIGN KEY ("shopId") REFERENCES "Shop"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ClientDebt_shopId_fkey') THEN
+    ALTER TABLE "ClientDebt"
+    ADD CONSTRAINT "ClientDebt_shopId_fkey"
+    FOREIGN KEY ("shopId") REFERENCES "Shop"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "ClientDebtRepayment"
-ADD CONSTRAINT "ClientDebtRepayment_companyId_fkey"
-FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ClientDebtRepayment_companyId_fkey') THEN
+    ALTER TABLE "ClientDebtRepayment"
+    ADD CONSTRAINT "ClientDebtRepayment_companyId_fkey"
+    FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "ClientDebtRepayment"
-ADD CONSTRAINT "ClientDebtRepayment_clientId_fkey"
-FOREIGN KEY ("clientId") REFERENCES "Client"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ClientDebtRepayment_clientId_fkey') THEN
+    ALTER TABLE "ClientDebtRepayment"
+    ADD CONSTRAINT "ClientDebtRepayment_clientId_fkey"
+    FOREIGN KEY ("clientId") REFERENCES "Client"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "ClientDebtRepayment"
-ADD CONSTRAINT "ClientDebtRepayment_debtId_fkey"
-FOREIGN KEY ("debtId") REFERENCES "ClientDebt"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ClientDebtRepayment_debtId_fkey') THEN
+    ALTER TABLE "ClientDebtRepayment"
+    ADD CONSTRAINT "ClientDebtRepayment_debtId_fkey"
+    FOREIGN KEY ("debtId") REFERENCES "ClientDebt"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "ClientDebtRepayment"
-ADD CONSTRAINT "ClientDebtRepayment_createdById_fkey"
-FOREIGN KEY ("createdById") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ClientDebtRepayment_createdById_fkey') THEN
+    ALTER TABLE "ClientDebtRepayment"
+    ADD CONSTRAINT "ClientDebtRepayment_createdById_fkey"
+    FOREIGN KEY ("createdById") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "ClientCard"
-ADD CONSTRAINT "ClientCard_companyId_fkey"
-FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ClientCard_companyId_fkey') THEN
+    ALTER TABLE "ClientCard"
+    ADD CONSTRAINT "ClientCard_companyId_fkey"
+    FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "ClientCard"
-ADD CONSTRAINT "ClientCard_clientId_fkey"
-FOREIGN KEY ("clientId") REFERENCES "Client"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ClientCard_clientId_fkey') THEN
+    ALTER TABLE "ClientCard"
+    ADD CONSTRAINT "ClientCard_clientId_fkey"
+    FOREIGN KEY ("clientId") REFERENCES "Client"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "Order"
-ADD CONSTRAINT "Order_customerId_fkey"
-FOREIGN KEY ("customerId") REFERENCES "Client"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'Order_customerId_fkey') THEN
+    ALTER TABLE "Order"
+    ADD CONSTRAINT "Order_customerId_fkey"
+    FOREIGN KEY ("customerId") REFERENCES "Client"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+END $$;
