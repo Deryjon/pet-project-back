@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './auth/auth.module';
+import { ClientsModule } from './clients/clients.module';
 import { CompanySettingsModule } from './company-settings/company-settings.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { CashboxesModule } from './modules/cashboxes/cashboxes.module';
@@ -23,6 +24,7 @@ import { HealthController } from './health.controller';
     PrismaModule,
     PlatformModule,
     AuthModule,
+    ClientsModule,
     CompanySettingsModule,
     DashboardModule,
     CashboxesModule,
