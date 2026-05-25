@@ -1380,7 +1380,7 @@ export class ClientsService {
     const to = this.parseDateTime(query.created_to);
     const dueFrom = this.parseDateOnly(query.due_from);
     const dueTo = this.parseDateOnly(query.due_to);
-    const status = this.parseDebtBucket(query.status ?? query.bucket);
+    const status = this.parseDebtBucket(query.status ?? query.bucket ?? null);
 
     if (!args?.clientId && clientId) {
       and.push({ clientId });
