@@ -615,6 +615,11 @@ export class SalesService {
         } as any,
       });
       await this.createDebtForFinalizedSale(tx, updatedSale, body, context);
+      await this.refreshClientSalesAggregates(
+        tx,
+        updatedSale.companyId ?? context?.companyId ?? null,
+        (updatedSale as any).clientId ?? null,
+      );
     });
 
     return {
@@ -1141,6 +1146,11 @@ export class SalesService {
         } as any,
       });
       await this.createDebtForFinalizedSale(tx, persistedSale, body, context);
+      await this.refreshClientSalesAggregates(
+        tx,
+        persistedSale.companyId ?? context?.companyId ?? null,
+        (persistedSale as any).clientId ?? null,
+      );
       return tx.sale.findUniqueOrThrow({
         where: { id },
         include: {
@@ -3569,6 +3579,54 @@ export class SalesService {
       where: { id: sale.clientId },
       data: {
         debtUzs: aggregate._sum.remainingAmountUzs ?? new Prisma.Decimal(0),
+      },
+    });
+  }
+
+  private async refreshClientSalesAggregates(
+    tx: Prisma.TransactionClient,
+    companyId?: string | null,
+    clientId?: string | null,
+  ) {
+    if (!companyId || !clientId) {
+      return;
+    }
+
+    const [visitsCount, aggregate] = await Promise.all([
+      tx.sale.count({
+        where: {
+          companyId,
+          clientId,
+          isDraft: false,
+          saleType: { in: ['sale', 'exchange'] },
+        } as any,
+      }),
+      tx.sale.aggregate({
+        where: {
+          companyId,
+          clientId,
+          isDraft: false,
+          saleType: { in: ['sale', 'exchange'] },
+        } as any,
+        _sum: {
+          payableTotal: true,
+        },
+        _max: {
+          paidAt: true,
+          createdAt: true,
+        },
+      }),
+    ]);
+
+    await tx.client.update({
+      where: { id: clientId },
+      data: {
+        totalPurchasesUzs: new Prisma.Decimal(
+          Number(aggregate._sum?.payableTotal ?? 0),
+        ),
+        visitsCount,
+        lastPurchaseAt:
+          aggregate._max?.paidAt ?? aggregate._max?.createdAt ?? null,
       },
     });
   }

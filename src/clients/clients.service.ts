@@ -7,7 +7,6 @@ import {
   ClientCardType,
   ClientDebtStatus,
   ClientGender,
-  OrderStatus,
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -55,6 +54,56 @@ export class ClientsService {
       limit,
       total: filtered.length,
       stats: await this.getListStats(context),
+    };
+  }
+
+  async findCustomersList(
+    query: Record<string, string | string[] | undefined>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const page = this.parsePositiveInt(query.page, 1);
+    const limit = Math.min(this.parsePositiveInt(query.limit, 10), 100);
+    const clients = await this.prisma.client.findMany({
+      where: this.buildClientWhere(query, context.companyId),
+      include: this.clientListInclude(),
+      orderBy: [{ createdAt: 'desc' }],
+    });
+    const metrics = await this.loadClientMetrics(
+      clients.map((client) => client.id),
+      context,
+    );
+    const filtered = clients
+      .map((client) => ({ client, metric: metrics.get(client.id) }))
+      .filter(({ client, metric }) =>
+        this.matchesMetricFilters(
+          this.toClientListItem(client, metric),
+          query,
+        ),
+      );
+    const paginated = filtered.slice((page - 1) * limit, page * limit);
+    const stats = await this.getListStats(context);
+
+    return {
+      count: filtered.length,
+      last_week_count: stats.last_week_count,
+      not_returned_count: stats.not_returned_count,
+      birthday_count: stats.birthday_count,
+      customers: paginated.map(({ client, metric }) =>
+        this.toCustomersListItem(client, metric),
+      ),
+      pit_id: '',
+    };
+  }
+
+  async getCustomersStats(authorization?: string) {
+    const context = await this.getContext(authorization);
+    const stats = await this.getListStats(context);
+
+    return {
+      last_week_count: stats.last_week_count,
+      not_returned_count: stats.not_returned_count,
+      birthday_count: stats.birthday_count,
     };
   }
 
@@ -256,6 +305,27 @@ export class ClientsService {
     };
   }
 
+  async findCustomerCard(id: string, authorization?: string) {
+    const context = await this.getContext(authorization);
+    const client = await this.prisma.client.findFirst({
+      where: { id, companyId: context.companyId },
+      include: {
+        registrationShop: true,
+        groups: { include: { group: true } },
+        tags: { include: { tag: true } },
+        cards: true,
+        company: { select: { name: true } },
+      },
+    });
+
+    if (!client) {
+      throw new NotFoundException('Client not found');
+    }
+
+    const dashboard = await this.buildClientDashboard(id, context);
+    return this.toCustomerDetailResponse(client as any, dashboard);
+  }
+
   async getNotes(id: string, authorization?: string) {
     const context = await this.getContext(authorization);
     await this.findClientOrThrow(id, context.companyId);
@@ -300,15 +370,15 @@ export class ClientsService {
     const type = query.type ?? 'all';
     const from = this.parseDateTime(query.from);
     const to = this.parseDateTime(query.to);
-    const purchaseWhere = this.completedOrderWhere(id, context);
-    const [orders, notes, debts, repayments] = await this.prisma.$transaction([
-      this.prisma.order.findMany({
+    const purchaseWhere = await this.completedSaleWhere(id, context);
+    const [sales, notes, debts, repayments] = await this.prisma.$transaction([
+      this.prisma.sale.findMany({
         where: purchaseWhere,
         select: {
           id: true,
-          orderNumber: true,
-          totalPrice: true,
-          completedAt: true,
+          number: true,
+          payableTotal: true,
+          paidAt: true,
           createdAt: true,
         },
       }),
@@ -337,14 +407,14 @@ export class ClientsService {
         amount_uzs: null,
         order_id: null,
       },
-      ...orders.map((order) => ({
+      ...sales.map((order) => ({
         id: `purchase:${order.id}`,
         client_id: id,
         type: 'purchase',
-        title: `Покупка №${order.orderNumber}`,
+        title: `Покупка №${order.number}`,
         description: null,
-        happened_at: (order.completedAt ?? order.createdAt).toISOString(),
-        amount_uzs: this.decimalToNumber(order.totalPrice),
+        happened_at: (order.paidAt ?? order.createdAt).toISOString(),
+        amount_uzs: Number(order.payableTotal ?? 0),
         order_id: order.id,
       })),
       ...notes.map((note) => ({
@@ -396,13 +466,13 @@ export class ClientsService {
   async getPreferences(id: string, authorization?: string) {
     const context = await this.getContext(authorization);
     await this.findClientOrThrow(id, context.companyId);
-    const items = await this.prisma.orderItem.findMany({
+    const items = await this.prisma.saleItem.findMany({
       where: {
-        order: this.completedOrderWhere(id, context),
+        sale: await this.completedSaleWhere(id, context),
       },
       include: {
         product: true,
-        order: { select: { completedAt: true, createdAt: true } },
+        sale: { select: { paidAt: true, createdAt: true } },
       },
     });
     const grouped = new Map<string, any>();
@@ -422,9 +492,7 @@ export class ClientsService {
         last_purchased_at: null,
       };
       existing.purchase_count += 1;
-      const happenedAt = (
-        item.order.completedAt ?? item.order.createdAt
-      ).toISOString();
+      const happenedAt = (item.sale.paidAt ?? item.sale.createdAt).toISOString();
       if (
         !existing.last_purchased_at ||
         new Date(existing.last_purchased_at) < new Date(happenedAt)
@@ -929,56 +997,80 @@ export class ClientsService {
     return where;
   }
 
-  private completedOrderWhere(id: string, context: ClientContext): Prisma.OrderWhereInput {
+  private async completedSaleWhere(
+    id: string,
+    context: ClientContext,
+  ): Promise<Prisma.SaleWhereInput> {
+    const branchCodes = await this.resolveAllowedBranchCodes(context);
     return {
       companyId: context.companyId,
-      customerId: id,
-      status: OrderStatus.COMPLETED,
-      ...(context.allowedShopIds.length
-        ? { shopId: { in: context.allowedShopIds } }
-        : {}),
+      clientId: id,
+      isDraft: false,
+      saleType: { in: ['sale', 'exchange'] },
+      ...(branchCodes.length ? { branchCode: { in: branchCodes } } : {}),
     };
   }
 
   private async loadClientMetrics(clientIds: string[], context: ClientContext) {
     const metrics = new Map<
       string,
-      { totalPurchases: number; visitsCount: number; lastPurchaseAt: string | null }
+      {
+        totalPurchases: number;
+        visitsCount: number;
+        lastPurchaseAt: string | null;
+        firstPurchaseAt: string | null;
+      }
     >();
     if (!clientIds.length) {
       return metrics;
     }
 
-    const groups = await this.prisma.order.groupBy({
-      by: ['customerId'],
+    const branchCodes = await this.resolveAllowedBranchCodes(context);
+    const groups = await this.prisma.sale.groupBy({
+      by: ['clientId'],
       where: {
         companyId: context.companyId,
-        customerId: { in: clientIds },
-        status: OrderStatus.COMPLETED,
-        ...(context.allowedShopIds.length
-          ? { shopId: { in: context.allowedShopIds } }
-          : {}),
+        clientId: { in: clientIds },
+        isDraft: false,
+        saleType: { in: ['sale', 'exchange'] },
+        ...(branchCodes.length ? { branchCode: { in: branchCodes } } : {}),
       },
-      _sum: { totalPrice: true },
+      _sum: { payableTotal: true },
       _count: { _all: true },
-      _max: { completedAt: true },
+      _max: { paidAt: true, createdAt: true },
+      _min: { paidAt: true, createdAt: true },
     });
 
     for (const item of groups) {
-      if (!item.customerId) {
+      if (!item.clientId) {
         continue;
       }
-      metrics.set(item.customerId, {
-        totalPurchases: this.decimalToNumber(item._sum.totalPrice),
+      metrics.set(item.clientId, {
+        totalPurchases: Number(item._sum.payableTotal ?? 0),
         visitsCount: item._count._all,
-        lastPurchaseAt: item._max.completedAt?.toISOString() ?? null,
+        lastPurchaseAt:
+          item._max.paidAt?.toISOString() ??
+          item._max.createdAt?.toISOString() ??
+          null,
+        firstPurchaseAt:
+          item._min.paidAt?.toISOString() ??
+          item._min.createdAt?.toISOString() ??
+          null,
       });
     }
 
     return metrics;
   }
 
-  private toClientListItem(client: ClientListRecord, metric?: { totalPurchases: number; visitsCount: number; lastPurchaseAt: string | null }) {
+  private toClientListItem(
+    client: ClientListRecord,
+    metric?: {
+      totalPurchases: number;
+      visitsCount: number;
+      lastPurchaseAt: string | null;
+      firstPurchaseAt: string | null;
+    },
+  ) {
     return {
       id: client.id,
       code: client.code,
@@ -1005,6 +1097,72 @@ export class ClientsService {
       balance_uzs: this.decimalToNumber(client.balanceUzs),
       debt_uzs: this.decimalToNumber(client.debtUzs),
       visits_count: metric?.visitsCount ?? client.visitsCount,
+    };
+  }
+
+  private toCustomersListItem(
+    client: ClientListRecord,
+    metric?: {
+      totalPurchases: number;
+      visitsCount: number;
+      lastPurchaseAt: string | null;
+      firstPurchaseAt: string | null;
+    },
+  ) {
+    return {
+      id: client.id,
+      external_id: client.code,
+      company_id: client.companyId,
+      first_name: client.firstName,
+      last_name: client.lastName ?? '',
+      middle_name: client.middleName ?? '',
+      language: 'ru',
+      date_of_birth: this.toDateOnly(client.birthDate) ?? '',
+      gender: this.toExternalGender(client.gender),
+      phone_numbers: client.phone ? [client.phone] : [],
+      marital_status: client.maritalStatus ?? '',
+      registered_shop: client.registrationShop
+        ? { id: client.registrationShop.id, name: client.registrationShop.name }
+        : { id: '', name: '' },
+      registered_shop_name: '',
+      last_purchase_date: this.toBillzDateTime(
+        metric?.lastPurchaseAt ?? client.lastPurchaseAt?.toISOString() ?? null,
+      ),
+      channel: { id: '', company_id: '', name: '' },
+      sms_notification: client.smsNotifications,
+      phone_notification: client.phoneNotifications,
+      social_network_notification: client.socialNotifications,
+      purchase_amount:
+        metric?.totalPurchases ?? this.decimalToNumber(client.totalPurchasesUzs),
+      debt_amount: this.decimalToNumber(client.debtUzs),
+      email_notification: client.emailNotifications,
+      groups: client.groups.map((item) => ({
+        id: item.group.id,
+        name: item.group.name,
+      })),
+      group_names: client.groups.length
+        ? client.groups.map((item) => item.group.name)
+        : null,
+      tag_names: client.tags.length
+        ? client.tags.map((item) => item.tag.name)
+        : null,
+      cards: [],
+      created_at: this.toBillzDateTime(client.createdAt),
+      loyalty_program_id: '',
+      loyalty_program_level_id: '',
+      last_update_date: this.toBillzDateTime(client.updatedAt),
+      balance: this.decimalToNumber(client.balanceUzs),
+      company_name: '',
+      chat_id: '',
+      first_purchase_date: metric?.firstPurchaseAt
+        ? this.toBillzDateTime(metric.firstPurchaseAt)
+        : '',
+      sort: null,
+      source_id: '',
+      deleted_at: 0,
+      addresses: null,
+      country_name: '',
+      social_networks: this.toStringArray(client.socialLinks),
     };
   }
 
@@ -1073,9 +1231,29 @@ export class ClientsService {
       last_week_new_clients: clients.filter((item) => item.registeredAt >= weekAgo)
         .length,
       non_returning_clients: clients.filter(
-        (item) => (metrics.get(item.id)?.visitsCount ?? 0) <= 1,
+        (item) => {
+          const visits = metrics.get(item.id)?.visitsCount ?? 0;
+          return visits > 0 && visits <= 1;
+        },
       ).length,
       birthdays_today_or_period: clients.filter((item) => {
+        if (!item.birthDate) {
+          return false;
+        }
+        return (
+          item.birthDate.getMonth() === today.getMonth() &&
+          item.birthDate.getDate() === today.getDate()
+        );
+      }).length,
+      last_week_count: clients.filter((item) => item.registeredAt >= weekAgo)
+        .length,
+      not_returned_count: clients.filter(
+        (item) => {
+          const visits = metrics.get(item.id)?.visitsCount ?? 0;
+          return visits > 0 && visits <= 1;
+        },
+      ).length,
+      birthday_count: clients.filter((item) => {
         if (!item.birthDate) {
           return false;
         }
@@ -1088,44 +1266,159 @@ export class ClientsService {
   }
 
   private async buildClientDashboard(id: string, context: ClientContext) {
-    const orders = await this.prisma.order.findMany({
-      where: this.completedOrderWhere(id, context),
+    const sales = await this.prisma.sale.findMany({
+      where: await this.completedSaleWhere(id, context),
       include: { items: true },
     });
-    const visitsCount = orders.length;
-    const totalPurchases = orders.reduce(
-      (sum, order) => sum + this.decimalToNumber(order.totalPrice),
+    const visitsCount = sales.length;
+    const totalPurchases = sales.reduce(
+      (sum, sale) => sum + Number(sale.payableTotal ?? 0),
       0,
     );
-    const topTransaction = orders.reduce(
-      (max, order) => Math.max(max, this.decimalToNumber(order.totalPrice)),
+    const topTransaction = sales.reduce(
+      (max, sale) => Math.max(max, Number(sale.payableTotal ?? 0)),
       0,
     );
     const averageCheck = visitsCount ? totalPurchases / visitsCount : 0;
     const averageItemsCount = visitsCount
-      ? orders.reduce((sum, order) => sum + order.items.length, 0) / visitsCount
+      ? sales.reduce(
+          (sum, sale) =>
+            sum +
+            sale.items.reduce(
+              (itemSum, item) => itemSum + Number(item.quantity ?? 0),
+              0,
+            ),
+          0,
+        ) / visitsCount
       : 0;
     const averageDiscountPercent = visitsCount
-      ? orders.reduce((sum, order) => {
-          const total = this.decimalToNumber(order.totalPrice);
-          const discount = this.decimalToNumber(order.discountAmount);
+      ? sales.reduce((sum, sale) => {
+          const total = Number(sale.payableTotal ?? 0);
+          const discount = Number(sale.discountAmount ?? 0);
           const base = total + discount;
           return sum + (base > 0 ? (discount / base) * 100 : 0);
         }, 0) / visitsCount
       : 0;
+    const sortedSales = [...sales].sort(
+      (a, b) =>
+        new Date(a.paidAt ?? a.createdAt).getTime() -
+        new Date(b.paidAt ?? b.createdAt).getTime(),
+    );
     const client = await this.prisma.client.findUnique({
       where: { id },
-      select: { balanceUzs: true },
+      select: {
+        balanceUzs: true,
+        debtUzs: true,
+        createdAt: true,
+        updatedAt: true,
+      },
     });
 
     return {
       balance_uzs: this.decimalToNumber(client?.balanceUzs),
+      debt_amount: this.decimalToNumber(client?.debtUzs),
       total_purchases_uzs: totalPurchases,
+      purchase_amount: totalPurchases,
       top_transaction_uzs: topTransaction,
+      top_transaction: topTransaction,
       average_check_uzs: averageCheck,
+      average_purchase_amount: averageCheck,
+      average_products_price: averageCheck,
       average_items_count: averageItemsCount,
+      average_products_count: averageItemsCount,
       average_discount_percent: averageDiscountPercent,
+      average_discount: averageDiscountPercent,
       visits_count: visitsCount,
+      first_purchase_date: sortedSales[0]
+        ? this.toBillzDateTime(sortedSales[0].paidAt ?? sortedSales[0].createdAt)
+        : '',
+      last_purchase_date: sortedSales.length
+        ? this.toBillzDateTime(
+            sortedSales[sortedSales.length - 1].paidAt ??
+              sortedSales[sortedSales.length - 1].createdAt,
+          )
+        : '',
+      last_update_date: this.toBillzDateTime(client?.updatedAt),
+      created_at: this.toBillzDateTime(client?.createdAt),
+    };
+  }
+
+  private toCustomerDetailResponse(
+    client: ClientListRecord & {
+      cards: Array<{
+        id: string;
+        type: ClientCardType;
+        number: string;
+      }>;
+      company?: { name: string } | null;
+    },
+    dashboard: Awaited<ReturnType<ClientsService['buildClientDashboard']>>,
+  ) {
+    return {
+      id: client.id,
+      external_id: client.code,
+      company_id: client.companyId,
+      first_name: client.firstName,
+      last_name: client.lastName ?? '',
+      middle_name: client.middleName ?? '',
+      language: 'ru',
+      date_of_birth: this.toDateOnly(client.birthDate) ?? '',
+      gender: this.toExternalGender(client.gender),
+      phone_numbers: client.phone ? [client.phone] : [],
+      marital_status: client.maritalStatus ?? '',
+      registered_shop: client.registrationShop
+        ? { id: client.registrationShop.id, name: client.registrationShop.name }
+        : { id: '', name: '' },
+      registered_shop_name: '',
+      last_purchase_date: dashboard.last_purchase_date,
+      channel: { id: '', company_id: '', name: '' },
+      sms_notification: client.smsNotifications,
+      phone_notification: client.phoneNotifications,
+      social_network_notification: client.socialNotifications,
+      purchase_amount: dashboard.purchase_amount,
+      debt_amount: dashboard.debt_amount,
+      email_notification: client.emailNotifications,
+      groups: client.groups.map((item) => ({
+        id: item.group.id,
+        name: item.group.name,
+      })),
+      group_names: client.groups.length
+        ? client.groups.map((item) => item.group.name)
+        : null,
+      tag_names: client.tags.length
+        ? client.tags.map((item) => item.tag.name)
+        : null,
+      cards: client.cards.map((card) => ({
+        id: card.id,
+        type: card.type,
+        number: card.number,
+      })),
+      created_at: dashboard.created_at,
+      loyalty_program_id: '',
+      loyalty_program_level_id: '',
+      last_update_date: dashboard.last_update_date,
+      company_name: client.company?.name ?? '',
+      chat_id: '',
+      first_purchase_date: dashboard.first_purchase_date,
+      sort: null,
+      source_id: '',
+      deleted_at: 0,
+      country_name: '',
+      addresses: client.address ? [client.address] : [],
+      social_networks: this.toStringArray(client.socialLinks),
+      relatives: this.toStringArray(client.relatives),
+      notes: [],
+      tasks: [],
+      custom_fields: [],
+      average_purchase_amount: dashboard.average_purchase_amount,
+      average_products_price: dashboard.average_products_price,
+      balance: dashboard.balance_uzs,
+      client_type: '',
+      average_discount: dashboard.average_discount,
+      average_products_count: dashboard.average_products_count,
+      top_transaction: dashboard.top_transaction,
+      visits_count: dashboard.visits_count,
+      props_updated: false,
     };
   }
 
@@ -1169,6 +1462,17 @@ export class ClientsService {
 
   private decimalToNumber(value: Prisma.Decimal | null | undefined) {
     return value ? Number(value) : 0;
+  }
+
+  private toExternalGender(value: ClientGender) {
+    switch (value) {
+      case ClientGender.male:
+        return 'MALE';
+      case ClientGender.female:
+        return 'FEMALE';
+      default:
+        return 'UNKNOWN';
+    }
   }
 
   private matchesDateRange(value: string, from: Date | null, to: Date | null) {
@@ -1252,6 +1556,17 @@ export class ClientsService {
 
   private toDateOnly(value: Date | null | undefined) {
     return value ? value.toISOString().slice(0, 10) : null;
+  }
+
+  private toBillzDateTime(value: string | Date | null | undefined) {
+    if (!value) {
+      return '';
+    }
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return '';
+    }
+    return date.toISOString().slice(0, 19).replace('T', ' ');
   }
 
   private parseNullableGender(value: string | string[] | undefined) {
@@ -1555,5 +1870,23 @@ export class ClientsService {
       throw new BadRequestException('Integer value is invalid');
     }
     return parsed;
+  }
+
+  private async resolveAllowedBranchCodes(context: ClientContext) {
+    if (!context.allowedShopIds.length) {
+      return [];
+    }
+
+    const shops = await this.prisma.shop.findMany({
+      where: {
+        id: { in: context.allowedShopIds },
+        companyId: context.companyId,
+      },
+      select: {
+        branchCode: true,
+      },
+    });
+
+    return shops.map((shop) => shop.branchCode);
   }
 }

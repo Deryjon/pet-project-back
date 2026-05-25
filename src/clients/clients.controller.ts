@@ -34,6 +34,19 @@ export class ClientsController {
     return this.clientsService.findAll(query, authorization);
   }
 
+  @Get('v1/customers-list')
+  findCustomersList(
+    @Query() query: Record<string, string | string[] | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.clientsService.findCustomersList(query, authorization);
+  }
+
+  @Get('v1/customers-stats')
+  getCustomersStats(@Headers('authorization') authorization?: string) {
+    return this.clientsService.getCustomersStats(authorization);
+  }
+
   @Get('clients/filters')
   getFilters(@Headers('authorization') authorization?: string) {
     return this.clientsService.getFilters(authorization);
@@ -79,6 +92,14 @@ export class ClientsController {
     @Headers('authorization') authorization?: string,
   ) {
     return this.clientsService.findOne(id, authorization);
+  }
+
+  @Get('v1/customer/:id')
+  findCustomerCard(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.clientsService.findCustomerCard(id, authorization);
   }
 
   @Patch('clients/:id')
