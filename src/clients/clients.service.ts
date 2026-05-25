@@ -440,38 +440,79 @@ export class ClientsService {
   }
 
   async getDebts(id: string, authorization?: string) {
+    return this.getClientDebts(id, {}, authorization);
+  }
+
+  async getClientDebts(
+    id: string,
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
     const context = await this.getContext(authorization);
     await this.findClientOrThrow(id, context.companyId);
     const debts = await this.prisma.clientDebt.findMany({
-      where: { companyId: context.companyId, clientId: id },
-      include: { shop: true },
+      where: this.buildDebtWhere(query, context, { clientId: id }),
+      include: {
+        client: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            middleName: true,
+            phone: true,
+          },
+        },
+        sale: {
+          select: {
+            id: true,
+            number: true,
+          },
+        },
+        shop: true,
+      },
       orderBy: { createdAt: 'desc' },
     });
-    const items = debts.map((debt) => ({
-      id: debt.id,
-      client_id: debt.clientId,
-      amount_uzs: this.decimalToNumber(debt.amountUzs),
-      remaining_amount_uzs: this.decimalToNumber(debt.remainingAmountUzs),
-      repaid_amount_uzs: this.decimalToNumber(debt.repaidAmountUzs),
-      due_date: this.toDateOnly(debt.dueDate),
-      status: debt.status,
-      shop: debt.shop ? { id: debt.shop.id, name: debt.shop.name } : null,
-      created_at: debt.createdAt.toISOString(),
-      receipt_url: debt.receiptUrl,
-    }));
+
+    return this.buildDebtListResponse(debts);
+  }
+
+  async getAllDebts(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const page = this.parsePositiveInt(query.page, 1);
+    const limit = Math.min(this.parsePositiveInt(query.limit, 20), 100);
+    const debts = await this.prisma.clientDebt.findMany({
+      where: this.buildDebtWhere(query, context),
+      include: {
+        client: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            middleName: true,
+            phone: true,
+          },
+        },
+        sale: {
+          select: {
+            id: true,
+            number: true,
+          },
+        },
+        shop: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    const response = this.buildDebtListResponse(debts);
 
     return {
-      items,
-      summary: {
-        active_debt_uzs: items
-          .filter((item) => item.status !== ClientDebtStatus.paid)
-          .reduce((sum, item) => sum + item.remaining_amount_uzs, 0),
-        total_repaid_uzs: items.reduce(
-          (sum, item) => sum + item.repaid_amount_uzs,
-          0,
-        ),
-        total_debt_uzs: items.reduce((sum, item) => sum + item.amount_uzs, 0),
-      },
+      ...response,
+      items: response.items.slice((page - 1) * limit, page * limit),
+      page,
+      limit,
+      total: response.items.length,
     };
   }
 
@@ -492,12 +533,14 @@ export class ClientsService {
         data: {
           companyId: context.companyId,
           clientId,
+          saleId: this.optionalBodyInt(body.sale_id),
           shopId,
           amountUzs: amount,
           remainingAmountUzs: amount,
           repaidAmountUzs: new Prisma.Decimal(0),
           dueDate: this.parseNullableDateOnly(body.due_date),
           status: ClientDebtStatus.unpaid,
+          comment: this.optionalBodyString(body.comment),
           receiptUrl: this.optionalBodyString(body.receipt_url),
         },
       });
@@ -517,11 +560,13 @@ export class ClientsService {
     return {
       id: debt.id,
       client_id: debt.clientId,
+      sale_id: debt.saleId ?? null,
       amount_uzs: this.decimalToNumber(debt.amountUzs),
       remaining_amount_uzs: this.decimalToNumber(debt.remainingAmountUzs),
       repaid_amount_uzs: this.decimalToNumber(debt.repaidAmountUzs),
       due_date: this.toDateOnly(debt.dueDate),
       status: debt.status,
+      comment: debt.comment,
       shop: null,
       created_at: debt.createdAt.toISOString(),
       receipt_url: debt.receiptUrl,
@@ -592,11 +637,13 @@ export class ClientsService {
     return {
       id: debt.id,
       client_id: debt.clientId,
+      sale_id: debt.saleId ?? null,
       amount_uzs: this.decimalToNumber(debt.amountUzs),
       remaining_amount_uzs: this.decimalToNumber(debt.remainingAmountUzs),
       repaid_amount_uzs: this.decimalToNumber(debt.repaidAmountUzs),
       due_date: this.toDateOnly(debt.dueDate),
       status: debt.status,
+      comment: debt.comment,
       created_at: debt.createdAt.toISOString(),
       receipt_url: debt.receiptUrl,
     };
@@ -1314,5 +1361,199 @@ export class ClientsService {
       throw new BadRequestException('Integer value is invalid');
     }
     return Math.max(0, Math.floor(parsed));
+  }
+
+  private buildDebtWhere(
+    query: Record<string, string | undefined>,
+    context: ClientContext,
+    args?: { clientId?: string },
+  ): Prisma.ClientDebtWhereInput {
+    const and: Prisma.ClientDebtWhereInput[] = [
+      {
+        companyId: context.companyId,
+        ...(args?.clientId ? { clientId: args.clientId } : {}),
+      },
+    ];
+    const shopId = this.optionalString(query.shop_id);
+    const clientId = this.optionalString(query.client_id);
+    const from = this.parseDateTime(query.created_from);
+    const to = this.parseDateTime(query.created_to);
+    const dueFrom = this.parseDateOnly(query.due_from);
+    const dueTo = this.parseDateOnly(query.due_to);
+    const status = this.parseDebtBucket(query.status ?? query.bucket);
+
+    if (!args?.clientId && clientId) {
+      and.push({ clientId });
+    }
+    if (context.allowedShopIds.length) {
+      and.push({
+        OR: [{ shopId: null }, { shopId: { in: context.allowedShopIds } }],
+      });
+    }
+    if (shopId) {
+      and.push({ shopId });
+    }
+    if (from || to) {
+      and.push({
+        createdAt: {
+          ...(from ? { gte: from } : {}),
+          ...(to ? { lte: to } : {}),
+        },
+      });
+    }
+    if (dueFrom || dueTo) {
+      and.push({
+        dueDate: {
+          ...(dueFrom ? { gte: dueFrom } : {}),
+          ...(dueTo ? { lte: dueTo } : {}),
+        },
+      });
+    }
+
+    const today = this.startOfToday();
+    switch (status) {
+      case 'paid':
+        and.push({ status: ClientDebtStatus.paid });
+        break;
+      case 'partial':
+        and.push({ status: ClientDebtStatus.partial });
+        break;
+      case 'unpaid':
+        and.push({ status: ClientDebtStatus.unpaid });
+        break;
+      case 'overdue':
+        and.push({
+          status: { in: [ClientDebtStatus.unpaid, ClientDebtStatus.partial] },
+          dueDate: { lt: today },
+        });
+        break;
+      default:
+        break;
+    }
+
+    return { AND: and };
+  }
+
+  private buildDebtListResponse(
+    debts: Array<{
+      id: string;
+      clientId: string;
+      saleId: number | null;
+      amountUzs: Prisma.Decimal;
+      remainingAmountUzs: Prisma.Decimal;
+      repaidAmountUzs: Prisma.Decimal;
+      dueDate: Date | null;
+      status: ClientDebtStatus;
+      comment: string | null;
+      receiptUrl: string | null;
+      createdAt: Date;
+      client?: {
+        id: string;
+        firstName: string;
+        lastName: string | null;
+        middleName: string | null;
+        phone: string;
+      } | null;
+      sale?: { id: number; number: string } | null;
+      shop?: { id: string; name: string } | null;
+    }>,
+  ) {
+    const items = debts.map((debt) => {
+      const isOverdue = this.isDebtOverdue(debt);
+      return {
+        id: debt.id,
+        client_id: debt.clientId,
+        client: debt.client
+          ? {
+              id: debt.client.id,
+              full_name: this.buildFullName(debt.client),
+              phone: debt.client.phone,
+            }
+          : null,
+        sale_id: debt.saleId ?? null,
+        sale: debt.sale
+          ? {
+              id: String(debt.sale.id),
+              number: debt.sale.number,
+            }
+          : null,
+        amount_uzs: this.decimalToNumber(debt.amountUzs),
+        remaining_amount_uzs: this.decimalToNumber(debt.remainingAmountUzs),
+        repaid_amount_uzs: this.decimalToNumber(debt.repaidAmountUzs),
+        due_date: this.toDateOnly(debt.dueDate),
+        status: debt.status,
+        is_overdue: isOverdue,
+        bucket: isOverdue ? 'overdue' : debt.status,
+        comment: debt.comment,
+        shop: debt.shop ? { id: debt.shop.id, name: debt.shop.name } : null,
+        created_at: debt.createdAt.toISOString(),
+        receipt_url: debt.receiptUrl,
+      };
+    });
+
+    return {
+      items,
+      summary: {
+        active_debt_uzs: items
+          .filter((item) => item.status !== ClientDebtStatus.paid)
+          .reduce((sum, item) => sum + item.remaining_amount_uzs, 0),
+        total_repaid_uzs: items.reduce(
+          (sum, item) => sum + item.repaid_amount_uzs,
+          0,
+        ),
+        total_debt_uzs: items.reduce((sum, item) => sum + item.amount_uzs, 0),
+        all_count: items.length,
+        overdue_count: items.filter((item) => item.is_overdue).length,
+        unpaid_count: items.filter((item) => item.status === ClientDebtStatus.unpaid)
+          .length,
+        partial_count: items.filter((item) => item.status === ClientDebtStatus.partial)
+          .length,
+        paid_count: items.filter((item) => item.status === ClientDebtStatus.paid).length,
+      },
+    };
+  }
+
+  private parseDebtBucket(value: string | null) {
+    if (!value) {
+      return null;
+    }
+    if (
+      value === 'all' ||
+      value === 'overdue' ||
+      value === 'unpaid' ||
+      value === 'partial' ||
+      value === 'paid'
+    ) {
+      return value;
+    }
+    throw new BadRequestException(`Invalid debt status: ${value}`);
+  }
+
+  private isDebtOverdue(debt: {
+    status: ClientDebtStatus;
+    dueDate: Date | null;
+  }) {
+    return (
+      debt.status !== ClientDebtStatus.paid &&
+      !!debt.dueDate &&
+      debt.dueDate.getTime() < this.startOfToday().getTime()
+    );
+  }
+
+  private startOfToday() {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return today;
+  }
+
+  private optionalBodyInt(value: unknown) {
+    if (value === undefined || value === null || value === '') {
+      return null;
+    }
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      throw new BadRequestException('Integer value is invalid');
+    }
+    return parsed;
   }
 }

@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { ClientDebtStatus, Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -592,16 +592,29 @@ export class SalesService {
       requestedPaymentMethod,
       context?.companyId,
     );
+    const resolvedClient = await this.resolveSaleClientPayload(
+      body,
+      sale.companyId ?? context?.companyId ?? null,
+      {
+        clientId: (sale as any).clientId ?? null,
+        clientName: sale.clientName ?? null,
+      },
+    );
 
-    await this.prisma.sale.update({
-      where: { id: sale.id },
-      data: {
-        status: 'paid',
-        isDraft: false,
-        paymentMethod,
-        parkNote: null,
-        paidAt: new Date(),
-      } as any,
+    await this.prisma.$transaction(async (tx) => {
+      const updatedSale = await tx.sale.update({
+        where: { id: sale.id },
+        data: {
+          status: 'paid',
+          isDraft: false,
+          paymentMethod,
+          clientId: resolvedClient.clientId,
+          clientName: resolvedClient.clientName,
+          parkNote: null,
+          paidAt: new Date(),
+        } as any,
+      });
+      await this.createDebtForFinalizedSale(tx, updatedSale, body, context);
     });
 
     return {
@@ -1034,6 +1047,45 @@ export class SalesService {
     return this.findDraft(id, authorization);
   }
 
+  async attachClient(
+    id: number,
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const sale = await this.findSaleOrThrow(id);
+    this.assertSaleAccess(sale, context);
+
+    if (!sale.isDraft) {
+      throw new BadRequestException('Cannot update paid sale');
+    }
+
+    const rawClientId =
+      this.optionalString(body.client_id) ??
+      this.optionalString(body.customer_id) ??
+      this.optionalString(body.clientId) ??
+      this.optionalString(body.customerId);
+
+    if (!rawClientId) {
+      throw new BadRequestException('client_id is required');
+    }
+
+    const client = await this.findClientForSaleOrThrow(
+      rawClientId,
+      sale.companyId ?? context?.companyId ?? null,
+    );
+
+    await this.prisma.sale.update({
+      where: { id },
+      data: {
+        clientId: client.id,
+        clientName: this.buildClientDisplayName(client),
+      } as any,
+    });
+
+    return this.findDraft(id, authorization);
+  }
+
   async pay(id: number, body: Record<string, unknown>, authorization?: string) {
     const context = await this.getRequestContext(authorization);
     const sale = await this.findSaleOrThrow(id);
@@ -1060,24 +1112,42 @@ export class SalesService {
 
     await this.writeOffSaleItemsFromStock(sale, branchCode);
 
-    const updatedSale = await this.prisma.sale.update({
-      where: { id },
-      data: {
-        status: 'paid',
-        isDraft: false,
-        paymentMethod: await this.resolvePaymentMethod(
-          this.optionalString(body.payment_method),
-          context?.companyId,
-        ),
-        clientName: this.optionalString(body.client_name),
-        parkNote: null,
-        branchCode,
-        paidAt: new Date(),
-      } as any,
-      include: {
-        user: true,
-        items: true,
+    const resolvedClient = await this.resolveSaleClientPayload(
+      body,
+      sale.companyId ?? context?.companyId ?? null,
+      {
+        clientId: (sale as any).clientId ?? null,
+        clientName: sale.clientName ?? null,
       },
+    );
+
+    const paymentMethod = await this.resolvePaymentMethod(
+      this.optionalString(body.payment_method),
+      context?.companyId,
+    );
+
+    const updatedSale = await this.prisma.$transaction(async (tx) => {
+      const persistedSale = await tx.sale.update({
+        where: { id },
+        data: {
+          status: 'paid',
+          isDraft: false,
+          paymentMethod,
+          clientId: resolvedClient.clientId,
+          clientName: resolvedClient.clientName,
+          parkNote: null,
+          branchCode,
+          paidAt: new Date(),
+        } as any,
+      });
+      await this.createDebtForFinalizedSale(tx, persistedSale, body, context);
+      return tx.sale.findUniqueOrThrow({
+        where: { id },
+        include: {
+          user: true,
+          items: true,
+        },
+      });
     });
 
     return this.toSaleListItem(updatedSale as any, context);
@@ -1570,6 +1640,7 @@ export class SalesService {
         payableTotal: total,
         total,
         paymentMethod,
+        clientId: args.originalSale.clientId ?? undefined,
         clientName: args.originalSale.clientName ?? undefined,
         branchCode: args.originalSale.branchCode ?? undefined,
         isDraft: false,
@@ -2433,6 +2504,74 @@ export class SalesService {
     return sale;
   }
 
+  private async findClientForSaleOrThrow(
+    clientId: string,
+    companyId?: string | null,
+  ) {
+    const normalizedClientId = clientId.trim();
+    if (!normalizedClientId) {
+      throw new BadRequestException('client_id is required');
+    }
+
+    const client = await (this.prisma as any).client.findFirst({
+      where: {
+        id: normalizedClientId,
+        ...(companyId ? { companyId } : {}),
+      },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        middleName: true,
+      },
+    });
+
+    if (!client) {
+      throw new NotFoundException('Client not found');
+    }
+
+    return client;
+  }
+
+  private buildClientDisplayName(client: {
+    firstName: string;
+    lastName?: string | null;
+    middleName?: string | null;
+  }) {
+    return [client.lastName, client.firstName, client.middleName]
+      .filter((part): part is string => !!part?.trim())
+      .join(' ');
+  }
+
+  private async resolveSaleClientPayload(
+    body: Record<string, unknown>,
+    companyId?: string | null,
+    fallback?: {
+      clientId?: string | null;
+      clientName?: string | null;
+    },
+  ) {
+    const rawClientId =
+      this.optionalString(body.client_id) ??
+      this.optionalString(body.customer_id) ??
+      this.optionalString(body.clientId) ??
+      this.optionalString(body.customerId);
+
+    if (rawClientId) {
+      const client = await this.findClientForSaleOrThrow(rawClientId, companyId);
+      return {
+        clientId: client.id,
+        clientName: this.buildClientDisplayName(client),
+      };
+    }
+
+    const clientName = this.optionalString(body.client_name);
+    return {
+      clientId: fallback?.clientId ?? null,
+      clientName: clientName ?? fallback?.clientName ?? null,
+    };
+  }
+
   private toDraftSummary(
     sale: {
       id: number;
@@ -2442,6 +2581,8 @@ export class SalesService {
       discountPercent: number;
       discountAmount: number;
       payableTotal: number;
+      clientId?: string | null;
+      clientName?: string | null;
     },
     context?: any,
   ) {
@@ -2456,6 +2597,9 @@ export class SalesService {
       discount_percent: sale.discountPercent,
       discount_amount: sale.discountAmount,
       payable_total: sale.payableTotal,
+      client_id: sale.clientId ?? null,
+      customer_id: sale.clientId ?? '',
+      client_name: sale.clientName ?? null,
     };
   }
 
@@ -2467,6 +2611,8 @@ export class SalesService {
       parentSaleId?: number | null;
       status: string;
       parkNote?: string | null;
+      clientId?: string | null;
+      clientName?: string | null;
       discountPercent: number;
       discountAmount: number;
       payableTotal: number;
@@ -2495,6 +2641,9 @@ export class SalesService {
       discount_amount: sale.discountAmount,
       payable_total: sale.payableTotal,
       total: sale.total,
+      client_id: sale.clientId ?? null,
+      customer_id: sale.clientId ?? '',
+      client_name: sale.clientName ?? null,
       items: sale.items.map((item) => ({
         id: item.id,
         product_id: item.productId,
@@ -2520,6 +2669,7 @@ export class SalesService {
       payableTotal: number;
       total: number;
       discountAmount: number;
+      clientId?: string | null;
       paymentMethod: string | null;
       clientName: string | null;
       branchCode: string | null;
@@ -2599,6 +2749,8 @@ export class SalesService {
               payment_type_name: '',
             }
           : null,
+      client_id: sale.clientId ?? null,
+      customer_id: sale.clientId ?? '',
       client_name: sale.clientName,
       items: sale.items.map((item) => ({
         id: item.id,
@@ -2628,6 +2780,8 @@ export class SalesService {
       total: number;
       payableTotal: number;
       discountAmount: number;
+      clientId?: string | null;
+      clientName?: string | null;
       paymentMethod: string | null;
       user: { id: number; firstName: string; lastName: string } | null;
       items: {
@@ -2784,6 +2938,9 @@ export class SalesService {
         id: String(sale.id),
         order_id: String(sale.id),
         customer: {
+          id: sale.clientId ?? '',
+          full_name: sale.clientName ?? '',
+          name: sale.clientName ?? '',
           customer_type: 'new',
         },
         user_id: sale.user ? String(sale.user.id) : '',
@@ -2881,7 +3038,7 @@ export class SalesService {
       created_at_utc: '',
       future_time: '',
       debt: null,
-      customer_id: '',
+      customer_id: sale.clientId ?? '',
       parent_order_debt: null,
       deleted: false,
       deleted_by_user_id: '',
@@ -3346,6 +3503,138 @@ export class SalesService {
     }
 
     return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  }
+
+  private async createDebtForFinalizedSale(
+    tx: Prisma.TransactionClient,
+    sale: {
+      id: number;
+      companyId?: string | null;
+      branchCode?: string | null;
+      clientId?: string | null;
+      payableTotal?: number | null;
+      total?: number | null;
+    },
+    body: Record<string, unknown>,
+    context?: {
+      userId?: number;
+      companyId?: string | null;
+    } | null,
+  ) {
+    const debtInput = this.parseDebtPayload(body, sale.payableTotal || sale.total || 0);
+    if (!debtInput) {
+      return null;
+    }
+    if (!sale.clientId) {
+      throw new BadRequestException('client_id is required to create debt');
+    }
+
+    const shop = sale.branchCode
+      ? await tx.shop.findFirst({
+          where: {
+            branchCode: sale.branchCode,
+            ...(sale.companyId ?? context?.companyId
+              ? { companyId: sale.companyId ?? context?.companyId ?? undefined }
+              : {}),
+          },
+          select: { id: true },
+        })
+      : null;
+
+    await tx.clientDebt.create({
+      data: {
+        companyId: sale.companyId ?? context?.companyId ?? '',
+        clientId: sale.clientId,
+        saleId: sale.id,
+        shopId: shop?.id ?? null,
+        amountUzs: debtInput.amount,
+        remainingAmountUzs: debtInput.amount,
+        repaidAmountUzs: new Prisma.Decimal(0),
+        dueDate: debtInput.dueDate,
+        status: ClientDebtStatus.unpaid,
+        comment: debtInput.comment,
+        receiptUrl: debtInput.receiptUrl,
+      },
+    });
+
+    const aggregate = await tx.clientDebt.aggregate({
+      where: {
+        companyId: sale.companyId ?? context?.companyId ?? '',
+        clientId: sale.clientId,
+      },
+      _sum: { remainingAmountUzs: true },
+    });
+
+    await tx.client.update({
+      where: { id: sale.clientId },
+      data: {
+        debtUzs: aggregate._sum.remainingAmountUzs ?? new Prisma.Decimal(0),
+      },
+    });
+  }
+
+  private parseDebtPayload(
+    body: Record<string, unknown>,
+    saleAmount: number,
+  ) {
+    const debtRecord =
+      body.debt && typeof body.debt === 'object' && !Array.isArray(body.debt)
+        ? (body.debt as Record<string, unknown>)
+        : undefined;
+    const amountValue =
+      debtRecord?.amount_uzs ??
+      debtRecord?.debt_amount_uzs ??
+      debtRecord?.amount ??
+      body.debt_amount_uzs ??
+      body.debt_amount ??
+      body.debt_sum ??
+      (typeof body.debt === 'string' || typeof body.debt === 'number'
+        ? body.debt
+        : undefined);
+    const dueDateValue =
+      debtRecord?.due_date ?? debtRecord?.debt_due_date ?? body.due_date ?? body.debt_due_date;
+    const commentValue =
+      debtRecord?.comment ?? debtRecord?.debt_comment ?? body.comment ?? body.debt_comment ?? body.note;
+    const receiptUrlValue =
+      debtRecord?.receipt_url ?? body.receipt_url;
+
+    const explicitAmount = this.toNumber(amountValue);
+    const dueDate = this.parseNullableDebtDate(dueDateValue);
+    const comment = this.optionalString(commentValue) ?? null;
+    const receiptUrl = this.optionalString(receiptUrlValue) ?? null;
+    const shouldCreateDebt =
+      explicitAmount !== undefined || !!dueDate || !!comment || !!receiptUrl;
+
+    if (!shouldCreateDebt) {
+      return null;
+    }
+
+    const resolvedAmount = explicitAmount ?? saleAmount;
+    if (!resolvedAmount || resolvedAmount <= 0) {
+      throw new BadRequestException('Debt amount must be greater than zero');
+    }
+    if (resolvedAmount > saleAmount) {
+      throw new BadRequestException('Debt amount cannot exceed sale total');
+    }
+
+    return {
+      amount: new Prisma.Decimal(resolvedAmount),
+      dueDate,
+      comment,
+      receiptUrl,
+    };
+  }
+
+  private parseNullableDebtDate(value: unknown) {
+    const raw = this.optionalString(value);
+    if (!raw) {
+      return null;
+    }
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+    if (!match) {
+      throw new BadRequestException('Invalid debt due_date');
+    }
+    return new Date(`${raw}T00:00:00.000Z`);
   }
 
   private resolveShopByBranchCode(

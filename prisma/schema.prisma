@@ -579,6 +579,7 @@ model Client {
   cards               ClientCard[]
   debtRepayments      ClientDebtRepayment[]
   orders              Order[]
+  sales               Sale[]
   createdAt           DateTime        @default(now())
   updatedAt           DateTime        @updatedAt
 
@@ -657,21 +658,25 @@ model ClientDebt {
   id                 String              @id @default(uuid())
   companyId          String
   clientId           String
+  saleId             Int?
   shopId             String?
   amountUzs          Decimal             @db.Decimal(12, 2)
   remainingAmountUzs Decimal             @db.Decimal(12, 2)
   repaidAmountUzs    Decimal             @default(0) @db.Decimal(12, 2)
   dueDate            DateTime?           @db.Date
   status             ClientDebtStatus    @default(unpaid)
+  comment            String?
   receiptUrl         String?
   company            Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
   client             Client              @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  sale               Sale?               @relation(fields: [saleId], references: [id], onDelete: SetNull)
   shop               Shop?               @relation(fields: [shopId], references: [id], onDelete: SetNull)
   repayments         ClientDebtRepayment[]
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
   @@index([companyId, clientId])
+  @@index([saleId])
   @@index([shopId])
   @@index([status])
 }
@@ -878,6 +883,7 @@ model Sale {
   payableTotal    Float      @default(0)
   total           Float      @default(0)
   paymentMethod   String?
+  clientId        String?
   clientName      String?
   parkNote        String?
   branchCode      String?
@@ -885,9 +891,11 @@ model Sale {
   userId          Int?
   parentSaleId    Int?
   company         Company?   @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  client          Client?    @relation(fields: [clientId], references: [id], onDelete: SetNull)
   user            User?      @relation(fields: [userId], references: [id])
   parentSale      Sale?      @relation("SaleAdjustments", fields: [parentSaleId], references: [id], onDelete: SetNull)
   childSales      Sale[]     @relation("SaleAdjustments")
+  clientDebts     ClientDebt[]
   items           SaleItem[]
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
@@ -896,6 +904,7 @@ model Sale {
   @@index([companyId])
   @@index([createdAt])
   @@index([branchCode])
+  @@index([clientId])
   @@index([userId])
   @@index([parentSaleId])
   @@index([saleType])

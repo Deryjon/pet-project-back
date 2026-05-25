@@ -65,6 +65,14 @@ export class ClientsController {
     return this.clientsService.createTag(body, authorization);
   }
 
+  @Get('clients/debts')
+  getAllDebts(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.clientsService.getAllDebts(query, authorization);
+  }
+
   @Get('clients/:id')
   findOne(
     @Param('id') id: string,
@@ -119,9 +127,10 @@ export class ClientsController {
   @Get('clients/:id/debts')
   getDebts(
     @Param('id') id: string,
+    @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
   ) {
-    return this.clientsService.getDebts(id, authorization);
+    return this.clientsService.getClientDebts(id, query, authorization);
   }
 
   @Post('clients/:id/debts')

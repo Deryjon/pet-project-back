@@ -193,6 +193,20 @@ export class SalesController {
     return this.salesService.updateDiscount(id, body, authorization);
   }
 
+  @Patch('new-sale/:id/customer')
+  @Patch('v1/new-sale/:id/customer')
+  @Patch('v2/new-sale/:id/customer')
+  @Patch('new-sale/:id/client')
+  @Patch('v1/new-sale/:id/client')
+  @Patch('v2/new-sale/:id/client')
+  attachClient(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.attachClient(id, body, authorization);
+  }
+
   @Post('new-sale/:id/pay')
   pay(
     @Param('id', ParseIntPipe) id: number,
