@@ -43,6 +43,23 @@ function normalizeAuthorizationHeader(req: express.Request) {
   req.headers.authorization = authorization.trim();
 }
 
+function normalizeApiPrefix(req: express.Request) {
+  const currentUrl = req.url || '/';
+
+  if (
+    currentUrl === '/api' ||
+    currentUrl.startsWith('/api/') ||
+    currentUrl === '/uploads' ||
+    currentUrl.startsWith('/uploads/')
+  ) {
+    return;
+  }
+
+  req.url = currentUrl.startsWith('/')
+    ? `/api${currentUrl}`
+    : `/api/${currentUrl}`;
+}
+
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule);
@@ -60,6 +77,7 @@ async function bootstrap() {
       _res: express.Response,
       next: express.NextFunction,
     ) => {
+      normalizeApiPrefix(req);
       console.log('RAW AUTH HEADER:', {
         method: req.method,
         url: req.originalUrl,
