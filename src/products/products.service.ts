@@ -142,6 +142,26 @@ type ImportJob = {
   importId: string;
 };
 
+type TransferListQuery = {
+  page: number;
+  limit: number;
+};
+
+type TransferProductsQuery = {
+  search?: string;
+  limit: number;
+  page: number;
+  status?: string;
+  statistics?: boolean;
+  productTypeId?: string;
+};
+
+type TransferItemsQuery = {
+  search?: string;
+  limit: number;
+  page: number;
+};
+
 type ImportFieldResolution = 'keep_store' | 'from_file';
 
 type ImportOnMatchPolicy = {
@@ -380,6 +400,94 @@ const DEFAULT_MEASUREMENT_UNIT = {
   is_default: false,
 };
 const DEFAULT_EMPTY_SUPPLIER_ID = '00000000-0000-0000-0000-000000000000';
+const TRANSFER_STATUS_IDS = {
+  DRAFT: '65af5e85-252c-43be-8364-8c593c87c9e8',
+  SENT: '7cbb2295-559e-4b72-a3c1-11ac24dffc6b',
+  ACCEPTED: '31cd30a7-46ae-460c-9530-7c2df1356b62',
+  CANCELLED: 'f4c1e781-bc72-4700-83bc-03fa175d94fb',
+} as const;
+const TRANSFER_FIELDS = [
+  {
+    id: '',
+    name: 'variation_id',
+    sequence_number: 11,
+    is_active: true,
+    is_attribute: false,
+    is_custom_field: false,
+  },
+  {
+    id: '',
+    name: 'Кол-во',
+    sequence_number: 12,
+    is_active: true,
+    is_attribute: false,
+    is_custom_field: false,
+  },
+  {
+    id: '',
+    name: 'Фото',
+    sequence_number: 13,
+    is_active: true,
+    is_attribute: false,
+    is_custom_field: false,
+  },
+  {
+    id: '',
+    name: 'Бренд',
+    sequence_number: 14,
+    is_active: true,
+    is_attribute: false,
+    is_custom_field: false,
+  },
+  {
+    id: '',
+    name: 'Категория',
+    sequence_number: 15,
+    is_active: true,
+    is_attribute: false,
+    is_custom_field: false,
+  },
+  {
+    id: '',
+    name: 'Оптовая цена',
+    sequence_number: 16,
+    is_active: true,
+    is_attribute: false,
+    is_custom_field: false,
+  },
+  {
+    id: '',
+    name: 'Цена поставки',
+    sequence_number: 17,
+    is_active: true,
+    is_attribute: false,
+    is_custom_field: false,
+  },
+  {
+    id: '',
+    name: 'Цена продажи',
+    sequence_number: 18,
+    is_active: true,
+    is_attribute: false,
+    is_custom_field: false,
+  },
+  {
+    id: '',
+    name: 'Артикул',
+    sequence_number: 19,
+    is_active: true,
+    is_attribute: false,
+    is_custom_field: false,
+  },
+  {
+    id: '',
+    name: 'Баркод',
+    sequence_number: 20,
+    is_active: true,
+    is_attribute: false,
+    is_custom_field: false,
+  },
+] as const;
 const IMPORT_TYPE_WITH_CHECK_ID = 'a230b02b-46f8-42f4-885e-d81813c297d6';
 const IMPORT_TYPE_WITHOUT_CHECK_ID = 'fd152773-2e12-4c1a-8fb5-a7d5c9955750';
 const IMPORT_STATUS_COMPLETED_ID = '31cd30a7-46ae-460c-9530-7c2df1356b62';
@@ -2610,6 +2718,1040 @@ export class ProductsService {
     }
 
     throw new BadRequestException('Barcode range exceeded');
+  }
+
+  async listTransfers(
+    query: TransferListQuery,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const transferDb = (this.prisma as any).transfer;
+    const safeLimit = Math.max(1, Math.trunc(query.limit || 10));
+    const safePage = Math.max(1, Math.trunc(query.page || 1));
+    const where = this.buildTransferScope(context);
+
+    const [count, transfers] = await this.prisma.$transaction([
+      transferDb.count({ where }),
+      transferDb.findMany({
+        where,
+        include: this.transferInclude(),
+        orderBy: {
+          createdAt: 'desc',
+        },
+        skip: (safePage - 1) * safeLimit,
+        take: safeLimit,
+      }),
+    ]);
+
+    return {
+      count,
+      transfer: transfers.map((transfer: any) =>
+        this.toTransferListItem(transfer),
+      ),
+    };
+  }
+
+  async getTransferById(id: string, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
+    const transfer = await this.findTransferOrThrow(id, context);
+    const branchCodes = [
+      transfer.departureShop?.branchCode,
+      transfer.arrivalShop?.branchCode,
+    ].filter((value): value is string => Boolean(value));
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      branchCodes,
+      transfer.companyId,
+    );
+
+    return {
+      ...this.toTransferListItem(transfer),
+      items: transfer.items.map((item: any) =>
+        this.toTransferItemResponse(item, transfer, shopLookup, true),
+      ),
+    };
+  }
+
+  async createTransfer(
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    if (!context?.companyId) {
+      throw new UnauthorizedException('Company context is required');
+    }
+    const companyId = context.companyId;
+    const userId = context.userId;
+    const currentShopId = context.currentShopId ?? '';
+
+    const departureIdentifier =
+      this.optionalString(body.departure_shop_id) ??
+      this.optionalString(body.departureShopId) ??
+      this.optionalString(body.from_shop_id) ??
+      currentShopId ??
+      '';
+    const arrivalIdentifier =
+      this.optionalString(body.arrival_shop_id) ??
+      this.optionalString(body.arrivalShopId) ??
+      this.optionalString(body.to_shop_id) ??
+      '';
+
+    if (!departureIdentifier || !arrivalIdentifier) {
+      throw new BadRequestException(
+        'departure_shop_id and arrival_shop_id are required',
+      );
+    }
+
+    const departureBranchCode = await this.resolveBranchCodeForWrite(
+      departureIdentifier,
+      context,
+    );
+    const arrivalBranchCode = await this.resolveBranchCodeForWrite(
+      arrivalIdentifier,
+      context,
+    );
+
+    const [departureShop, arrivalShop] = await Promise.all([
+      this.prisma.shop.findFirst({
+        where: {
+          companyId,
+          branchCode: departureBranchCode,
+        },
+      }),
+      this.prisma.shop.findFirst({
+        where: {
+          companyId,
+          branchCode: arrivalBranchCode,
+        },
+      }),
+    ]);
+
+    if (!departureShop || !arrivalShop) {
+      throw new NotFoundException('Departure or arrival shop was not found');
+    }
+
+    if (departureShop.id === arrivalShop.id) {
+      throw new BadRequestException(
+        'Departure and arrival shops must be different',
+      );
+    }
+
+    const createdTransfer = await this.prisma.$transaction(async (tx) => {
+      const db = tx as any;
+      const latestTransfer = await db.transfer.findFirst({
+        where: {
+          companyId,
+        },
+        orderBy: {
+          externalId: 'desc',
+        },
+        select: {
+          externalId: true,
+        },
+      });
+      const nextExternalId = Number(latestTransfer?.externalId ?? 1000000) + 1;
+      const now = new Date();
+      const defaultName = `Трансфер ${now.getFullYear()}.${String(
+        now.getMonth() + 1,
+      ).padStart(2, '0')}.${String(now.getDate()).padStart(2, '0')} ${String(
+        now.getHours(),
+      ).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+      return db.transfer.create({
+        data: {
+          externalId: nextExternalId,
+          companyId,
+          name: this.optionalString(body.name) ?? defaultName,
+          departureShopId: departureShop.id,
+          arrivalShopId: arrivalShop.id,
+          status: 'DRAFT',
+          comment: this.optionalString(body.comment) ?? '',
+          useDepartureShopPrices: this.toBooleanValue(
+            body.use_departure_shop_prices ?? body.useDepartureShopPrices,
+          ),
+          createdById: userId,
+        },
+        include: this.transferInclude(),
+      });
+    });
+
+    return this.toTransferListItem(createdTransfer);
+  }
+
+  async getTransferProducts(
+    id: string,
+    query: TransferProductsQuery,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const transfer = await this.findTransferOrThrow(id, context);
+    const departureBranchCode = transfer.departureShop.branchCode;
+    const arrivalBranchCode = transfer.arrivalShop.branchCode;
+    const safeLimit = Math.max(1, Math.trunc(query.limit || 20));
+    const safePage = Math.max(1, Math.trunc(query.page || 1));
+    const transferProductIds = transfer.items.map((item: any) => item.productId);
+
+    const where: Prisma.ProductWhereInput = {
+      companyId: transfer.companyId,
+      ...(query.search
+        ? {
+            OR: [
+              { name: { contains: query.search, mode: 'insensitive' } },
+              { sku: { contains: query.search, mode: 'insensitive' } },
+              { barcode: { contains: query.search, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+      ...(query.productTypeId
+        ? {
+            productType: query.productTypeId,
+          }
+        : {}),
+      ...(query.status === 'active'
+        ? {
+            archivedAt: null,
+          }
+        : {}),
+      AND: [
+        {
+          OR: [
+            {
+              stocks: {
+                some: {
+                  branchCode: departureBranchCode,
+                  quantity: {
+                    gt: 0,
+                  },
+                },
+              },
+            },
+            ...(transferProductIds.length
+              ? [
+                  {
+                    id: {
+                      in: transferProductIds,
+                    },
+                  },
+                ]
+              : []),
+          ],
+        },
+      ],
+    };
+
+    const productInclude = {
+      category: true,
+      brand: true,
+      suppliers: {
+        include: {
+          supplier: true,
+        },
+      },
+      stocks: {
+        where: {
+          branchCode: {
+            in: [departureBranchCode, arrivalBranchCode],
+          },
+        },
+      },
+    } satisfies Prisma.ProductInclude;
+
+    const [count, products] = await this.prisma.$transaction([
+      this.prisma.product.count({ where }),
+      this.prisma.product.findMany({
+        where,
+        include: productInclude,
+        orderBy: {
+          name: 'asc',
+        },
+        skip: (safePage - 1) * safeLimit,
+        take: safeLimit,
+      }),
+    ]);
+
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      [departureBranchCode, arrivalBranchCode],
+      transfer.companyId,
+    );
+
+    return {
+      items: products.map((product) => {
+        const existingItem = transfer.items.find(
+          (item: any) => item.productId === product.id,
+        );
+        return this.toTransferProductCatalogItem(
+          product,
+          transfer,
+          existingItem,
+          shopLookup,
+        );
+      }),
+      count,
+      ...this.buildTransferTotals(transfer),
+      fields: TRANSFER_FIELDS,
+      stocktaking_id: '',
+    };
+  }
+
+  async getTransferItems(
+    id: string,
+    query: TransferItemsQuery,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const transfer = await this.findTransferOrThrow(id, context);
+    const safeLimit = Math.max(1, Math.trunc(query.limit || 20));
+    const safePage = Math.max(1, Math.trunc(query.page || 1));
+    const normalizedSearch = query.search?.trim().toLowerCase();
+    const filteredItems = transfer.items.filter((item: any) => {
+      if (!normalizedSearch) {
+        return true;
+      }
+
+      const product = item.product;
+      const categoryName = product.category?.name?.toLowerCase() ?? '';
+      return (
+        product.name.toLowerCase().includes(normalizedSearch) ||
+        (product.sku ?? '').toLowerCase().includes(normalizedSearch) ||
+        (product.barcode ?? '').toLowerCase().includes(normalizedSearch) ||
+        categoryName.includes(normalizedSearch)
+      );
+    });
+
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      [transfer.departureShop.branchCode, transfer.arrivalShop.branchCode],
+      transfer.companyId,
+    );
+    const pagedItems = filteredItems.slice(
+      (safePage - 1) * safeLimit,
+      (safePage - 1) * safeLimit + safeLimit,
+    );
+
+    return {
+      items: pagedItems.map((item: any) =>
+        this.toTransferItemResponse(item, transfer, shopLookup, true),
+      ),
+      count: filteredItems.length,
+      ...this.buildTransferTotals(transfer),
+      fields: TRANSFER_FIELDS,
+      stocktaking_id: '',
+    };
+  }
+
+  async upsertTransferItem(
+    id: string,
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const transfer = await this.findTransferOrThrow(id, context);
+
+    if (transfer.status !== 'DRAFT') {
+      throw new BadRequestException('Only draft transfers can be changed');
+    }
+
+    const productIdentifier =
+      this.optionalString(body.product_id) ??
+      this.optionalString(body.productId) ??
+      '';
+    const quantity =
+      this.toNumber(
+        body.transfer_measurement_value ?? body.quantity ?? body.measurement_value,
+      ) ?? 0;
+
+    if (!productIdentifier) {
+      throw new BadRequestException('product_id is required');
+    }
+
+    const product = await this.prisma.product.findFirst({
+      where: {
+        ...this.buildProductIdentifierWhere(productIdentifier),
+        companyId: transfer.companyId,
+      },
+      include: {
+        stocks: true,
+      },
+    });
+
+    if (!product) {
+      throw new NotFoundException('Product not found');
+    }
+
+    const departureStock = product.stocks.find(
+      (stock) => stock.branchCode === transfer.departureShop.branchCode,
+    );
+    const existingItem = transfer.items.find(
+      (item: any) => item.productId === product.id,
+    );
+    const availableQuantity = departureStock?.quantity ?? 0;
+
+    if (quantity > 0 && availableQuantity < quantity) {
+      throw new BadRequestException(
+        'Transfer quantity exceeds stock in departure shop',
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const db = tx as any;
+
+      if (quantity <= 0) {
+        if (existingItem) {
+          await db.transferItem.delete({
+            where: {
+              id: existingItem.id,
+            },
+          });
+        }
+        return;
+      }
+
+      if (existingItem) {
+        await db.transferItem.update({
+          where: {
+            id: existingItem.id,
+          },
+          data: {
+            quantity,
+          },
+        });
+        return;
+      }
+
+      await db.transferItem.create({
+        data: {
+          transferId: transfer.id,
+          productId: product.id,
+          quantity,
+        },
+      });
+    });
+
+    return this.getTransferItems(
+      id,
+      {
+        page: 1,
+        limit: 50,
+      },
+      authorization,
+    );
+  }
+
+  async sendTransfer(id: string, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
+    if (!context) {
+      throw new UnauthorizedException('Authentication is required');
+    }
+    const transfer = await this.findTransferOrThrow(id, context);
+
+    if (transfer.status !== 'DRAFT') {
+      throw new BadRequestException('Transfer is already sent');
+    }
+
+    if (!transfer.items.length) {
+      throw new BadRequestException('Transfer does not contain any items');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const db = tx as any;
+
+      for (const item of transfer.items) {
+        const departureStock = await tx.productStock.findFirst({
+          where: {
+            productId: item.productId,
+            branchCode: transfer.departureShop.branchCode,
+          },
+        });
+
+        const quantity = Number(item.quantity ?? 0);
+        const beforeQuantity = departureStock?.quantity ?? 0;
+
+        if (!departureStock || beforeQuantity < quantity) {
+          throw new BadRequestException(
+            `Not enough stock for product ${item.product.name}`,
+          );
+        }
+
+        const afterQuantity = beforeQuantity - quantity;
+
+        await tx.productStock.update({
+          where: {
+            id: departureStock.id,
+          },
+          data: {
+            quantity: afterQuantity,
+          },
+        });
+
+        await this.syncProductTotalQuantity(tx, item.productId);
+        await this.createStockMovementRecord(tx, {
+          companyId: transfer.companyId,
+          shopId: transfer.departureShopId,
+          productId: item.productId,
+          type: 'TRANSFER',
+          quantity,
+          beforeQuantity,
+          afterQuantity,
+          createdById: context.userId,
+          externalId: String(transfer.externalId ?? ''),
+          fromShopId: transfer.departureShopId,
+          toShopId: transfer.arrivalShopId,
+          supplyPrice:
+            departureStock.purchasePrice ?? item.product.purchasePrice ?? 0,
+          retailPrice:
+            departureStock.salePrice ?? item.product.salePrice ?? 0,
+          newRetailPrice:
+            departureStock.salePrice ?? item.product.salePrice ?? 0,
+          fromRetailPrice:
+            departureStock.salePrice ?? item.product.salePrice ?? 0,
+          fromSupplyPrice:
+            departureStock.purchasePrice ?? item.product.purchasePrice ?? 0,
+        });
+      }
+
+      await db.transfer.update({
+        where: {
+          id: transfer.id,
+        },
+        data: {
+          status: 'SENT',
+          sentAt: new Date(),
+        },
+      });
+    });
+
+    return this.getTransferById(id, authorization);
+  }
+
+  async acceptTransfer(id: string, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
+    if (!context) {
+      throw new UnauthorizedException('Authentication is required');
+    }
+    const transfer = await this.findTransferOrThrow(id, context);
+
+    if (transfer.status !== 'SENT') {
+      throw new BadRequestException('Only sent transfers can be accepted');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const db = tx as any;
+
+      for (const item of transfer.items) {
+        const quantity = Number(item.quantity ?? 0);
+        const arrivalStock = await tx.productStock.findFirst({
+          where: {
+            productId: item.productId,
+            branchCode: transfer.arrivalShop.branchCode,
+          },
+        });
+        const beforeQuantity = arrivalStock?.quantity ?? 0;
+        const afterQuantity = beforeQuantity + quantity;
+        const departureStock = item.product.stocks.find(
+          (stock: any) => stock.branchCode === transfer.departureShop.branchCode,
+        );
+        const supplyPrice =
+          arrivalStock?.purchasePrice ??
+          departureStock?.purchasePrice ??
+          item.product.purchasePrice ??
+          0;
+        const retailPrice =
+          arrivalStock?.salePrice ??
+          departureStock?.salePrice ??
+          item.product.salePrice ??
+          0;
+
+        if (arrivalStock) {
+          await tx.productStock.update({
+            where: {
+              id: arrivalStock.id,
+            },
+            data: {
+              quantity: afterQuantity,
+              purchasePrice: supplyPrice,
+              salePrice: retailPrice,
+            },
+          });
+        } else {
+          await tx.productStock.create({
+            data: {
+              productId: item.productId,
+              branchCode: transfer.arrivalShop.branchCode,
+              quantity,
+              purchasePrice: supplyPrice,
+              salePrice: retailPrice,
+            },
+          });
+        }
+
+        await db.transferItem.update({
+          where: {
+            id: item.id,
+          },
+          data: {
+            arrivedQuantity: quantity,
+          },
+        });
+
+        await this.syncProductTotalQuantity(tx, item.productId);
+        await this.createStockMovementRecord(tx, {
+          companyId: transfer.companyId,
+          shopId: transfer.arrivalShopId,
+          productId: item.productId,
+          type: 'TRANSFER',
+          quantity,
+          beforeQuantity,
+          afterQuantity,
+          createdById: context.userId,
+          externalId: String(transfer.externalId ?? ''),
+          fromShopId: transfer.departureShopId,
+          toShopId: transfer.arrivalShopId,
+          supplyPrice,
+          retailPrice,
+          newRetailPrice: retailPrice,
+          fromRetailPrice: retailPrice,
+          fromSupplyPrice: supplyPrice,
+        });
+      }
+
+      await db.transfer.update({
+        where: {
+          id: transfer.id,
+        },
+        data: {
+          status: 'ACCEPTED',
+          acceptedAt: new Date(),
+          acceptedById: context.userId,
+        },
+      });
+    });
+
+    return this.getTransferById(id, authorization);
+  }
+
+  private buildTransferScope(context: any) {
+    if (context?.userType === 'company') {
+      return {
+        companyId: context.companyId,
+        ...(context.allowedShopIds?.length
+          ? {
+              OR: [
+                {
+                  departureShopId: {
+                    in: context.allowedShopIds,
+                  },
+                },
+                {
+                  arrivalShopId: {
+                    in: context.allowedShopIds,
+                  },
+                },
+              ],
+            }
+          : {}),
+      };
+    }
+
+    return context?.companyId ? { companyId: context.companyId } : {};
+  }
+
+  private transferInclude() {
+    return {
+      departureShop: true,
+      arrivalShop: true,
+      createdBy: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+        },
+      },
+      acceptedBy: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+        },
+      },
+      items: {
+        include: {
+          product: {
+            include: {
+              category: true,
+              brand: true,
+              suppliers: {
+                include: {
+                  supplier: true,
+                },
+              },
+              stocks: true,
+            },
+          },
+        },
+      },
+    };
+  }
+
+  private async findTransferOrThrow(id: string, context: any) {
+    const transfer = await (this.prisma as any).transfer.findFirst({
+      where: {
+        id,
+        ...this.buildTransferScope(context),
+      },
+      include: this.transferInclude(),
+    });
+
+    if (!transfer) {
+      throw new NotFoundException('Transfer not found');
+    }
+
+    return transfer;
+  }
+
+  private buildTransferTotals(transfer: any) {
+    const totalMeasurementValue = transfer.items.reduce(
+      (sum: number, item: any) => sum + Number(item.quantity ?? 0),
+      0,
+    );
+    const totalTransferValue = transfer.items.reduce(
+      (sum: number, item: any) => sum + Number(item.arrivedQuantity ?? 0),
+      0,
+    );
+    const totalSupplyPrice = transfer.items.reduce((sum: number, item: any) => {
+      const departureStock = item.product.stocks.find(
+        (stock: any) => stock.branchCode === transfer.departureShop.branchCode,
+      );
+      const supplyPrice =
+        departureStock?.purchasePrice ?? item.product.purchasePrice ?? 0;
+      return sum + supplyPrice * Number(item.quantity ?? 0);
+    }, 0);
+    const totalRetailPrice = transfer.items.reduce((sum: number, item: any) => {
+      const departureStock = item.product.stocks.find(
+        (stock: any) => stock.branchCode === transfer.departureShop.branchCode,
+      );
+      const retailPrice = departureStock?.salePrice ?? item.product.salePrice ?? 0;
+      return sum + retailPrice * Number(item.quantity ?? 0);
+    }, 0);
+
+    return {
+      total_measurement_value: totalMeasurementValue,
+      total_transfer_value: totalTransferValue,
+      total_supply_price: totalSupplyPrice,
+      total_retail_price: totalRetailPrice,
+    };
+  }
+
+  private toTransferListItem(transfer: any) {
+    const totals = this.buildTransferTotals(transfer);
+
+    return {
+      id: transfer.id,
+      external_id: transfer.externalId ?? 0,
+      company_id: transfer.companyId ?? '',
+      name: transfer.name,
+      departure_shop_id: transfer.departureShopId,
+      departure_shop: {
+        id: transfer.departureShop?.id ?? '',
+        name: transfer.departureShop?.name ?? '',
+      },
+      arrival_shop_id: transfer.arrivalShopId,
+      arrival_shop: {
+        id: transfer.arrivalShop?.id ?? '',
+        name: transfer.arrivalShop?.name ?? '',
+      },
+      total_loaded_measurement_value: totals.total_measurement_value,
+      total_arrived_measurement_value: transfer.items.reduce(
+        (sum: number, item: any) => sum + Number(item.arrivedQuantity ?? 0),
+        0,
+      ),
+      total_retail_price: totals.total_retail_price,
+      total_supply_price: totals.total_supply_price,
+      status_id: this.resolveTransferStatusId(transfer.status),
+      status: String(transfer.status ?? 'DRAFT').toLowerCase(),
+      created_by: this.toLegacyTransferActor(transfer.createdBy),
+      accepted_by: this.toLegacyTransferActor(transfer.acceptedBy),
+      created_at: this.formatDateTime(transfer.createdAt),
+      accepted_at: transfer.acceptedAt
+        ? this.formatDateTime(transfer.acceptedAt)
+        : '',
+      transfer_items: null,
+      differs: 'false',
+      use_departure_shop_prices: Boolean(transfer.useDepartureShopPrices),
+      comment: transfer.comment ?? '',
+      is_last_event: false,
+      session_id: '',
+      stocktaking_id: '',
+    };
+  }
+
+  private toLegacyTransferActor(
+    actor:
+      | {
+          id: number;
+          firstName: string | null;
+          lastName: string | null;
+        }
+      | null
+      | undefined,
+  ) {
+    return {
+      id: actor ? String(actor.id) : '',
+      name: actor
+        ? `${actor.firstName ?? ''} ${actor.lastName ?? ''}`.trim()
+        : '',
+    };
+  }
+
+  private resolveTransferStatusId(status: string | null | undefined) {
+    switch (status) {
+      case 'SENT':
+        return TRANSFER_STATUS_IDS.SENT;
+      case 'ACCEPTED':
+        return TRANSFER_STATUS_IDS.ACCEPTED;
+      case 'CANCELLED':
+        return TRANSFER_STATUS_IDS.CANCELLED;
+      case 'DRAFT':
+      default:
+        return TRANSFER_STATUS_IDS.DRAFT;
+    }
+  }
+
+  private toTransferProductCatalogItem(
+    product: CatalogProductWithRelations,
+    transfer: any,
+    item: any,
+    shopLookup: Map<string, ResolvedShop>,
+  ) {
+    return {
+      id: item?.id ?? '',
+      transfer_id: item?.transferId ?? '',
+      product_id: this.getProductPublicId(product),
+      transfer_measurement_value: Number(item?.quantity ?? 0),
+      updated_at: item?.updatedAt ? this.formatDate(item.updatedAt) : '',
+      updated_at_int: item?.updatedAt ? Number(item.updatedAt.getTime()) : 0,
+      product: this.buildTransferProductPayload(
+        product,
+        transfer.departureShop.branchCode,
+        transfer.arrivalShop.branchCode,
+        shopLookup,
+      ),
+      arrived_measurement_value: Number(item?.arrivedQuantity ?? 0),
+      product_info: null,
+    };
+  }
+
+  private toTransferItemResponse(
+    item: any,
+    transfer: any,
+    shopLookup: Map<string, ResolvedShop>,
+    includeProductInfo: boolean,
+  ) {
+    return {
+      id: item.id,
+      transfer_id: item.transferId,
+      product_id: this.getProductPublicId(item.product),
+      transfer_measurement_value: Number(item.quantity ?? 0),
+      updated_at: this.formatDate(item.updatedAt),
+      updated_at_int: Number(item.updatedAt.getTime()),
+      product: this.buildTransferProductPayload(
+        item.product,
+        transfer.departureShop.branchCode,
+        transfer.arrivalShop.branchCode,
+        shopLookup,
+      ),
+      arrived_measurement_value: Number(item.arrivedQuantity ?? 0),
+      product_info: includeProductInfo
+        ? this.toProductDetailResponse(
+            item.product,
+            shopLookup,
+            {
+              sold: 0,
+              soldByBranchCode: new Map<string, number>(),
+            },
+            {
+              companyId: transfer.companyId,
+            },
+          )
+        : null,
+    };
+  }
+
+  private buildTransferProductPayload(
+    product: CatalogProductWithRelations,
+    departureBranchCode: string,
+    arrivalBranchCode: string,
+    shopLookup: Map<string, ResolvedShop>,
+  ) {
+    const departureShop = this.resolveShopByBranchCode(
+      departureBranchCode,
+      shopLookup,
+    );
+    const arrivalShop = this.resolveShopByBranchCode(
+      arrivalBranchCode,
+      shopLookup,
+    );
+    const departureStock = product.stocks.find(
+      (stock) => stock.branchCode === departureBranchCode,
+    );
+    const arrivalStock = product.stocks.find(
+      (stock) => stock.branchCode === arrivalBranchCode,
+    );
+    const departureMeasurement = departureStock?.quantity ?? 0;
+    const arrivalMeasurement = arrivalStock?.quantity ?? 0;
+    const departureSupplyPrice =
+      departureStock?.purchasePrice ?? product.purchasePrice ?? 0;
+    const departureRetailPrice =
+      departureStock?.salePrice ?? product.salePrice ?? 0;
+    const arrivalSupplyPrice =
+      arrivalStock?.purchasePrice ?? departureSupplyPrice;
+    const arrivalRetailPrice =
+      arrivalStock?.salePrice ?? product.salePrice ?? departureRetailPrice;
+
+    return {
+      id: this.getProductPublicId(product),
+      parent_id: '',
+      company_id: product.companyId ?? COMPANY_ID,
+      categories: product.category
+        ? [
+            {
+              id: String(product.category.id),
+              name: product.category.name,
+              parent_id: '',
+              all_parent_ids: null,
+              subRows: null,
+              product_count: 0,
+              company_id: '',
+              is_open: false,
+              level_number: 0,
+              from_parent: false,
+              super_parent_id: '',
+              deleted_at: 0,
+            },
+          ]
+        : [],
+      name: product.name,
+      sku: product.sku ?? '',
+      barcode: product.barcode ?? '',
+      category_name: product.category?.name ?? '',
+      departure_shop_measurement_value: {
+        small_left_measurement_value: 0,
+        has_trigger: false,
+        shop_id: departureShop.shop_id,
+        total_measurement_value: departureMeasurement,
+        total_min_supply_price: departureMeasurement ? departureSupplyPrice : null,
+        total_max_supply_price: departureMeasurement ? departureSupplyPrice : null,
+        total_supply_sum: departureMeasurement * departureSupplyPrice,
+        total_active_measurement_value: departureMeasurement,
+        total_active_min_supply_price: departureMeasurement
+          ? departureSupplyPrice
+          : null,
+        total_active_max_supply_price: departureMeasurement
+          ? departureSupplyPrice
+          : null,
+        total_active_supply_sum: departureMeasurement * departureSupplyPrice,
+        total_inactive_measurement_value: 0,
+        total_inactive_min_supply_price: null,
+        total_inactive_max_supply_price: null,
+        total_inactive_supply_sum: 0,
+        total_sold_measurement_value: 0,
+        total_imported_measurement_value: 0,
+        total_transfer_arrived_measurement_value: 0,
+        total_transfered_measurement_value: 0,
+        total_in_transfer_measurement_value: 0,
+        total_in_transfer_min_supply_price: null,
+        total_in_transfer_max_supply_price: null,
+        total_in_transfer_supply_sum: 0,
+        total_written_off_measurement_value: 0,
+        import_started_measurement_value: 0,
+        is_small_left: false,
+        total_retail_sum: departureMeasurement * departureRetailPrice,
+        total_active_retail_sum: departureMeasurement * departureRetailPrice,
+        total_inactive_retail_sum: 0,
+      },
+      arrival_shop_measurement_values: {
+        small_left_measurement_value: 0,
+        has_trigger: false,
+        shop_id: arrivalShop.shop_id,
+        total_measurement_value: arrivalMeasurement,
+        total_min_supply_price: arrivalMeasurement ? arrivalSupplyPrice : null,
+        total_max_supply_price: arrivalMeasurement ? arrivalSupplyPrice : null,
+        total_supply_sum: arrivalMeasurement * arrivalSupplyPrice,
+        total_active_measurement_value: arrivalMeasurement,
+        total_active_min_supply_price: arrivalMeasurement
+          ? arrivalSupplyPrice
+          : null,
+        total_active_max_supply_price: arrivalMeasurement
+          ? arrivalSupplyPrice
+          : null,
+        total_active_supply_sum: arrivalMeasurement * arrivalSupplyPrice,
+        total_inactive_measurement_value: 0,
+        total_inactive_min_supply_price: null,
+        total_inactive_max_supply_price: null,
+        total_inactive_supply_sum: 0,
+        total_sold_measurement_value: 0,
+        total_imported_measurement_value: 0,
+        total_transfer_arrived_measurement_value: 0,
+        total_transfered_measurement_value: 0,
+        total_in_transfer_measurement_value: 0,
+        total_in_transfer_min_supply_price: null,
+        total_in_transfer_max_supply_price: null,
+        total_in_transfer_supply_sum: 0,
+        total_written_off_measurement_value: 0,
+        import_started_measurement_value: 0,
+        is_small_left: false,
+        total_retail_sum: arrivalMeasurement * arrivalRetailPrice,
+        total_active_retail_sum: arrivalMeasurement * arrivalRetailPrice,
+        total_inactive_retail_sum: 0,
+      },
+      departure_shop_retail_price: departureRetailPrice,
+      arrival_shop_retail_price: arrivalRetailPrice,
+      measurement_values: {
+        total_measurement_value: product.stocks.reduce(
+          (sum, stock) => sum + stock.quantity,
+          0,
+        ),
+        total_active_measurement_value: product.stocks.reduce(
+          (sum, stock) => sum + stock.quantity,
+          0,
+        ),
+        total_inactive_measurement_value: 0,
+      },
+      supply_price: product.purchasePrice ?? 0,
+      departure_shop_supply_price: departureSupplyPrice,
+      measurement_unit: DEFAULT_MEASUREMENT_UNIT,
+      custom_fields: null,
+      base_name: product.name,
+      product_attributes: [],
+      additional_barcodes: [],
+    };
+  }
+
+  private async syncProductTotalQuantity(
+    tx: Prisma.TransactionClient,
+    productId: number,
+  ) {
+    const allStocks = await tx.productStock.findMany({
+      where: {
+        productId,
+      },
+      select: {
+        quantity: true,
+      },
+    });
+
+    await tx.product.update({
+      where: {
+        id: productId,
+      },
+      data: {
+        quantity: allStocks.reduce((sum, stock) => sum + stock.quantity, 0),
+      },
+    });
+  }
+
+  private formatDate(value: Date) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   }
 
   private toProductResponse(product: {

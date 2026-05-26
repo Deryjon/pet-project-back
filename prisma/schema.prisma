@@ -33,6 +33,13 @@ enum StockMovementType {
   TRANSFER
 }
 
+enum TransferStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  CANCELLED
+}
+
 enum SalaryCalculationType {
   FIXED_ONLY
   PROFIT_PERCENT_ONLY
@@ -101,6 +108,7 @@ model Company {
   clientTags         ClientTag[]
   clientNotes        ClientNote[]
   clientDebts        ClientDebt[]
+  transfers          Transfer[]
   clientDebtRepayments ClientDebtRepayment[]
   clientCards        ClientCard[]
   createdAt          DateTime            @default(now())
@@ -146,6 +154,8 @@ model Shop {
   clientDebts    ClientDebt[]
   stockMovements StockMovement[]
   supplyPriceHistory ProductSupplyPriceHistory[]
+  departureTransfers Transfer[]        @relation("TransferDepartureShop")
+  arrivalTransfers   Transfer[]        @relation("TransferArrivalShop")
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
@@ -188,6 +198,8 @@ model User {
   platformActionLogs PlatformActionLog[]
   clientNotes        ClientNote[]
   clientDebtRepayments ClientDebtRepayment[]
+  createdTransfers   Transfer[]          @relation("TransferCreatedBy")
+  acceptedTransfers  Transfer[]          @relation("TransferAcceptedBy")
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
@@ -350,6 +362,7 @@ model Product {
   orderItems       OrderItem[]
   stockMovements   StockMovement[]
   supplyPriceHistory ProductSupplyPriceHistory[]
+  transferItems    TransferItem[]
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -870,6 +883,51 @@ model ProductStock {
   product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+}
+
+model Transfer {
+  id                      String         @id @default(uuid())
+  externalId              Int?           @unique
+  companyId               String
+  name                    String
+  departureShopId         String
+  arrivalShopId           String
+  status                  TransferStatus @default(DRAFT)
+  createdById             Int
+  acceptedById            Int?
+  comment                 String         @default("")
+  useDepartureShopPrices  Boolean        @default(false)
+  sentAt                  DateTime?
+  acceptedAt              DateTime?
+  company                 Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  departureShop           Shop           @relation("TransferDepartureShop", fields: [departureShopId], references: [id], onDelete: Cascade)
+  arrivalShop             Shop           @relation("TransferArrivalShop", fields: [arrivalShopId], references: [id], onDelete: Cascade)
+  createdBy               User           @relation("TransferCreatedBy", fields: [createdById], references: [id])
+  acceptedBy              User?          @relation("TransferAcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull)
+  items                   TransferItem[]
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
+
+  @@index([companyId, createdAt])
+  @@index([departureShopId])
+  @@index([arrivalShopId])
+  @@index([status])
+}
+
+model TransferItem {
+  id              String    @id @default(uuid())
+  transferId      String
+  productId       Int
+  quantity        Decimal   @db.Decimal(12, 3)
+  arrivedQuantity Decimal   @default(0) @db.Decimal(12, 3)
+  transfer        Transfer  @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  product         Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([transferId, productId])
+  @@index([transferId])
+  @@index([productId])
 }
 
 model Sale {

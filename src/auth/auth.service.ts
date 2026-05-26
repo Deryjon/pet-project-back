@@ -25,7 +25,7 @@ export class AuthService {
     );
 
     if (!company) {
-      throw new UnauthorizedException('Company not found');
+      throw new UnauthorizedException('Компания не найдена');
     }
 
     return {
@@ -39,7 +39,7 @@ export class AuthService {
     );
 
     if (!user) {
-      throw new UnauthorizedException('User not found');
+      throw new UnauthorizedException('Пользователь не найден');
     }
 
     await this.usersService.assertUserCanAuthenticate(user);
@@ -48,7 +48,7 @@ export class AuthService {
       user.passwordHash,
     );
     if (!isPasswordValid) {
-      throw new UnauthorizedException('Invalid password');
+      throw new UnauthorizedException('Введен неправильный пароль');
     }
 
     const authProfile = await this.usersService.toAuthProfile(user);
@@ -76,7 +76,7 @@ export class AuthService {
     );
 
     if (!companyId) {
-      throw new UnauthorizedException('Company not found');
+      throw new UnauthorizedException('Компания не найдена');
     }
 
     const user = await this.usersService.findByPhoneNumberAndCompany(
@@ -85,7 +85,7 @@ export class AuthService {
     );
 
     if (!user) {
-      throw new UnauthorizedException('User not found');
+      throw new UnauthorizedException('Пользователь не найден');
     }
 
     await this.usersService.assertUserCanAuthenticate(user);
@@ -94,7 +94,7 @@ export class AuthService {
       user.passwordHash,
     );
     if (!isPasswordValid) {
-      throw new UnauthorizedException('Invalid password');
+      throw new UnauthorizedException('Неправильный пароль');
     }
 
     const preparedUser =
@@ -136,7 +136,7 @@ export class AuthService {
       profile.user_type !== 'platform' ||
       !['platform_admin', 'superadmin'].includes(platformRole)
     ) {
-      throw new ForbiddenException('Only platform admin can access platform');
+      throw new ForbiddenException('Такой пользователь не имеет прав доступа');
     }
 
     return profile;
@@ -144,7 +144,7 @@ export class AuthService {
 
   logout() {
     return {
-      message: 'Logged out',
+      message: 'Выход выполнен успешно',
     };
   }
 
@@ -163,11 +163,11 @@ export class AuthService {
       }>(token);
     } catch (error) {
       if (error instanceof TokenExpiredError) {
-        throw new UnauthorizedException('Token expired');
+        throw new UnauthorizedException('Ссессия истекла');
       }
 
       if (error instanceof JsonWebTokenError) {
-        throw new UnauthorizedException('Invalid token');
+        throw new UnauthorizedException('Неккоректный токен');
       }
 
       throw error;

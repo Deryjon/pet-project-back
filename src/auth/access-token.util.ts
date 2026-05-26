@@ -5,14 +5,14 @@ export function extractAccessToken(authorization?: string) {
   const value = authorization?.trim();
 
   if (!value) {
-    throw new UnauthorizedException('Missing bearer token');
+    throw new UnauthorizedException('Заголовок авторизации отсутствует');
   }
 
   const bearerMatch = value.match(/^Bearer\s+(.+)$/i);
   const token = (bearerMatch?.[1] ?? value).trim();
 
   if (!token || /^Bearer$/i.test(token)) {
-    throw new UnauthorizedException('Missing bearer token');
+    throw new UnauthorizedException('Заголовок авторизации некорректный');
   }
 
   return token;

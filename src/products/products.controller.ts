@@ -487,6 +487,108 @@ export class ProductsController {
     );
   }
 
+  @Get('v2/transfer')
+  listTransfers(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.listTransfers(
+      {
+        page: Number(page) || 1,
+        limit: Number(limit) || 10,
+      },
+      authorization,
+    );
+  }
+
+  @Get('v2/transfer/:id')
+  getTransferById(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.getTransferById(id, authorization);
+  }
+
+  @Post('v2/transfer')
+  createTransfer(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.createTransfer(body, authorization);
+  }
+
+  @Get('v2/transfer-products/:id')
+  getTransferProducts(
+    @Param('id') id: string,
+    @Query('search') search?: string,
+    @Query('limit') limit?: string,
+    @Query('page') page?: string,
+    @Query('status') status?: string,
+    @Query('statistics') statistics?: string,
+    @Query('product_type_id') productTypeId?: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.getTransferProducts(
+      id,
+      {
+        search: search?.trim(),
+        limit: Number(limit) || 20,
+        page: Number(page) || 1,
+        status: status?.trim(),
+        statistics: this.toBoolean(statistics),
+        productTypeId: productTypeId?.trim(),
+      },
+      authorization,
+    );
+  }
+
+  @Get('v2/transfer-items/:id')
+  getTransferItems(
+    @Param('id') id: string,
+    @Query('search') search?: string,
+    @Query('limit') limit?: string,
+    @Query('page') page?: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.getTransferItems(
+      id,
+      {
+        search: search?.trim(),
+        limit: Number(limit) || 20,
+        page: Number(page) || 1,
+      },
+      authorization,
+    );
+  }
+
+  @Post('v2/transfer/:id/items')
+  upsertTransferItem(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.upsertTransferItem(id, body, authorization);
+  }
+
+  @Post('v2/transfer/:id/send')
+  @HttpCode(200)
+  sendTransfer(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.sendTransfer(id, authorization);
+  }
+
+  @Post('v2/transfer/:id/accept')
+  @HttpCode(200)
+  acceptTransfer(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.acceptTransfer(id, authorization);
+  }
+
   private toStringArray(value: unknown) {
     if (Array.isArray(value)) {
       return value.filter((item): item is string => typeof item === 'string');
