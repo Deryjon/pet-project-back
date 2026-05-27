@@ -100,6 +100,24 @@ const GENERAL_SALES_REPORT_ROUTES = versioned(['general-sales-report']);
 const GENERAL_PRODUCT_REPORT_ROUTES = versioned(['general-product-report']);
 const GENERAL_SELLER_REPORT_ROUTES = versioned(['general-seller-report']);
 const GENERAL_CUSTOMER_REPORT_ROUTES = versioned(['general-customer-report']);
+const PRODUCT_SALES_REPORT_API_ROUTES = versioned(['product-sales-report']);
+const PRODUCT_GENERAL_REPORT_API_ROUTES = versioned(['product-general-report']);
+const PRODUCT_GENERAL_TABLE_API_ROUTES = versioned(['product-general-table']);
+const PRODUCT_PERFORMANCE_REPORT_API_ROUTES = versioned([
+  'product-performance-report',
+]);
+const REPORT_PRODUCT_PERFORMANCE_TABLE_API_ROUTES = versioned([
+  'report-product-performance-table',
+]);
+const REPORT_PRODUCT_PERFORMANCE_TOTALS_API_ROUTES = versioned([
+  'report-product-performance-totals',
+]);
+const IMPORT_REPORT_TABLE_API_ROUTES = versioned(['import-report-table']);
+const IMPORT_REPORT_TOTALS_API_ROUTES = versioned(['import-report-totals']);
+const PRODUCT_SELLS_BY_SUPPLIERS_TABLE_API_ROUTES = versioned([
+  'product-sells-by-suppliers-table',
+]);
+const STOCK_REPORT_TABLE_API_ROUTES = versioned(['stock-report-table']);
 
 @Controller()
 export class ReportsController {
@@ -194,12 +212,72 @@ export class ReportsController {
     return this.reportsService.getProductSales(query, authorization);
   }
 
+  @Get(PRODUCT_SALES_REPORT_API_ROUTES)
+  getProductSalesReportApi(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.reportsService.getProductSalesReportApi(query, authorization);
+  }
+
   @Get(PRODUCT_EFFECTIVENESS_REPORT_ROUTES)
   getProductEffectiveness(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
   ) {
     return this.reportsService.getProductEffectiveness(query, authorization);
+  }
+
+  @Get(PRODUCT_GENERAL_REPORT_API_ROUTES)
+  getProductGeneralReportApi(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.reportsService.getProductGeneralReportApi(
+      query,
+      authorization,
+    );
+  }
+
+  @Get(PRODUCT_GENERAL_TABLE_API_ROUTES)
+  getProductGeneralTableApi(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.reportsService.getProductGeneralTableApi(query, authorization);
+  }
+
+  @Get(PRODUCT_PERFORMANCE_REPORT_API_ROUTES)
+  getProductPerformanceReportApi(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.reportsService.getProductPerformanceReportApi(
+      query,
+      authorization,
+    );
+  }
+
+  @Get(REPORT_PRODUCT_PERFORMANCE_TABLE_API_ROUTES)
+  getReportProductPerformanceTableApi(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.reportsService.getReportProductPerformanceTableApi(
+      query,
+      authorization,
+    );
+  }
+
+  @Get(REPORT_PRODUCT_PERFORMANCE_TOTALS_API_ROUTES)
+  getReportProductPerformanceTotalsApi(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.reportsService.getReportProductPerformanceTotalsApi(
+      query,
+      authorization,
+    );
   }
 
   @Get(PRODUCT_IMPORT_REPORT_ROUTES)
@@ -210,6 +288,22 @@ export class ReportsController {
     return this.reportsService.getProductImports(query, authorization);
   }
 
+  @Get(IMPORT_REPORT_TABLE_API_ROUTES)
+  getImportReportTableApi(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.reportsService.getImportReportTableApi(query, authorization);
+  }
+
+  @Get(IMPORT_REPORT_TOTALS_API_ROUTES)
+  getImportReportTotalsApi(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.reportsService.getImportReportTotalsApi(query, authorization);
+  }
+
   @Get(PRODUCT_SUPPLIER_REPORT_ROUTES)
   getProductSuppliers(
     @Query() query: Record<string, string | undefined>,
@@ -218,12 +312,31 @@ export class ReportsController {
     return this.reportsService.getProductSuppliers(query, authorization);
   }
 
+  @Get(PRODUCT_SELLS_BY_SUPPLIERS_TABLE_API_ROUTES)
+  getProductSellsBySuppliersTableApi(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.reportsService.getProductSellsBySuppliersTableApi(
+      query,
+      authorization,
+    );
+  }
+
   @Get(PRODUCT_STOCK_REPORT_ROUTES)
   getProductStocks(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
   ) {
     return this.reportsService.getProductStocks(query, authorization);
+  }
+
+  @Get(STOCK_REPORT_TABLE_API_ROUTES)
+  getStockReportTableApi(
+    @Query() query: Record<string, string | undefined>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.reportsService.getStockReportTableApi(query, authorization);
   }
 
   @Get(INVENTORY_RESULT_REPORT_ROUTES)

@@ -298,37 +298,127 @@ export class ReportsService {
       'shopId',
       'shop_id',
     ]);
-    const customers = new Map<string, { count: number; amount: number }>();
+    const field = this.optionalString(query.field) ?? 'new';
+    const customerSales = sales.filter(
+      (sale) =>
+        sale.saleType !== 'return' &&
+        this.buildCustomerReportKey(sale) &&
+        (sale.clientId || sale.clientName),
+    );
+    const firstPurchaseByCustomer = await this.loadCustomerFirstPurchaseDates(
+      customerSales,
+      context,
+    );
+    const customerAggregates = new Map<
+      string,
+      {
+        customer_id: string;
+        name: string;
+        count: number;
+        amount: number;
+        first_selected_purchase_at: Date;
+      }
+    >();
+    const shopCustomerBuckets = new Map<
+      string,
+      { new: Set<string>; returned: Set<string> }
+    >();
+    const plotBuckets = new Map<
+      string,
+      { new: Set<string>; returned: Set<string> }
+    >();
 
-    for (const sale of sales) {
-      const key = (sale.clientName ?? '').trim();
-      if (!key || sale.saleType === 'return') {
+    for (const sale of customerSales) {
+      const customerKey = this.buildCustomerReportKey(sale);
+      const customerName = this.resolveCustomerReportName(sale);
+
+      if (!customerKey || !customerName) {
         continue;
       }
-      const existing = customers.get(key) ?? { count: 0, amount: 0 };
+
+      const existing = customerAggregates.get(customerKey) ?? {
+        customer_id: sale.clientId ?? '',
+        name: customerName,
+        count: 0,
+        amount: 0,
+        first_selected_purchase_at: sale.paidAt ?? sale.createdAt,
+      };
+      const purchaseDate = sale.paidAt ?? sale.createdAt;
       existing.count += 1;
       existing.amount += this.getSaleNetAmount(sale);
-      customers.set(key, existing);
+      if (purchaseDate.getTime() < existing.first_selected_purchase_at.getTime()) {
+        existing.first_selected_purchase_at = purchaseDate;
+      }
+      customerAggregates.set(customerKey, existing);
     }
 
-    const topClientEntry = [...customers.entries()].sort(
-      (a, b) => b[1].count - a[1].count,
+    const customerTypes = new Map<string, 'new' | 'returned'>();
+
+    for (const [customerKey, aggregate] of customerAggregates.entries()) {
+      const firstPurchaseDate = firstPurchaseByCustomer.get(customerKey);
+      const customerType =
+        firstPurchaseDate &&
+        firstPurchaseDate.getTime() <
+          aggregate.first_selected_purchase_at.getTime()
+          ? 'returned'
+          : 'new';
+      customerTypes.set(customerKey, customerType);
+    }
+
+    for (const sale of customerSales) {
+      const customerKey = this.buildCustomerReportKey(sale);
+      if (!customerKey) {
+        continue;
+      }
+
+      const purchaseDate = sale.paidAt ?? sale.createdAt;
+      const customerType = customerTypes.get(customerKey) ?? 'new';
+      const branchCode = sale.branchCode ?? '';
+      const shopBucket =
+        shopCustomerBuckets.get(branchCode) ??
+        { new: new Set<string>(), returned: new Set<string>() };
+      shopBucket[customerType].add(customerKey);
+      shopCustomerBuckets.set(branchCode, shopBucket);
+
+      const plotKey = `${this.toPlotDate(purchaseDate)}__${branchCode}`;
+      const plotBucket =
+        plotBuckets.get(plotKey) ??
+        { new: new Set<string>(), returned: new Set<string>() };
+      plotBucket[customerType].add(customerKey);
+      plotBuckets.set(plotKey, plotBucket);
+    }
+
+    const topClientEntry = [...customerAggregates.values()].sort(
+      (a, b) => b.count - a.count,
     )[0];
-    const topTransactionEntry = [...customers.entries()].sort(
-      (a, b) => b[1].amount - a[1].amount,
+    const topTransactionEntry = [...customerAggregates.values()].sort(
+      (a, b) => b.amount - a.amount,
     )[0];
+    const uniqueNewCustomers = new Set<string>();
+    const uniqueReturnedCustomers = new Set<string>();
+
+    for (const bucket of shopCustomerBuckets.values()) {
+      for (const customerKey of bucket.new) {
+        uniqueNewCustomers.add(customerKey);
+      }
+      for (const customerKey of bucket.returned) {
+        uniqueReturnedCustomers.add(customerKey);
+      }
+    }
 
     return {
       shop_plot: this.buildGeneralShopPlot(
-        sales,
+        customerSales,
         plotShops,
-        () => 0,
+        (_bucket, day, shop) =>
+          plotBuckets.get(`${day}__${shop.branchCode}`)?.[field === 'returned' ? 'returned' : 'new']
+            ?.size ?? 0,
       ),
       top_client: topClientEntry
         ? {
-            customer_id: '',
-            name: topClientEntry[0],
-            purchase_amount: topClientEntry[1].count,
+            customer_id: topClientEntry.customer_id,
+            name: topClientEntry.name,
+            purchase_amount: topClientEntry.count,
           }
         : {
             customer_id: '',
@@ -337,9 +427,9 @@ export class ReportsService {
           },
       top_transaction: topTransactionEntry
         ? {
-            customer_id: '',
-            name: topTransactionEntry[0],
-            total_price: topTransactionEntry[1].amount,
+            customer_id: topTransactionEntry.customer_id,
+            name: topTransactionEntry.name,
+            total_price: topTransactionEntry.amount,
           }
         : {
             customer_id: '',
@@ -347,14 +437,19 @@ export class ReportsService {
             total_price: 0,
           },
       record_date: '',
-      shop_stats: shops.map((shop) => ({
-        shop_id: shop.id,
-        shop_name: shop.name,
-        new: 0,
-        returned: 0,
-      })),
-      new_count: 0,
-      returned_count: 0,
+      shop_stats: shops.map((shop) => {
+        const bucket =
+          shopCustomerBuckets.get(shop.branchCode) ??
+          { new: new Set<string>(), returned: new Set<string>() };
+        return {
+          shop_id: shop.id,
+          shop_name: shop.name,
+          new: bucket.new.size,
+          returned: bucket.returned.size,
+        };
+      }),
+      new_count: uniqueNewCustomers.size,
+      returned_count: uniqueReturnedCustomers.size,
     };
   }
 
@@ -498,6 +593,156 @@ export class ReportsService {
     };
   }
 
+  async getProductSalesReportApi(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const sales = await this.loadReportSales(query, context);
+    const rows = this.flattenSaleItems(sales);
+    const field = this.optionalString(query.field) ?? 'net_sales';
+    const groupBy = this.optionalString(query.group_by) ?? 'name';
+    const totals = new Map<string, number>();
+
+    for (const row of rows) {
+      const groupValue = this.resolveProductReportGroupValue(row, groupBy);
+      totals.set(
+        groupValue,
+        (totals.get(groupValue) ?? 0) +
+          this.resolveProductReportMetricValue(row, field),
+      );
+    }
+
+    const sorted = [...totals.entries()].sort((a, b) => b[1] - a[1]);
+    const topEntries = sorted.slice(0, 10);
+    const topNames = new Set(topEntries.map(([name]) => name));
+    const daily = new Map<string, Record<string, number>>();
+
+    for (const row of rows) {
+      const day = this.toPlotDate(row.date);
+      const bucket = daily.get(day) ?? {};
+      const groupValue = this.resolveProductReportGroupValue(row, groupBy);
+      const resolvedKey = topNames.has(groupValue) ? groupValue : 'others';
+      bucket[resolvedKey] = (bucket[resolvedKey] ?? 0) +
+        this.resolveProductReportMetricValue(row, field);
+      daily.set(day, bucket);
+    }
+
+    const productPlot = daily.size
+      ? [...daily.entries()]
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .map(([day, bucket]) => ({
+            ...bucket,
+            start_date: day,
+          }))
+      : [{ start_date: this.toPlotDate(this.parseDate(undefined) ?? new Date()) }];
+
+    return {
+      product_plot: productPlot,
+      value: rows.reduce(
+        (sum, row) => sum + this.resolveProductReportMetricValue(row, field),
+        0,
+      ),
+      product_values: topEntries.map(([name, value]) => ({ name, value })),
+      other_products_count: Math.max(0, sorted.length - topEntries.length),
+      other_products_value: sorted
+        .slice(10)
+        .reduce((sum, [, value]) => sum + value, 0),
+    };
+  }
+
+  async getProductGeneralReportApi(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const sales = await this.loadReportSales(query, context);
+    const rows = this.flattenSaleItems(sales);
+    const stockRows = await this.buildStockReportRows(query, context);
+
+    return {
+      product_sold: rows.reduce((sum, row) => sum + row.sold_measurement_value, 0),
+      product_returned: rows.reduce(
+        (sum, row) => sum + row.returned_measurement_value,
+        0,
+      ),
+      net_gross_sales: rows.reduce((sum, row) => sum + row.net_sales, 0),
+      net_gross_profit: rows.reduce((sum, row) => sum + row.net_profit, 0),
+      products_left: stockRows.reduce((sum, row) => sum + row.measurement_value, 0),
+      products_left_supply_price: stockRows.reduce(
+        (sum, row) => sum + row.measurement_value * row.supply_price,
+        0,
+      ),
+      products_left_retail_price: stockRows.reduce(
+        (sum, row) => sum + row.measurement_value * row.retail_price,
+        0,
+      ),
+      product_stats: null,
+      shop_stats: null,
+      count: 0,
+    };
+  }
+
+  async getProductGeneralTableApi(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const sales = await this.loadReportSales(query, context);
+    const shops = await this.loadReportShops(context, query);
+    const shopByBranchCode = new Map<string, any>(
+      shops.map((shop) => [shop.branchCode, shop] as const),
+    );
+    const rows = this.flattenSaleItems(sales).map((row) =>
+      this.toProductGeneralTableRow(row, shopByBranchCode.get(row.branchCode)),
+    );
+    const paginated = this.paginate(rows, query);
+
+    return {
+      products_stats_by_date: paginated.items,
+      products_stats_total: this.buildProductGeneralTotals(rows),
+      count: rows.length,
+    };
+  }
+
+  async getProductPerformanceReportApi(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const sales = await this.loadReportSales(query, context);
+    const items = this.aggregateProductsDetailed(sales);
+    const sorted = [...items].sort((a, b) => b.net_gross_sales - a.net_gross_sales);
+    const topItems = sorted.slice(0, 10);
+    const otherItems = sorted.slice(10);
+
+    return {
+      products: topItems.map((item) => ({
+        product_field: item.product_name,
+        main_image_url: '',
+        net_sales: item.net_gross_sales,
+        net_profit: item.gross_profit,
+        total_sold_measurement_value: item.sold_quantity,
+        total_returned_measurement_value: item.returned_quantity,
+      })),
+      other_products_count: otherItems.length,
+      other_products_performance: {
+        product_field: '',
+        main_image_url: '',
+        net_sales: otherItems.reduce((sum, item) => sum + item.net_gross_sales, 0),
+        net_profit: otherItems.reduce((sum, item) => sum + item.gross_profit, 0),
+        total_sold_measurement_value: otherItems.reduce(
+          (sum, item) => sum + item.sold_quantity,
+          0,
+        ),
+        total_returned_measurement_value: otherItems.reduce(
+          (sum, item) => sum + item.returned_quantity,
+          0,
+        ),
+      },
+    };
+  }
+
   async getProductEffectiveness(
     query: Record<string, string | undefined>,
     authorization?: string,
@@ -523,6 +768,59 @@ export class ReportsService {
       },
       count: rows.length,
       ...paginated,
+    };
+  }
+
+  async getReportProductPerformanceTableApi(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const rows = await this.buildProductPerformanceRowsApi(query, context);
+    const paginated = this.paginate(rows, query);
+
+    return {
+      table_data: paginated.items,
+      count: rows.length,
+      grouping_fields: '',
+      group_without_shop: this.toBoolean(query.group_without_shop, false),
+      group_with_supplier: this.toBoolean(query.group_with_supplier, false),
+    };
+  }
+
+  async getReportProductPerformanceTotalsApi(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const rows = await this.buildProductPerformanceRowsApi(query, context);
+
+    return {
+      table_data: {
+        stock_amount_begin: rows.reduce((sum, row) => sum + row.stock_amount_begin, 0),
+        stock_supply_sum_begin: rows.reduce(
+          (sum, row) => sum + row.stock_supply_sum_begin,
+          0,
+        ),
+        stock_retail_sum_begin: rows.reduce(
+          (sum, row) => sum + row.stock_retail_sum_begin,
+          0,
+        ),
+        stock_amount_end: rows.reduce((sum, row) => sum + row.stock_amount_end, 0),
+        stock_supply_sum_end: rows.reduce(
+          (sum, row) => sum + row.stock_supply_sum_end,
+          0,
+        ),
+        stock_retail_sum_end: rows.reduce(
+          (sum, row) => sum + row.stock_retail_sum_end,
+          0,
+        ),
+        import_amount: rows.reduce((sum, row) => sum + row.import_amount, 0),
+        sold_amount: rows.reduce((sum, row) => sum + row.sold_amount, 0),
+        returned_amount: rows.reduce((sum, row) => sum + row.returned_amount, 0),
+        write_off_amount: rows.reduce((sum, row) => sum + row.write_off_amount, 0),
+      },
+      count: rows.length,
     };
   }
 
@@ -588,6 +886,114 @@ export class ReportsService {
     };
   }
 
+  async getImportReportTableApi(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const rows = await this.buildImportReportRows(query, context);
+    const paginated = this.paginate(rows, query);
+
+    return {
+      rows: paginated.items,
+      count: rows.length,
+    };
+  }
+
+  async getImportReportTotalsApi(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const rows = await this.buildImportReportRows(query, context);
+
+    return {
+      imported: rows.reduce((sum, row) => sum + row.imported_qty, 0),
+      imported_retail_sum: rows.reduce(
+        (sum, row) => sum + row.imported_retail_sum,
+        0,
+      ),
+      imported_supply_sum: rows.reduce(
+        (sum, row) => sum + row.imported_supply_sum,
+        0,
+      ),
+      sold: rows.reduce((sum, row) => sum + row.sold_qty, 0),
+      sold_retail_sum: rows.reduce((sum, row) => sum + row.sold_retail_sum, 0),
+      sold_supply_sum: rows.reduce((sum, row) => sum + row.sold_supply_sum, 0),
+      sold_sale_sum: rows.reduce((sum, row) => sum + row.sold_sale_sum, 0),
+      written_off: rows.reduce((sum, row) => sum + row.written_off_qty, 0),
+      written_off_retail_sum: rows.reduce(
+        (sum, row) => sum + row.written_off_retail_sum,
+        0,
+      ),
+      written_off_supply_sum: rows.reduce(
+        (sum, row) => sum + row.written_off_supply_sum,
+        0,
+      ),
+      transfer_finished: rows.reduce(
+        (sum, row) => sum + row.transfer_finished_qty,
+        0,
+      ),
+      transfer_finished_retail_sum: rows.reduce(
+        (sum, row) => sum + row.transfer_finished_retail_sum,
+        0,
+      ),
+      transfer_finished_supply_sum: rows.reduce(
+        (sum, row) => sum + row.transfer_finished_supply_sum,
+        0,
+      ),
+      transfer_arrived: rows.reduce(
+        (sum, row) => sum + row.transfer_arrived_qty,
+        0,
+      ),
+      transfer_arrived_retail_sum: rows.reduce(
+        (sum, row) => sum + row.transfer_arrived_retail_price,
+        0,
+      ),
+      transfer_arrived_supply_sum: rows.reduce(
+        (sum, row) => sum + row.transfer_arrived_supply_sum,
+        0,
+      ),
+      repricing: rows.reduce((sum, row) => sum + row.repricing_qty, 0),
+      repricing_retail_sum: rows.reduce(
+        (sum, row) => sum + row.repricing_retail_sum,
+        0,
+      ),
+      repricing_supply_sum: rows.reduce(
+        (sum, row) => sum + row.repricing_supply_sum,
+        0,
+      ),
+      returned: rows.reduce((sum, row) => sum + row.returned, 0),
+      returned_retail_sum: rows.reduce(
+        (sum, row) => sum + row.returned_retail_sum,
+        0,
+      ),
+      returned_supply_sum: rows.reduce(
+        (sum, row) => sum + row.returned_supply_sum,
+        0,
+      ),
+      returned_sale_sum: rows.reduce(
+        (sum, row) => sum + row.returned_sale_sum,
+        0,
+      ),
+      returned_supplier_order: rows.reduce(
+        (sum, row) => sum + row.return_supplier_order_qty,
+        0,
+      ),
+      returned_supplier_order_retail_sum: rows.reduce(
+        (sum, row) => sum + row.return_supplier_order_retail_sum,
+        0,
+      ),
+      returned_supplier_order_supply_sum: rows.reduce(
+        (sum, row) => sum + row.return_supplier_order_supply_sum,
+        0,
+      ),
+      left: rows.reduce((sum, row) => sum + row.left_qty, 0),
+      left_retail_sum: rows.reduce((sum, row) => sum + row.left_retail_sum, 0),
+      left_supply_sum: rows.reduce((sum, row) => sum + row.left_supply_sum, 0),
+    };
+  }
+
   async getProductSuppliers(
     query: Record<string, string | undefined>,
     authorization?: string,
@@ -600,6 +1006,23 @@ export class ReportsService {
     return {
       count: rows.length,
       ...paginated,
+    };
+  }
+
+  async getProductSellsBySuppliersTableApi(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const sales = await this.loadReportSales(query, context);
+    const rows = this.buildSupplierSalesRows(sales, query);
+    const paginated = this.paginate(rows, query);
+
+    return {
+      products_stats_by_date: paginated.items,
+      products_stats_total: this.buildProductGeneralTotals(rows),
+      count: rows.length,
+      Err: null,
     };
   }
 
@@ -622,6 +1045,20 @@ export class ReportsService {
       },
       count: rows.length,
       ...paginated,
+    };
+  }
+
+  async getStockReportTableApi(
+    query: Record<string, string | undefined>,
+    authorization?: string,
+  ) {
+    const context = await this.getContext(authorization);
+    const rows = await this.buildStockReportRows(query, context);
+    const paginated = this.paginate(rows, query);
+
+    return {
+      rows: paginated.items,
+      count: rows.length,
     };
   }
 
@@ -1523,6 +1960,610 @@ export class ReportsService {
     }));
   }
 
+  private flattenSaleItems(sales: any[]) {
+    return sales.flatMap((sale: any) =>
+      sale.items.map((item: any) => {
+        const sign = this.getSaleSign(sale);
+        const product = item.product ?? null;
+        const date = sale.paidAt ?? sale.createdAt;
+        const metadata = this.parseProductMetadata(product?.metadata);
+        return {
+          sale,
+          item,
+          product,
+          branchCode: sale.branchCode ?? '',
+          date,
+          sold_measurement_value: sign > 0 ? Number(item.quantity ?? 0) : 0,
+          returned_measurement_value: sign < 0 ? Number(item.quantity ?? 0) : 0,
+          net_sold_measurement_value: Number(item.quantity ?? 0) * sign,
+          gross_sales: this.getItemRetailPrice(item) * sign,
+          returned_sales_sum: sign < 0 ? this.getItemFinalPrice(item) : 0,
+          net_sales: this.getItemFinalPrice(item) * sign,
+          net_profit: this.getItemProfit(item) * sign,
+          sold_supply_sum: this.getItemSupplyPrice(item) * sign,
+          average_margin:
+            this.getItemSupplyPrice(item) > 0
+              ? this.getItemFinalPrice(item) / this.getItemSupplyPrice(item)
+              : 0,
+          discount:
+            this.getItemRetailPrice(item) > 0
+              ? (this.getItemDiscount(item) / this.getItemRetailPrice(item)) * 100
+              : 0,
+          sold_with_discount: this.getItemFinalPrice(item) * sign,
+          sold_without_discount: this.getItemDiscount(item) > 0 ? 0 : this.getItemFinalPrice(item) * sign,
+          color: metadata.color ?? '',
+          size: metadata.size ?? '',
+          characteristics: metadata.characteristics ?? [],
+        };
+      }),
+    );
+  }
+
+  private resolveProductReportMetricValue(row: any, field: string) {
+    switch (field) {
+      case 'gross_sales':
+        return Number(row.gross_sales ?? 0);
+      case 'net_profit':
+      case 'gross_profit':
+        return Number(row.net_profit ?? 0);
+      case 'sold_qty':
+        return Number(row.sold_measurement_value ?? 0);
+      case 'sold_with_discount':
+        return Number(row.sold_with_discount ?? 0);
+      case 'net_sales':
+      default:
+        return Number(row.net_sales ?? 0);
+    }
+  }
+
+  private resolveProductReportGroupValue(row: any, groupBy: string) {
+    switch (groupBy) {
+      case 'category':
+        return this.optionalString(row.product?.category?.name) ?? row.item.name;
+      case 'brand':
+        return this.optionalString(row.product?.brand?.name) ?? row.item.name;
+      case 'color':
+        return this.optionalString(row.color) ?? row.item.name;
+      case 'size':
+        return this.optionalString(row.size) ?? row.item.name;
+      case 'name':
+      default:
+        return row.item.name;
+    }
+  }
+
+  private toProductGeneralTableRow(row: any, shop?: any) {
+    const product = row.product ?? {};
+    const categories = product?.category ? [product.category] : [];
+    const categoryPath = product?.category?.name ? [product.category.name] : [];
+    return {
+      date: this.toPlotDate(row.date),
+      product_id: product.publicId ?? product.id ?? '',
+      order_number: row.sale?.number ?? '',
+      shop_id: shop?.id ?? '',
+      shop_name: shop?.name ?? row.branchCode ?? '',
+      product_name: row.item.name,
+      product_base_name: '',
+      product_sku: row.item.sku ?? product.sku ?? '',
+      product_barcode: row.item.barcode ?? product.barcode ?? '',
+      product_brand_id: JSON.stringify(product?.brand?.id ?? ''),
+      product_brand_name: product?.brand?.name ?? '',
+      free_price: false,
+      used_wholesale_price: false,
+      supplier_id:
+        product?.suppliers?.[0]?.supplier?.id ??
+        '00000000-0000-0000-0000-000000000000',
+      supplier_external_id: 0,
+      product_categories: categories,
+      categories_path: categoryPath,
+      level_1: categoryPath,
+      level_2: [],
+      level_3: [],
+      level_4: [],
+      level_5: [],
+      product_measurement_unit_id: '12a69bc0-c575-4586-9f0f-76e8295d4139',
+      product_measurement_unit_name: 'Штука',
+      product_measurement_unit_short_name: 'шт',
+      product_attributes: [],
+      product_is_archived: Boolean(product?.archivedAt),
+      product_suppliers: '',
+      customer_full_name: row.sale?.clientName ?? '',
+      customer_phone_number: '',
+      seller_full_name: this.buildUserName(row.item?.seller ?? row.sale?.user),
+      cashier_full_name: this.buildUserName(row.sale?.user),
+      transaction_type: row.sale?.saleType ?? '',
+      order_id: String(row.sale?.id ?? ''),
+      movement_id: '',
+      sold_measurement_value: row.sold_measurement_value,
+      returned_measurement_value: row.returned_measurement_value,
+      net_sold_measurement_value: row.net_sold_measurement_value,
+      gross_sales: row.gross_sales,
+      returned_sales_sum: row.returned_sales_sum,
+      net_sales: row.net_sales,
+      net_profit: row.net_profit,
+      sold_supply_sum: row.sold_supply_sum,
+      average_margin: row.average_margin,
+      discount: row.discount,
+      sold_with_discount: row.sold_with_discount,
+      sold_without_discount: row.sold_without_discount,
+      left_start_date: 0,
+      left_start_date_supply_price: 0,
+      left_start_date_retail_price: 0,
+      left_end_date: 0,
+      left_end_date_supply_price: 0,
+      left_end_date_retail_price: 0,
+      custom_fields: [],
+    };
+  }
+
+  private buildProductGeneralTotals(rows: any[]) {
+    return {
+      sold_measurement_value: rows.reduce(
+        (sum, row) => sum + Number(row.sold_measurement_value ?? 0),
+        0,
+      ),
+      returned_measurement_value: rows.reduce(
+        (sum, row) => sum + Number(row.returned_measurement_value ?? 0),
+        0,
+      ),
+      net_sold_measurement_value: rows.reduce(
+        (sum, row) => sum + Number(row.net_sold_measurement_value ?? 0),
+        0,
+      ),
+      gross_sales: rows.reduce((sum, row) => sum + Number(row.gross_sales ?? 0), 0),
+      returned_sales_sum: rows.reduce(
+        (sum, row) => sum + Number(row.returned_sales_sum ?? 0),
+        0,
+      ),
+      net_sales: rows.reduce((sum, row) => sum + Number(row.net_sales ?? 0), 0),
+      net_profit: rows.reduce((sum, row) => sum + Number(row.net_profit ?? 0), 0),
+      sold_supply_sum: rows.reduce(
+        (sum, row) => sum + Number(row.sold_supply_sum ?? 0),
+        0,
+      ),
+      average_margin:
+        rows.length > 0
+          ? rows.reduce((sum, row) => sum + Number(row.average_margin ?? 0), 0) /
+            rows.length
+          : 0,
+      discount:
+        rows.length > 0
+          ? rows.reduce((sum, row) => sum + Number(row.discount ?? 0), 0) /
+            rows.length
+          : 0,
+      sold_with_discount: rows.reduce(
+        (sum, row) => sum + Number(row.sold_with_discount ?? 0),
+        0,
+      ),
+      sold_without_discount: rows.reduce(
+        (sum, row) => sum + Number(row.sold_without_discount ?? 0),
+        0,
+      ),
+      left_start_date: 0,
+      left_start_date_supply_price: 0,
+      left_start_date_retail_price: 0,
+      left_end_date: 0,
+      left_end_date_supply_price: 0,
+      left_end_date_retail_price: 0,
+    };
+  }
+
+  private async buildProductPerformanceRowsApi(
+    query: Record<string, string | undefined>,
+    context: any,
+  ) {
+    const products = await this.loadReportProducts(query, context);
+    const sales = await this.loadReportSales(query, context);
+    const movements = await this.loadProductMovements(query, context);
+    const shops = await this.loadReportShops(context, query);
+    const shopByBranchCode = new Map<string, any>(
+      shops.map((shop) => [shop.branchCode, shop] as const),
+    );
+    const soldMap = new Map<string, number>();
+
+    for (const row of this.flattenSaleItems(sales)) {
+      const key = `${row.branchCode}__${row.product?.id ?? row.item.productId ?? ''}`;
+      soldMap.set(key, (soldMap.get(key) ?? 0) + Number(row.sold_measurement_value ?? 0));
+    }
+
+    const importsByKey = new Map<string, number>();
+    const writeOffsByKey = new Map<string, number>();
+    for (const movement of movements) {
+      const key = `${movement.shop?.branchCode ?? movement.shop?.id ?? ''}__${movement.productId ?? ''}`;
+      if (movement.type === 'PURCHASE') {
+        importsByKey.set(key, (importsByKey.get(key) ?? 0) + Math.abs(Number(movement.quantity ?? 0)));
+      }
+      if (movement.type === 'WRITE_OFF') {
+        writeOffsByKey.set(key, (writeOffsByKey.get(key) ?? 0) + Math.abs(Number(movement.quantity ?? 0)));
+      }
+    }
+
+    return products.flatMap((product: any) => {
+      const stocks = Array.isArray(product.stocks) && product.stocks.length
+        ? product.stocks
+        : [{ branchCode: '', quantity: product.quantity ?? 0 }];
+      return stocks.map((stock: any) => {
+        const branchCode = stock.branchCode ?? '';
+        const shop = shopByBranchCode.get(branchCode);
+        const key = `${branchCode}__${product.id}`;
+        const supplyPrice = Number(stock.purchasePrice ?? product.purchasePrice ?? 0);
+        const retailPrice = Number(stock.salePrice ?? product.salePrice ?? 0);
+        const stockEnd = Number(stock.quantity ?? 0);
+        const importAmount = importsByKey.get(key) ?? 0;
+        const soldAmount = soldMap.get(key) ?? 0;
+        const writeOffAmount = writeOffsByKey.get(key) ?? 0;
+        const stockBegin = stockEnd + soldAmount + writeOffAmount - importAmount;
+        const supplier = product?.suppliers?.[0]?.supplier;
+
+        return {
+          rep_date: '0001-01-01T00:00:00Z',
+          company_id: context?.companyId ?? '',
+          shop_id: shop?.id ?? '',
+          shop_name: shop?.name ?? branchCode,
+          product_id: product.publicId ?? product.id ?? '',
+          product_type_id: '',
+          brand_id: JSON.stringify(product?.brand?.id ?? ''),
+          brand_name: product?.brand?.name ?? '',
+          name: product.name,
+          sku: product.sku ?? '',
+          bar_code: product.barcode ?? '',
+          properties: null,
+          is_variative: 0,
+          measurement_value: 0,
+          measurement_unit_id: '12a69bc0-c575-4586-9f0f-76e8295d4139',
+          measurement_unit_name: 'Штука',
+          measurement_unit_short_name: 'шт',
+          retail_price: 0,
+          retail_currency: '',
+          supply_price: 0,
+          supply_currency: '',
+          category: product?.category ? [product.category] : [],
+          categories_path: product?.category?.name ? [product.category.name] : [],
+          level_1: product?.category?.name ? [product.category.name] : [],
+          level_2: [],
+          level_3: [],
+          level_4: [],
+          level_5: [],
+          attributes: null,
+          custom_fields: [],
+          is_archived: Boolean(product?.archivedAt),
+          group_category: '',
+          group_custom_field: {
+            custom_field_name: '',
+            custom_field_id: '',
+            custom_field_value: '',
+          },
+          group_attribute: {
+            id: '',
+            attribute_id: '',
+            attribute_name: '',
+            attribute_value_id: '',
+            sequence_number: 0,
+            name: '',
+          },
+          supplier_id: supplier?.id ?? '00000000-0000-0000-0000-000000000000',
+          supplier_name: supplier?.name ?? '',
+          stock_amount_begin: stockBegin,
+          stock_supply_begin: 0,
+          stock_retail_begin: 0,
+          stock_supply_sum_begin: stockBegin * supplyPrice,
+          stock_retail_sum_begin: stockBegin * retailPrice,
+          stock_amount_end: stockEnd,
+          stock_supply_end: 0,
+          stock_retail_end: 0,
+          stock_supply_sum_end: stockEnd * supplyPrice,
+          stock_retail_sum_end: stockEnd * retailPrice,
+          import_amount: importAmount,
+          import_supply_price: 0,
+          import_retail_price: 0,
+          import_supply_sum: importAmount * supplyPrice,
+          import_retail_sum: importAmount * retailPrice,
+          order_amount: 0,
+          order_supply_price: 0,
+          order_retail_price: 0,
+          order_supply_sum: 0,
+          order_retail_sum: 0,
+          inc_transfer_amount: 0,
+          inc_transfer_supply_price: 0,
+          inc_transfer_retail_price: 0,
+          inc_transfer_supply_sum: 0,
+          inc_transfer_retail_sum: 0,
+          out_transfer_amount: 0,
+          out_transfer_supply_price: 0,
+          out_transfer_retail_price: 0,
+          out_transfer_supply_sum: 0,
+          out_transfer_retail_sum: 0,
+          sold_amount: soldAmount,
+          sold_supply_price: 0,
+          sold_retail_price: 0,
+          sold_sales_price: 0,
+          sold_supply_sum: soldAmount * supplyPrice,
+          sold_retail_sum: soldAmount * retailPrice,
+          sold_sales_sum: 0,
+          returned_amount: 0,
+          returned_supply_price: 0,
+          returned_retail_price: 0,
+          returned_sales_price: 0,
+          returned_supply_sum: 0,
+          returned_retail_sum: 0,
+          returned_sales_sum: 0,
+          write_off_amount: writeOffAmount,
+          write_off_supply_price: 0,
+          write_off_retail_price: 0,
+          write_off_supply_sum: writeOffAmount * supplyPrice,
+          write_off_retail_sum: writeOffAmount * retailPrice,
+          repricing_amount: 0,
+          repricing_supply_sum: 0,
+          repricing_retail_sum: 0,
+          supplier_order_return_amount: 0,
+          supplier_order_return_supply_sum: 0,
+          supplier_order_return_retail_sum: 0,
+          qty_sellout: soldAmount,
+          sum_sellout: 0,
+          day_difference: 1,
+          sellout_in_number: 0,
+          sellout_by_days: 0,
+        };
+      });
+    });
+  }
+
+  private async buildImportReportRows(
+    query: Record<string, string | undefined>,
+    context: any,
+  ) {
+    const movements = await this.loadProductMovements(
+      { ...query, movementType: 'PURCHASE' },
+      context,
+    );
+    const purchaseMovements = movements.filter((movement: any) => movement.type === 'PURCHASE');
+    return purchaseMovements.map((item: any) => {
+      const quantity = Math.abs(Number(item.quantity ?? 0));
+      const supplyPrice = Number(item.product?.purchasePrice ?? 0);
+      const retailPrice = Number(item.product?.salePrice ?? 0);
+      const leftQty = Math.max(0, this.resolveStockLeft(item.product));
+      const soldQty = Math.max(0, quantity - leftQty);
+      const supplier = item.product?.suppliers?.[0]?.supplier;
+      return {
+        shop_id: item.shopId ?? '',
+        shop_name: item.shop?.name ?? '',
+        external_import_id: item.externalId ?? item.id ?? 0,
+        external_supplier_order_id: 0,
+        import_name: item.externalId ? `Product Import ${item.externalId}` : `Product Import ${item.id}`,
+        supplier_name: supplier?.name ?? '',
+        import_type: 'import',
+        is_import: false,
+        is_supplier_order: false,
+        type: '',
+        date: this.formatDateTime(item.createdAt),
+        imported_qty: quantity,
+        imported_retail_sum: quantity * retailPrice,
+        imported_supply_sum: quantity * supplyPrice,
+        supplier_order_qty: 0,
+        supplier_order_retail_sum: 0,
+        supplier_order_supply_sum: 0,
+        sold_qty: soldQty,
+        sold_retail_sum: soldQty * retailPrice,
+        sold_supply_sum: soldQty * supplyPrice,
+        sold_sale_sum: soldQty * retailPrice,
+        written_off_qty: 0,
+        written_off_retail_sum: 0,
+        written_off_supply_sum: 0,
+        left_qty: Math.max(0, quantity - soldQty),
+        left_retail_sum: Math.max(0, quantity - soldQty) * retailPrice,
+        left_supply_sum: Math.max(0, quantity - soldQty) * supplyPrice,
+        transfer_arrived_qty: 0,
+        transfer_arrived_retail_price: 0,
+        transfer_arrived_supply_sum: 0,
+        transfer_finished_qty: 0,
+        transfer_finished_retail_sum: 0,
+        transfer_finished_supply_sum: 0,
+        returned: 0,
+        returned_retail_sum: 0,
+        returned_supply_sum: 0,
+        returned_sale_sum: 0,
+        repricing_qty: 0,
+        repricing_retail_sum: 0,
+        repricing_supply_sum: 0,
+        return_supplier_order_qty: 0,
+        return_supplier_order_retail_sum: 0,
+        return_supplier_order_supply_sum: 0,
+        outcome: 0,
+        product_id: item.product?.publicId ?? item.productId ?? '',
+        import_id: String(item.id ?? ''),
+        supplier_order_id: '',
+        product_name: item.product?.name ?? '',
+        product_base_name: '',
+        product_sku: item.product?.sku ?? '',
+        product_barcode: item.product?.barcode ?? '',
+        is_archived: Boolean(item.product?.archivedAt),
+        product_brand_id: JSON.stringify(item.product?.brand?.id ?? ''),
+        product_brand_name: item.product?.brand?.name ?? '',
+        product_categories: item.product?.category ? [item.product.category] : null,
+        categories_path: item.product?.category?.name ? [item.product.category.name] : [],
+        level_1: item.product?.category?.name ? [item.product.category.name] : [],
+        level_2: [],
+        level_3: [],
+        level_4: [],
+        level_5: [],
+        product_measurement_unit_id: '12a69bc0-c575-4586-9f0f-76e8295d4139',
+        product_measurement_unit_name: 'Штука',
+        product_measurement_unit_short_name: 'шт',
+        product_attributes: [],
+        product_custom_fields: [],
+      };
+    });
+  }
+
+  private buildSupplierSalesRows(
+    sales: any[],
+    query: Record<string, string | undefined>,
+  ) {
+    const grouped = new Map<string, any>();
+    for (const row of this.flattenSaleItems(sales)) {
+      const supplier = row.product?.suppliers?.[0]?.supplier;
+      const day = this.toPlotDate(row.date);
+      const key = `${day}__${row.branchCode}__${supplier?.id ?? 'unknown'}__${row.product?.id ?? row.item.productId ?? row.item.name}`;
+      const existing = grouped.get(key) ?? {
+        date: day,
+        shop_id: '',
+        shop_name: row.branchCode,
+        product_id: row.product?.publicId ?? row.product?.id ?? '',
+        order_number: '',
+        product_name: row.item.name,
+        product_base_name: '',
+        product_sku: row.item.sku ?? row.product?.sku ?? '',
+        product_barcode: row.item.barcode ?? row.product?.barcode ?? '',
+        product_brand_id: JSON.stringify(row.product?.brand?.id ?? ''),
+        product_brand_name: row.product?.brand?.name ?? '',
+        free_price: false,
+        used_wholesale_price: false,
+        supplier_id: supplier?.id ?? '00000000-0000-0000-0000-000000000000',
+        supplier_external_id: 0,
+        product_categories: row.product?.category ? [row.product.category] : [],
+        categories_path: row.product?.category?.name ? [row.product.category.name] : [],
+        level_1: row.product?.category?.name ? [row.product.category.name] : [],
+        level_2: [],
+        level_3: [],
+        level_4: [],
+        level_5: [],
+        product_measurement_unit_id: '12a69bc0-c575-4586-9f0f-76e8295d4139',
+        product_measurement_unit_name: 'Штука',
+        product_measurement_unit_short_name: 'шт',
+        product_attributes: [],
+        product_is_archived: Boolean(row.product?.archivedAt),
+        product_suppliers: supplier?.name ?? '',
+        customer_full_name: row.sale?.clientName ?? '',
+        customer_phone_number: '',
+        seller_full_name: this.buildUserName(row.item?.seller ?? row.sale?.user),
+        cashier_full_name: this.buildUserName(row.sale?.user),
+        transaction_type: row.sale?.saleType ?? '',
+        order_id: String(row.sale?.id ?? ''),
+        movement_id: '',
+        sold_measurement_value: 0,
+        returned_measurement_value: 0,
+        net_sold_measurement_value: 0,
+        gross_sales: 0,
+        returned_sales_sum: 0,
+        net_sales: 0,
+        net_profit: 0,
+        sold_supply_sum: 0,
+        average_margin: 0,
+        discount: 0,
+        sold_with_discount: 0,
+        sold_without_discount: 0,
+        left_start_date: 0,
+        left_start_date_supply_price: 0,
+        left_start_date_retail_price: 0,
+        left_end_date: 0,
+        left_end_date_supply_price: 0,
+        left_end_date_retail_price: 0,
+        custom_fields: [],
+        _count: 0,
+      };
+      existing.sold_measurement_value += row.sold_measurement_value;
+      existing.returned_measurement_value += row.returned_measurement_value;
+      existing.net_sold_measurement_value += row.net_sold_measurement_value;
+      existing.gross_sales += row.gross_sales;
+      existing.returned_sales_sum += row.returned_sales_sum;
+      existing.net_sales += row.net_sales;
+      existing.net_profit += row.net_profit;
+      existing.sold_supply_sum += row.sold_supply_sum;
+      existing.average_margin += row.average_margin;
+      existing.discount += row.discount;
+      existing.sold_with_discount += row.sold_with_discount;
+      existing.sold_without_discount += row.sold_without_discount;
+      existing._count += 1;
+      grouped.set(key, existing);
+    }
+
+    return [...grouped.values()].map((row) => ({
+      ...row,
+      average_margin: row._count > 0 ? row.average_margin / row._count : 0,
+      discount: row._count > 0 ? row.discount / row._count : 0,
+    }));
+  }
+
+  private async buildStockReportRows(
+    query: Record<string, string | undefined>,
+    context: any,
+  ) {
+    const products = await this.loadReportProducts(query, context);
+    const shops = await this.loadReportShops(context, query);
+    const shopByBranchCode = new Map<string, any>(
+      shops.map((shop) => [shop.branchCode, shop] as const),
+    );
+    const requestedBranchCodes = await this.resolveShopBranchCodesFromQuery(
+      query,
+      context,
+      ['shop_ids', 'shopId', 'shop_id'],
+    );
+
+    return products.flatMap((product: any) => {
+      const stocks = Array.isArray(product.stocks) && product.stocks.length
+        ? product.stocks
+        : [
+            {
+              branchCode: '',
+              quantity: product.quantity ?? 0,
+              purchasePrice: product.purchasePrice,
+              salePrice: product.salePrice,
+              createdAt: product.createdAt,
+            },
+          ];
+
+      return stocks
+        .filter((stock: any) =>
+          !requestedBranchCodes.length ||
+          requestedBranchCodes.includes(stock.branchCode ?? ''),
+        )
+        .map((stock: any) => {
+          const shop = shopByBranchCode.get(stock.branchCode ?? '');
+          const quantity = Number(stock.quantity ?? 0);
+          const supplyPrice = Number(stock.purchasePrice ?? product.purchasePrice ?? 0);
+          const retailPrice = Number(stock.salePrice ?? product.salePrice ?? 0);
+          const estimatedIncome = quantity * Math.max(0, retailPrice - supplyPrice);
+          const estimatedMargin =
+            retailPrice > 0 ? Math.round(((retailPrice - supplyPrice) / retailPrice) * 100) : 0;
+          return {
+            shop_id: shop?.id ?? '',
+            shop_name: shop?.name ?? stock.branchCode ?? '',
+            product_id: product.publicId ?? product.id ?? '',
+            supplier_id:
+              product?.suppliers?.[0]?.supplier?.id ??
+              '00000000-0000-0000-0000-000000000000',
+            supplier_name: product?.suppliers?.[0]?.supplier?.name ?? '',
+            supply_price: supplyPrice,
+            retail_price: retailPrice,
+            measurement_value: quantity,
+            last_import: this.formatDateTime(product.updatedAt ?? product.createdAt ?? new Date()),
+            estimated_income: estimatedIncome,
+            estimated_margin: estimatedMargin,
+            rows_count: 0,
+            product_name: product.name,
+            product_base_name: '',
+            product_barcode: product.barcode ?? '',
+            product_brand_name: product?.brand?.name ?? '',
+            product_categories: product?.category ? [product.category] : [],
+            categories_path: product?.category?.name ? [product.category.name] : [],
+            level_1: product?.category?.name ? [product.category.name] : [],
+            level_2: [],
+            level_3: [],
+            level_4: [],
+            level_5: [],
+            product_sku: product.sku ?? '',
+            product_attributes: [],
+            product_custom_fields: [],
+            product_measurement_unit_short_name: 'шт',
+            product_is_archived: Boolean(product.archivedAt),
+          };
+        });
+    }).map((row, index, allRows) => ({
+      ...row,
+      rows_count: allRows.length,
+    }));
+  }
+
   private buildProductBreakdown(items: any[]) {
     return {
       categories: this.groupProductMetric(items, 'category', 'net_gross_sales'),
@@ -2119,7 +3160,7 @@ export class ReportsService {
   private buildGeneralShopPlot(
     sales: any[],
     shops: any[],
-    valueResolver: (sales: any[]) => number,
+    valueResolver: (sales: any[], day: string, shop: any) => number,
   ) {
     const dayMap = new Map<string, Record<string, number>>();
 
@@ -2152,10 +3193,100 @@ export class ReportsService {
               const saleDay = this.toPlotDate(sale.paidAt ?? sale.createdAt);
               return saleDay === day && sale.branchCode === shop.branchCode;
             }),
+            day,
+            shop,
           );
         }
         return row;
       });
+  }
+
+  private buildCustomerReportKey(sale: {
+    clientId?: string | null;
+    clientName?: string | null;
+  }) {
+    if (sale.clientId?.trim()) {
+      return `id:${sale.clientId.trim()}`;
+    }
+
+    if (sale.clientName?.trim()) {
+      return `name:${sale.clientName.trim().toLowerCase()}`;
+    }
+
+    return '';
+  }
+
+  private resolveCustomerReportName(sale: {
+    clientName?: string | null;
+    clientId?: string | null;
+  }) {
+    return sale.clientName?.trim() || sale.clientId?.trim() || '';
+  }
+
+  private async loadCustomerFirstPurchaseDates(sales: any[], context: any) {
+    const firstPurchaseByCustomer = new Map<string, Date>();
+    const clientIds = [...new Set(
+      sales
+        .map((sale) => this.optionalString(sale.clientId))
+        .filter((value): value is string => Boolean(value)),
+    )];
+
+    if (clientIds.length) {
+      const historicalSales = await this.db.sale.findMany({
+        where: {
+          clientId: { in: clientIds },
+          status: {
+            in: ['paid', 'returned'],
+          },
+          ...(context?.companyId ? { companyId: context.companyId } : {}),
+          ...(context?.allowedBranchCodes?.length
+            ? { branchCode: { in: context.allowedBranchCodes } }
+            : {}),
+          NOT: {
+            saleType: 'return',
+          },
+        },
+        select: {
+          clientId: true,
+          paidAt: true,
+          createdAt: true,
+        },
+        orderBy: {
+          paidAt: 'asc',
+        },
+      });
+
+      for (const sale of historicalSales) {
+        const clientId = this.optionalString(sale.clientId);
+        if (!clientId) {
+          continue;
+        }
+
+        const customerKey = `id:${clientId}`;
+        const purchaseDate = sale.paidAt ?? sale.createdAt;
+        const existing = firstPurchaseByCustomer.get(customerKey);
+
+        if (!existing || purchaseDate.getTime() < existing.getTime()) {
+          firstPurchaseByCustomer.set(customerKey, purchaseDate);
+        }
+      }
+    }
+
+    for (const sale of sales) {
+      const customerKey = this.buildCustomerReportKey(sale);
+      if (!customerKey) {
+        continue;
+      }
+
+      const purchaseDate = sale.paidAt ?? sale.createdAt;
+      const existing = firstPurchaseByCustomer.get(customerKey);
+
+      if (!existing || purchaseDate.getTime() < existing.getTime()) {
+        firstPurchaseByCustomer.set(customerKey, purchaseDate);
+      }
+    }
+
+    return firstPurchaseByCustomer;
   }
 
   private toPlotDate(value: Date | string) {
@@ -2340,6 +3471,18 @@ export class ReportsService {
 
   private formatDate(value: Date) {
     return value.toISOString().slice(0, 10);
+  }
+
+  private formatDateTime(value: Date | string) {
+    const date = new Date(value);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
   }
 
   private optionalString(value: unknown) {

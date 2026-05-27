@@ -418,11 +418,31 @@ export class SalesService {
       where.companyId = context.companyId;
     }
 
-    if (context?.allowedBranchCodes?.length) {
+    if (branchCode) {
+      where.stocks = {
+        some: {
+          branchCode,
+          quantity: {
+            gt: 0,
+          },
+        },
+      };
+    } else if (context?.allowedBranchCodes?.length) {
       where.stocks = {
         some: {
           branchCode: {
             in: context.allowedBranchCodes,
+          },
+          quantity: {
+            gt: 0,
+          },
+        },
+      };
+    } else {
+      where.stocks = {
+        some: {
+          quantity: {
+            gt: 0,
           },
         },
       };

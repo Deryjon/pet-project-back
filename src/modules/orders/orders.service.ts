@@ -338,10 +338,10 @@ export class OrdersService {
   ) {
     const context = await this.getCompanyContext(authorization);
     const order = await this.findEditableOrderOrThrow(id, context);
-    const customerId = dto.customerId.trim();
+    const customerId = (dto.customerId ?? dto.clientId ?? '').trim();
 
     if (!customerId) {
-      throw new BadRequestException('customerId is required');
+      throw new BadRequestException('customerId or clientId is required');
     }
 
     await this.findClientForCompanyOrThrow(customerId, context.companyId);
@@ -874,7 +874,7 @@ export class OrdersService {
   private async findClientForCompanyOrThrow(clientId: string, companyId: string) {
     const normalizedClientId = clientId.trim();
     if (!normalizedClientId) {
-      throw new BadRequestException('customerId is required');
+      throw new BadRequestException('customerId or clientId is required');
     }
 
     const client = await this.prisma.client.findFirst({
@@ -1171,7 +1171,18 @@ export class OrdersService {
       orderType: order.orderType,
       status: order.status,
       customerId: order.customerId,
+      clientId: order.customerId,
       customer: order.customer
+        ? {
+            id: order.customer.id,
+            code: order.customer.code,
+            firstName: order.customer.firstName,
+            lastName: order.customer.lastName,
+            middleName: order.customer.middleName,
+            phone: order.customer.phone,
+          }
+        : null,
+      client: order.customer
         ? {
             id: order.customer.id,
             code: order.customer.code,

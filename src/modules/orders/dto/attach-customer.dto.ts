@@ -1,7 +1,13 @@
-import { IsString, MinLength } from 'class-validator';
+import { IsOptional, IsString, MinLength } from 'class-validator';
 
 export class AttachCustomerDto {
+  @IsOptional()
   @IsString()
   @MinLength(1)
-  customerId!: string;
+  customerId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  clientId?: string;
 }
