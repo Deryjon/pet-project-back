@@ -68,11 +68,14 @@ export class ReportsService {
           sales.filter((sale: any) => sale.branchCode === shop.branchCode),
         ),
         shop,
+        { roundAverageMeasurementValue: 0 },
       ),
     );
 
     return {
-      ...this.toGeneralReportMetrics(summary),
+      ...this.toGeneralReportMetrics(summary, undefined, {
+        roundAverageMeasurementValue: 2,
+      }),
       shop_stats: shopStats,
       sales_per_square: 0,
       target: 0,
@@ -92,13 +95,14 @@ export class ReportsService {
     const context = await this.getContext(authorization);
     const sales = await this.loadReportSales(query, context);
     const shops = await this.loadReportShops(context, query);
+    const detalization = this.optionalString(query.detalization) ?? 'day';
     const shopMap = new Map<string, any>(
       shops.map((shop) => [shop.branchCode, shop] as const),
     );
     const grouped = new Map<string, any[]>();
 
     for (const sale of sales) {
-      const date = this.toPlotDate(sale.paidAt ?? sale.createdAt);
+      const date = this.toPlotDate(sale.paidAt ?? sale.createdAt, detalization);
       const branchCode = sale.branchCode ?? '';
       const key = `${date}__${branchCode}`;
       const bucket = grouped.get(key) ?? [];
@@ -120,6 +124,7 @@ export class ReportsService {
                   name: shop.name,
                 }
               : undefined,
+            { roundAverageMeasurementValue: 2 },
           ),
           target: 0,
         };
@@ -3026,7 +3031,15 @@ export class ReportsService {
     return Math.min(100, Math.round((summary.net_gross_sales / target) * 100));
   }
 
-  private toGeneralReportMetrics(summary: any, shop?: { id: string; name: string }) {
+  private toGeneralReportMetrics(
+    summary: any,
+    shop?: { id: string; name: string },
+    options?: { roundAverageMeasurementValue?: number },
+  ) {
+    const averageMeasurementValue =
+      Number(summary.transactions_count ?? 0) > 0
+        ? Number(summary.products_sold ?? 0) / Number(summary.transactions_count ?? 0)
+        : 0;
     const salesSupplyPrice = Math.max(
       0,
       Number(summary.gross_sales ?? 0) -
@@ -3042,37 +3055,39 @@ export class ReportsService {
             shop_name: shop.name,
           }
         : {}),
-      gross_sales: Number(summary.gross_sales ?? 0),
-      discount_sum: Number(summary.discount_sum ?? 0),
-      discount_percent: Number(summary.discount_percent ?? 0),
+      gross_sales: this.roundMetric(summary.gross_sales, 2),
+      discount_sum: this.roundMetric(summary.discount_sum, 2),
+      discount_percent: this.roundMetric(summary.discount_percent, 2),
       products_returned: 0,
       products_exchanged: 0,
       returned_supply_price: 0,
       returned_discount_price: 0,
       returned_retail_price: 0,
-      sales_supply_price: salesSupplyPrice,
-      net_gross_sales: Number(summary.net_gross_sales ?? 0),
-      gross_profit: Number(summary.gross_profit ?? 0),
-      average_cheque: Number(summary.average_cheque ?? 0),
-      average_price:
+      sales_supply_price: this.roundMetric(salesSupplyPrice, 2),
+      net_gross_sales: this.roundMetric(summary.net_gross_sales, 2),
+      gross_profit: this.roundMetric(summary.gross_profit, 2),
+      average_cheque: this.roundMetric(summary.average_cheque, 2),
+      average_price: this.roundMetric(
         Number(summary.products_sold ?? 0) > 0
           ? Number(summary.net_gross_sales ?? 0) / Number(summary.products_sold ?? 0)
           : 0,
+        2,
+      ),
       sales: 0,
-      average_measurement_value:
-        Number(summary.transactions_count ?? 0) > 0
-          ? Number(summary.products_sold ?? 0) / Number(summary.transactions_count ?? 0)
-          : 0,
+      average_measurement_value: this.roundMetric(
+        averageMeasurementValue,
+        options?.roundAverageMeasurementValue ?? 2,
+      ),
       average_discount: 0,
-      average_extra_charge: Number(summary.average_extra_charge ?? 0),
-      products_sold: Number(summary.products_sold ?? 0),
+      average_extra_charge: this.roundMetric(summary.average_extra_charge, 2),
+      products_sold: this.roundMetric(summary.products_sold, 2),
       imported_measurement_value: 0,
       imported_retail_price: 0,
       imported_supply_price: 0,
-      transactions_count: Number(summary.transactions_count ?? 0),
-      orders_count: Number(summary.transactions_count ?? 0),
-      returns_count: Number(summary.returns_count ?? 0),
-      exchanges_count: Number(summary.exchanges_count ?? 0),
+      transactions_count: this.roundMetric(summary.transactions_count, 2),
+      orders_count: this.roundMetric(summary.transactions_count, 2),
+      returns_count: this.roundMetric(summary.returns_count, 2),
+      exchanges_count: this.roundMetric(summary.exchanges_count, 2),
       sales_per_square: 0,
       left_products_start_date: 0,
       left_products_supply_price_start_date: 0,
@@ -3289,12 +3304,39 @@ export class ReportsService {
     return firstPurchaseByCustomer;
   }
 
-  private toPlotDate(value: Date | string) {
+  private toPlotDate(value: Date | string, detalization = 'day') {
     const date = new Date(value);
-    const year = date.getUTCFullYear();
-    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-    const day = String(date.getUTCDate()).padStart(2, '0');
+    const normalized = new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+    );
+
+    switch (detalization) {
+      case 'month':
+        normalized.setUTCDate(1);
+        break;
+      case 'week': {
+        const day = normalized.getUTCDay();
+        const diff = day === 0 ? 6 : day - 1;
+        normalized.setUTCDate(normalized.getUTCDate() - diff);
+        break;
+      }
+      case 'day':
+      default:
+        break;
+    }
+    const year = normalized.getUTCFullYear();
+    const month = String(normalized.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(normalized.getUTCDate()).padStart(2, '0');
     return `${year}-${month}-${day} 00:00:00`;
+  }
+
+  private roundMetric(value: unknown, fractionDigits = 2) {
+    const numeric = Number(value ?? 0);
+    if (!Number.isFinite(numeric)) {
+      return 0;
+    }
+    const factor = 10 ** Math.max(0, fractionDigits);
+    return Math.round(numeric * factor) / factor;
   }
 
   private extractQueryStringArray(
