@@ -2906,6 +2906,8 @@ export class SalesService {
           name: string;
           sku: string | null;
           barcode: string | null;
+          unit?: string | null;
+          metadata?: unknown;
           productType: string | null;
           purchasePrice: number | null;
           salePrice: number | null;
