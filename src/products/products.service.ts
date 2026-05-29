@@ -2020,6 +2020,14 @@ export class ProductsService {
       throw new BadRequestException('measurement_unit_id is required');
     }
 
+    const measurementUnit =
+      this.isGoodsProductType(productType) || isServiceProduct
+        ? await this.resolveMeasurementUnitSnapshot(
+            measurementUnitId!,
+            productCompanyId,
+          )
+        : null;
+
     const createdProduct = await this.prisma.product.create({
       data: {
         company: {
@@ -2046,6 +2054,7 @@ export class ProductsService {
             selectedAttributes,
             variants,
           },
+          measurementUnit,
           writeContext,
         ),
         brand: brandName
@@ -2257,6 +2266,13 @@ export class ProductsService {
       throw new BadRequestException('measurement_unit_id is required');
     }
 
+    const measurementUnit = measurementUnitId
+      ? await this.resolveMeasurementUnitSnapshot(
+          measurementUnitId,
+          existingProduct.companyId ?? writeContext.companyId,
+        )
+      : null;
+
     const shipments = this.extractStockPayload(body);
     const shipmentsWithBranchCodes = await this.attachBranchCodesToShipments(
       shipments,
@@ -2315,7 +2331,9 @@ export class ProductsService {
             selectedAttributes,
             variants,
           },
+          measurementUnit,
           writeContext,
+          (existingProduct.metadata as Record<string, unknown> | null) ?? null,
         ),
         suppliers:
           body.supplier_ids !== undefined
@@ -4027,6 +4045,10 @@ export class ProductsService {
     const measurementUnitId =
       this.optionalString(metadata.measurement_unit_id) ??
       DEFAULT_MEASUREMENT_UNIT.id;
+    const measurementUnit = this.buildMeasurementUnitFromMetadata(
+      metadata,
+      product.companyId ?? context?.companyId ?? '',
+    );
     const description = this.optionalString(metadata.description) ?? '';
     const freePrice = this.toBooleanValue(metadata.free_price);
     const isVariative = this.toBooleanValue(metadata.is_variative);
@@ -4201,12 +4223,7 @@ export class ProductsService {
         deleted_at: 0,
       })),
       is_divisible: false,
-      measurement_unit: {
-        ...DEFAULT_MEASUREMENT_UNIT,
-        id: measurementUnitId,
-        company_id: product.companyId ?? context?.companyId ?? '',
-        is_default: measurementUnitId === DEFAULT_MEASUREMENT_UNIT.id,
-      },
+      measurement_unit: measurementUnit,
       custom_fields: [],
       created_at: product.createdAt.toISOString(),
       updated_at: product.updatedAt.toISOString(),
@@ -4294,6 +4311,12 @@ export class ProductsService {
     const currencyCode = this.companySettingsService.getDefaultCurrencyIsoCode(
       context.companyId ?? undefined,
     );
+    const metadata =
+      product.metadata &&
+      typeof product.metadata === 'object' &&
+      !Array.isArray(product.metadata)
+        ? (product.metadata as Record<string, unknown>)
+        : {};
     const shopPrices = this.extractShopPrices(
       body,
       shipments,
@@ -4302,13 +4325,13 @@ export class ProductsService {
     );
     const shopFreePrices = this.extractShopFreePrices(body, shipments);
     const measurementUnitId =
-      this.optionalString(body.measurement_unit_id) ?? DEFAULT_MEASUREMENT_UNIT.id;
-    const measurementUnit = {
-      ...DEFAULT_MEASUREMENT_UNIT,
-      id: measurementUnitId,
-      company_id: COMPANY_ID,
-      is_default: measurementUnitId === DEFAULT_MEASUREMENT_UNIT.id,
-    };
+      this.optionalString(metadata.measurement_unit_id) ??
+      this.optionalString(body.measurement_unit_id) ??
+      DEFAULT_MEASUREMENT_UNIT.id;
+    const measurementUnit = this.buildMeasurementUnitFromMetadata(
+      metadata,
+      context.companyId ?? COMPANY_ID,
+    );
     const productType = this.resolveProductType(body.product_type_id);
     const isVariative = this.toBooleanValue(body.is_variative);
     const measurementType = this.optionalString(body.measurement_type);
@@ -7265,6 +7288,62 @@ export class ProductsService {
     return suppliers.map((supplier) => supplier.id);
   }
 
+  private async resolveMeasurementUnitSnapshot(
+    measurementUnitId: string,
+    companyId?: string | null,
+  ) {
+    const normalizedCompanyId = companyId?.trim();
+    if (!normalizedCompanyId) {
+      throw new BadRequestException('company_id is required');
+    }
+
+    const measurementUnit = await this.prisma.measurementUnitSetting.findFirst({
+      where: {
+        id: measurementUnitId,
+        companyId: normalizedCompanyId,
+      },
+    });
+
+    if (!measurementUnit) {
+      throw new BadRequestException('measurement_unit_id is invalid');
+    }
+
+    return {
+      id: measurementUnit.id,
+      name: measurementUnit.name,
+      company_id: measurementUnit.companyId,
+      short_name: measurementUnit.shortName,
+      precision: measurementUnit.precision,
+      is_editable: measurementUnit.isEditable,
+      is_default: measurementUnit.isDefault,
+    };
+  }
+
+  private buildMeasurementUnitFromMetadata(
+    metadata: Record<string, unknown>,
+    companyId?: string | null,
+  ) {
+    return {
+      ...DEFAULT_MEASUREMENT_UNIT,
+      id:
+        this.optionalString(metadata.measurement_unit_id) ??
+        DEFAULT_MEASUREMENT_UNIT.id,
+      name:
+        this.optionalString(metadata.measurement_unit_name) ??
+        DEFAULT_MEASUREMENT_UNIT.name,
+      company_id: companyId ?? '',
+      short_name:
+        this.optionalString(metadata.measurement_unit_short_name) ??
+        DEFAULT_MEASUREMENT_UNIT.short_name,
+      precision:
+        this.optionalString(metadata.measurement_unit_precision) ??
+        DEFAULT_MEASUREMENT_UNIT.precision,
+      is_default:
+        (this.optionalString(metadata.measurement_unit_id) ??
+          DEFAULT_MEASUREMENT_UNIT.id) === DEFAULT_MEASUREMENT_UNIT.id,
+    };
+  }
+
   private buildCatalogMetadata(
     body: Record<string, unknown>,
     description: string | undefined,
@@ -7273,9 +7352,19 @@ export class ProductsService {
       selectedAttributes: Prisma.InputJsonObject[];
       variants: Prisma.InputJsonObject[];
     },
+    measurementUnit?: {
+      id: string;
+      name: string;
+      company_id: string;
+      short_name: string;
+      precision: string;
+      is_editable: boolean;
+      is_default: boolean;
+    } | null,
     context?: {
       companyId?: string | null;
     },
+    existingMetadata?: Record<string, unknown> | null,
   ): Prisma.InputJsonObject {
     const firstShopPrice = Array.isArray(body.shop_prices)
       ? body.shop_prices.find(
@@ -7284,14 +7373,39 @@ export class ProductsService {
         )
       : undefined;
     return {
-      brand_id: this.optionalString(body.brand_id) ?? null,
-      brand_name: this.optionalString(body.brand_name) ?? null,
-      description: description ?? null,
+      brand_id:
+        this.optionalString(body.brand_id) ??
+        this.optionalString(existingMetadata?.brand_id) ??
+        null,
+      brand_name:
+        this.optionalString(body.brand_name) ??
+        this.optionalString(existingMetadata?.brand_name) ??
+        null,
+      description:
+        description ??
+        this.optionalString(existingMetadata?.description) ??
+        null,
       measurement_unit_id:
-        this.optionalString(body.measurement_unit_id) ?? null,
+        measurementUnit?.id ??
+        this.optionalString(body.measurement_unit_id) ??
+        this.optionalString(existingMetadata?.measurement_unit_id) ??
+        null,
+      measurement_unit_name:
+        measurementUnit?.name ??
+        this.optionalString(existingMetadata?.measurement_unit_name) ??
+        null,
+      measurement_unit_short_name:
+        measurementUnit?.short_name ??
+        this.optionalString(existingMetadata?.measurement_unit_short_name) ??
+        null,
+      measurement_unit_precision:
+        measurementUnit?.precision ??
+        this.optionalString(existingMetadata?.measurement_unit_precision) ??
+        null,
       company_id:
         context?.companyId ??
         this.optionalString(body.company_id) ??
+        this.optionalString(existingMetadata?.company_id) ??
         COMPANY_ID,
       product_type_id: this.resolveProductType(body.product_type_id) ?? null,
       is_variative: options.isVariative,

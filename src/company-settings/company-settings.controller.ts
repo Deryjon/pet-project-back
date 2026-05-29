@@ -127,6 +127,48 @@ export class CompanySettingsController {
     );
   }
 
+  @Get('v2/measurement-unit')
+  async getMeasurementUnits(
+    @Query('limit') limit?: string,
+    @Query('page') page?: string,
+    @Query('name') name?: string,
+    @Query('company_id') companyId?: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const context = authorization
+      ? await this.usersService.getRequestContext(authorization)
+      : null;
+
+    return this.companySettingsService.getMeasurementUnits({
+      limit: Number(limit),
+      page: Number(page),
+      name,
+      companyId: companyId || context?.companyId || undefined,
+    });
+  }
+
+  @Get('v2/default-measurement-unit')
+  async getDefaultMeasurementUnits() {
+    return this.companySettingsService.getDefaultMeasurementUnits();
+  }
+
+  @Post('v2/measurement-unit')
+  async createMeasurementUnit(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const context = authorization
+      ? await this.usersService.getRequestContext(authorization)
+      : null;
+
+    return this.companySettingsService.createMeasurementUnit({
+      ...body,
+      company_id:
+        (typeof body.company_id === 'string' ? body.company_id : undefined) ||
+        context?.companyId,
+    });
+  }
+
   @Get('price-tag')
   @Get('v1/price-tag')
   async getPriceTags(

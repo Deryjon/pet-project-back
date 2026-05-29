@@ -441,6 +441,51 @@ const DEFAULT_MEASUREMENT_UNITS: MeasurementUnitProfile[] = [
   },
 ];
 
+const DEFAULT_MEASUREMENT_UNIT_OPTIONS = [
+  { name: 'Ар (100 м2)', short_name: 'а' },
+  { name: 'Гектар', short_name: 'га' },
+  { name: 'Грамм', short_name: 'г' },
+  { name: 'Дециметр', short_name: 'дм' },
+  { name: 'Дюйм (25,4 мм)', short_name: 'дюйм' },
+  { name: 'Квадратный дециметр', short_name: 'дм2' },
+  { name: 'Квадратный дюйм (645,16 мм2)', short_name: 'дюйм2' },
+  { name: 'Квадратный километр', short_name: 'км2' },
+  { name: 'Квадратный метр', short_name: 'м2' },
+  { name: 'Квадратный миллиметр', short_name: 'мм2' },
+  { name: 'Квадратный сантиметр', short_name: 'см2' },
+  { name: 'Квадратный фут (0,092903 м2)', short_name: 'фут2' },
+  { name: 'Килограмм', short_name: 'кг' },
+  { name: 'Километр', short_name: 'км' },
+  { name: 'Кубический дюйм (16387,1 мм3)', short_name: 'дюйм3' },
+  { name: 'Кубический метр', short_name: 'м3' },
+  { name: 'Кубический миллиметр', short_name: 'мм3' },
+  { name: 'Кубический сантиметр', short_name: 'см3' },
+  { name: 'Кубический фут (0,02831685 м3)', short_name: 'фут3' },
+  { name: 'Литр', short_name: 'л' },
+  { name: 'Кубический дециметр', short_name: 'дм3' },
+  { name: 'Месяц', short_name: 'мес' },
+  { name: 'Метр', short_name: 'м' },
+  { name: 'Метрический карат', short_name: 'кар' },
+  { name: 'Миллиграмм', short_name: 'мг' },
+  { name: 'Миллиметр', short_name: 'мм' },
+  { name: 'Минута', short_name: 'мин' },
+  { name: 'Рулон', short_name: 'рулон' },
+  { name: 'Сантиметр', short_name: 'см' },
+  { name: 'Секунда', short_name: 'с' },
+  { name: 'Сутки', short_name: 'сут' },
+  { name: 'Тонна', short_name: 'т' },
+  { name: 'Фут (0,3048 м)', short_name: 'фут' },
+  { name: 'Центнер', short_name: 'ц' },
+  { name: 'Час', short_name: 'ч' },
+  { name: 'Штука', short_name: 'шт' },
+  { name: 'Мешок', short_name: 'мш' },
+  { name: 'Пачка', short_name: 'пч' },
+  { name: 'Пара', short_name: 'пара' },
+  { name: 'Миллилитр', short_name: 'мл' },
+] as const;
+
+const SUPPORTED_MEASUREMENT_PRECISIONS = new Set(['1', '.0', '.00', '.000']);
+
 const DEFAULT_PRICE_TAGS: PriceTagProfile[] = [
   {
     id: '157cb24e-4d81-4aee-a199-29a79c7e2617',
@@ -806,6 +851,95 @@ export class CompanySettingsService {
       id: measurementUnitId,
       company_id: targetCompanyId,
       is_default: measurementUnitId === DEFAULT_MEASUREMENT_UNIT.id,
+    };
+  }
+
+  async getMeasurementUnits(query?: {
+    companyId?: string;
+    limit?: number;
+    page?: number;
+    name?: string;
+  }) {
+    const targetCompanyId =
+      (await this.resolveCompanyId(query?.companyId)) ||
+      query?.companyId?.trim() ||
+      DEFAULT_COMPANY_ID;
+    const safeLimit = this.normalizeLimit(query?.limit, 1000);
+    const safePage = Math.max(1, Number(query?.page) || 1);
+    const normalizedName = this.optionalString(query?.name)?.toLowerCase();
+
+    await this.ensureCompanySettingsSeeded(targetCompanyId);
+    const measurementUnits = await this.db.measurementUnitSetting.findMany({
+      where: {
+        companyId: targetCompanyId,
+        ...(normalizedName
+          ? {
+              name: {
+                contains: normalizedName,
+                mode: 'insensitive',
+              },
+            }
+          : {}),
+      },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+    });
+
+    return {
+      count: measurementUnits.length,
+      measurement_units: measurementUnits
+        .slice((safePage - 1) * safeLimit, safePage * safeLimit)
+        .map((unit: any) => this.toMeasurementUnitResponse(unit)),
+    };
+  }
+
+  getDefaultMeasurementUnits() {
+    return {
+      measurement_units: DEFAULT_MEASUREMENT_UNIT_OPTIONS.map((unit) => ({
+        name: unit.name,
+        short_name: unit.short_name,
+      })),
+    };
+  }
+
+  async createMeasurementUnit(body: Record<string, unknown>) {
+    const companyId =
+      (await this.resolveCompanyId(this.optionalString(body.company_id))) ||
+      this.optionalString(body.company_id) ||
+      DEFAULT_COMPANY_ID;
+    const name = this.requireString(body.name, 'name');
+    const shortName = this.requireString(body.short_name, 'short_name');
+    const precision = this.normalizeMeasurementPrecision(body.precision);
+
+    await this.ensureCompanySettingsSeeded(companyId);
+
+    const duplicate = await this.db.measurementUnitSetting.findFirst({
+      where: {
+        companyId,
+        OR: [{ name }, { shortName }],
+      },
+      select: { id: true },
+    });
+
+    if (duplicate) {
+      throw new ConflictException(
+        'Measurement unit with the same name or short_name already exists',
+      );
+    }
+
+    const created = await this.db.measurementUnitSetting.create({
+      data: {
+        id: randomUUID(),
+        companyId,
+        name,
+        shortName,
+        precision,
+        isEditable: true,
+        isDefault: false,
+      },
+    });
+
+    return {
+      message: created.id,
     };
   }
 
@@ -2138,7 +2272,7 @@ export class CompanySettingsService {
     if (measurementUnitCount === 0) {
       const measurementUnits = this.parseJsonArray<MeasurementUnitProfile>(
         process.env.MEASUREMENT_UNITS_JSON,
-        DEFAULT_MEASUREMENT_UNITS,
+        [DEFAULT_MEASUREMENT_UNIT],
       );
       await this.db.measurementUnitSetting.createMany({
         data: measurementUnits.map((unit) => ({
@@ -2382,6 +2516,37 @@ export class CompanySettingsService {
   ) {
     const unitId = this.stringOrDefault(unit.id, randomUUID());
     return companyId === DEFAULT_COMPANY_ID ? unitId : `${companyId}:${unitId}`;
+  }
+
+  private toMeasurementUnitResponse(unit: {
+    id: string;
+    companyId: string;
+    name: string;
+    shortName: string;
+    precision: string;
+    isEditable: boolean;
+    isDefault: boolean;
+  }) {
+    return {
+      id: unit.id,
+      name: unit.name,
+      company_id: unit.companyId,
+      short_name: unit.shortName,
+      precision: unit.precision,
+      is_editable: unit.isEditable,
+      is_default: unit.isDefault,
+    };
+  }
+
+  private normalizeMeasurementPrecision(value: unknown) {
+    const precision = this.requireString(value, 'precision');
+    if (!SUPPORTED_MEASUREMENT_PRECISIONS.has(precision)) {
+      throw new BadRequestException(
+        'precision must be one of: 1, .0, .00, .000',
+      );
+    }
+
+    return precision;
   }
 
   private objectOrDefault(
