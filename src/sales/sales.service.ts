@@ -41,6 +41,82 @@ export class SalesService {
       : null;
   }
 
+  private extractMeasurementUnitShortName(metadata: unknown) {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return undefined;
+    }
+
+    const shortName = (metadata as Record<string, unknown>)
+      .measurement_unit_short_name;
+    return typeof shortName === 'string' && shortName.trim().length > 0
+      ? shortName.trim()
+      : undefined;
+  }
+
+  private resolveMeasurementType(
+    value: string | undefined | null,
+    measurementUnitShortName?: string | null,
+  ) {
+    const normalizedValue =
+      typeof value === 'string' && value.trim().length > 0
+        ? value.trim()
+        : undefined;
+    const normalizedShortName =
+      typeof measurementUnitShortName === 'string' &&
+      measurementUnitShortName.trim().length > 0
+        ? measurementUnitShortName.trim()
+        : undefined;
+
+    if (
+      !normalizedValue ||
+      normalizedValue.toLowerCase() === 'unit' ||
+      normalizedValue.toLowerCase() === 'countable'
+    ) {
+      return normalizedShortName ?? normalizedValue ?? '';
+    }
+
+    return normalizedValue;
+  }
+
+  private resolveMeasurementUnitFromMetadata(
+    metadata: unknown,
+    companyId: string,
+  ) {
+    const metadataObject =
+      metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+        ? (metadata as Record<string, unknown>)
+        : {};
+
+    const measurementUnitId =
+      typeof metadataObject.measurement_unit_id === 'string' &&
+      metadataObject.measurement_unit_id.trim().length > 0
+        ? metadataObject.measurement_unit_id.trim()
+        : DEFAULT_MEASUREMENT_UNIT.id;
+    const measurementUnitName =
+      typeof metadataObject.measurement_unit_name === 'string' &&
+      metadataObject.measurement_unit_name.trim().length > 0
+        ? metadataObject.measurement_unit_name.trim()
+        : DEFAULT_MEASUREMENT_UNIT.name;
+    const measurementUnitShortName =
+      this.extractMeasurementUnitShortName(metadata) ??
+      DEFAULT_MEASUREMENT_UNIT.short_name;
+    const measurementUnitPrecision =
+      typeof metadataObject.measurement_unit_precision === 'string' &&
+      metadataObject.measurement_unit_precision.trim().length > 0
+        ? metadataObject.measurement_unit_precision.trim()
+        : DEFAULT_MEASUREMENT_UNIT.precision;
+
+    return {
+      ...DEFAULT_MEASUREMENT_UNIT,
+      id: measurementUnitId,
+      name: measurementUnitName,
+      company_id: companyId,
+      short_name: measurementUnitShortName,
+      precision: measurementUnitPrecision,
+      is_default: measurementUnitId === DEFAULT_MEASUREMENT_UNIT.id,
+    };
+  }
+
   async findAll(authorization?: string) {
     const context = await this.getRequestContext(authorization);
     const sales = await this.prisma.sale.findMany({
@@ -2919,7 +2995,10 @@ export class SalesService {
         discount_percent: discountPercent,
         measurement_value: item.quantity,
         returned_measurement_value: sale.saleType === 'return' ? item.quantity : 0,
-        measurement_type: '',
+        measurement_type: this.resolveMeasurementType(
+          item.product?.unit,
+          this.extractMeasurementUnitShortName(item.product?.metadata),
+        ),
         sequence_number: index + 1,
         is_returned: sale.saleType === 'return',
         has_manual_discount: discountAmount > 0,
@@ -3098,6 +3177,8 @@ export class SalesService {
     name: string;
     sku: string | null;
     barcode: string | null;
+    unit?: string | null;
+    metadata?: unknown;
     productType: string | null;
     purchasePrice: number | null;
     salePrice: number | null;
@@ -3110,6 +3191,10 @@ export class SalesService {
       salePrice: number | null;
     }[];
   }) {
+    const measurementUnit = this.resolveMeasurementUnitFromMetadata(
+      product.metadata,
+      COMPANY_ID,
+    );
     return {
       id: String(product.id),
       name: product.name,
@@ -3125,11 +3210,7 @@ export class SalesService {
       main_image: '',
       retail_price: product.salePrice ?? 0,
       supply_price: product.purchasePrice ?? 0,
-      measurement_unit: {
-        ...DEFAULT_MEASUREMENT_UNIT,
-        company_id: COMPANY_ID,
-        is_default: true,
-      },
+      measurement_unit: measurementUnit,
       product_type_id: product.productType ?? DEFAULT_PRODUCT_TYPE_ID,
       categories: null,
       shop_measurement_values: null,
@@ -3164,6 +3245,7 @@ export class SalesService {
       sku: string | null;
       barcode: string | null;
       photo: string | null;
+      unit?: string | null;
       purchasePrice: number | null;
       salePrice: number | null;
       productType: string | null;
@@ -3210,15 +3292,22 @@ export class SalesService {
       retail_price: product.salePrice ?? 0,
       supply_price: product.purchasePrice ?? 0,
       description:
-        typeof metadata?.description === 'string'
+      typeof metadata?.description === 'string'
           ? metadata.description
           : undefined,
+      measurement_type: this.resolveMeasurementType(
+        product.unit,
+        this.extractMeasurementUnitShortName(product.metadata),
+      ),
       measurement_values: {
         total_measurement_value: totalMeasurementValue,
         total_active_measurement_value: totalMeasurementValue,
         total_inactive_measurement_value: 0,
       },
-      measurement_unit: DEFAULT_MEASUREMENT_UNIT,
+      measurement_unit: this.resolveMeasurementUnitFromMetadata(
+        product.metadata,
+        context?.companyId ?? COMPANY_ID,
+      ),
       shop_measurement_values: selectedStocks.map((stock) => {
         const retailPrice = stock.salePrice ?? product.salePrice ?? 0;
         const supplyPrice = stock.purchasePrice ?? product.purchasePrice ?? 0;

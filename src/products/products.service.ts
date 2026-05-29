@@ -1973,7 +1973,6 @@ export class ProductsService {
     const productType = this.resolveProductType(body.product_type_id);
     const isVariative = this.toBooleanValue(body.is_variative);
     const variantType = isVariative ? 'variative' : 'simple';
-    const unit = this.optionalString(body.measurement_type);
     const measurementUnitId = this.optionalString(body.measurement_unit_id);
     const purchasePrice = this.toNumber(body.supply_price) ?? 0;
     const salePrice = this.toNumber(body.retail_price) ?? 0;
@@ -2027,6 +2026,10 @@ export class ProductsService {
             productCompanyId,
           )
         : null;
+    const unit = this.resolveMeasurementTypeValue(
+      this.optionalString(body.measurement_type),
+      measurementUnit?.short_name,
+    );
 
     const createdProduct = await this.prisma.product.create({
       data: {
@@ -2304,7 +2307,14 @@ export class ProductsService {
         productType,
         variantType: isVariative ? 'variative' : 'simple',
         unit:
-          this.optionalString(body.measurement_type) ?? existingProduct.unit,
+          this.resolveMeasurementTypeValue(
+            this.optionalString(body.measurement_type) ?? existingProduct.unit,
+            measurementUnit?.short_name ??
+              this.optionalString(
+                (existingProduct.metadata as Record<string, unknown> | null)
+                  ?.measurement_unit_short_name,
+              ),
+          ),
         purchasePrice:
           this.toNumber(body.supply_price) ??
           existingProduct.purchasePrice ??
@@ -4131,7 +4141,10 @@ export class ProductsService {
       retail_price: product.salePrice ?? 0,
       supply_price: product.purchasePrice ?? 0,
       description,
-      measurement_type: product.unit ?? '',
+      measurement_type: this.resolveMeasurementTypeValue(
+        product.unit,
+        measurementUnit.short_name,
+      ),
       measurement_values: {
         total_measurement_value: totalMeasurementValue,
         total_active_measurement_value: totalMeasurementValue,
@@ -4334,7 +4347,10 @@ export class ProductsService {
     );
     const productType = this.resolveProductType(body.product_type_id);
     const isVariative = this.toBooleanValue(body.is_variative);
-    const measurementType = this.optionalString(body.measurement_type);
+    const measurementType = this.resolveMeasurementTypeValue(
+      this.optionalString(body.measurement_type),
+      measurementUnit.short_name,
+    );
     const selectedAttributes = this.extractSelectedAttributes(
       body.selected_attributes,
     );
@@ -7342,6 +7358,24 @@ export class ProductsService {
         (this.optionalString(metadata.measurement_unit_id) ??
           DEFAULT_MEASUREMENT_UNIT.id) === DEFAULT_MEASUREMENT_UNIT.id,
     };
+  }
+
+  private resolveMeasurementTypeValue(
+    value: string | undefined | null,
+    measurementUnitShortName?: string | null,
+  ) {
+    const normalizedValue = this.optionalString(value);
+    const normalizedShortName = this.optionalString(measurementUnitShortName);
+
+    if (
+      !normalizedValue ||
+      normalizedValue.toLowerCase() === 'unit' ||
+      normalizedValue.toLowerCase() === 'countable'
+    ) {
+      return normalizedShortName ?? normalizedValue ?? '';
+    }
+
+    return normalizedValue;
   }
 
   private buildCatalogMetadata(
