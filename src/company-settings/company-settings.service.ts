@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
@@ -522,6 +523,7 @@ const DEFAULT_PRICE_TAGS: PriceTagProfile[] = [
 @Injectable()
 export class CompanySettingsService {
   private currencyIsoCache = new Map<string, string>();
+  private readonly logger = new Logger(CompanySettingsService.name);
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -826,7 +828,7 @@ export class CompanySettingsService {
       (await this.resolveCompanyId(companyId)) ||
       companyId?.trim() ||
       DEFAULT_COMPANY_ID;
-    await this.ensureCompanySettingsSeeded(targetCompanyId);
+    await this.ensureMeasurementUnitsSeeded(targetCompanyId);
     const matchedUnit = await this.db.measurementUnitSetting.findFirst({
       where: {
         id: measurementUnitId,
@@ -860,36 +862,44 @@ export class CompanySettingsService {
     page?: number;
     name?: string;
   }) {
-    const targetCompanyId =
-      (await this.resolveCompanyId(query?.companyId)) ||
-      query?.companyId?.trim() ||
-      DEFAULT_COMPANY_ID;
-    const safeLimit = this.normalizeLimit(query?.limit, 1000);
-    const safePage = Math.max(1, Number(query?.page) || 1);
-    const normalizedName = this.optionalString(query?.name)?.toLowerCase();
+    try {
+      const targetCompanyId =
+        (await this.resolveCompanyId(query?.companyId)) ||
+        query?.companyId?.trim() ||
+        DEFAULT_COMPANY_ID;
+      const safeLimit = this.normalizeLimit(query?.limit, 1000);
+      const safePage = Math.max(1, Number(query?.page) || 1);
+      const normalizedName = this.optionalString(query?.name)?.toLowerCase();
 
-    await this.ensureCompanySettingsSeeded(targetCompanyId);
-    const measurementUnits = await this.db.measurementUnitSetting.findMany({
-      where: {
-        companyId: targetCompanyId,
-        ...(normalizedName
-          ? {
-              name: {
-                contains: normalizedName,
-                mode: 'insensitive',
-              },
-            }
-          : {}),
-      },
-      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
-    });
+      await this.ensureMeasurementUnitsSeeded(targetCompanyId);
+      const measurementUnits = await this.db.measurementUnitSetting.findMany({
+        where: {
+          companyId: targetCompanyId,
+          ...(normalizedName
+            ? {
+                name: {
+                  contains: normalizedName,
+                  mode: 'insensitive',
+                },
+              }
+            : {}),
+        },
+        orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+      });
 
-    return {
-      count: measurementUnits.length,
-      measurement_units: measurementUnits
-        .slice((safePage - 1) * safeLimit, safePage * safeLimit)
-        .map((unit: any) => this.toMeasurementUnitResponse(unit)),
-    };
+      return {
+        count: measurementUnits.length,
+        measurement_units: measurementUnits
+          .slice((safePage - 1) * safeLimit, safePage * safeLimit)
+          .map((unit: any) => this.toMeasurementUnitResponse(unit)),
+      };
+    } catch (error) {
+      this.logger.error(
+        `Failed to get measurement units. companyId=${query?.companyId ?? 'auto'} limit=${query?.limit ?? 'n/a'} page=${query?.page ?? 'n/a'} name=${query?.name ?? ''}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      throw error;
+    }
   }
 
   getDefaultMeasurementUnits() {
@@ -910,7 +920,7 @@ export class CompanySettingsService {
     const shortName = this.requireString(body.short_name, 'short_name');
     const precision = this.normalizeMeasurementPrecision(body.precision);
 
-    await this.ensureCompanySettingsSeeded(companyId);
+    await this.ensureMeasurementUnitsSeeded(companyId);
 
     const duplicate = await this.db.measurementUnitSetting.findFirst({
       where: {
@@ -2231,7 +2241,7 @@ export class CompanySettingsService {
       where: { companyId },
       update: {},
       create: {
-        id: currencyConfig?.id ?? DEFAULT_CURRENCY_CONFIG_ID,
+        id: this.resolveCompanyCurrencyConfigId(companyId, currencyConfig?.id),
         companyId,
         currencyId: currencyConfig?.currency?.id ?? DEFAULT_CURRENCY_ID,
         name: currencyConfig?.currency?.name ?? DEFAULT_CURRENCY_NAME,
@@ -2266,36 +2276,7 @@ export class CompanySettingsService {
       },
     });
 
-    const measurementUnitCount = await this.db.measurementUnitSetting.count({
-      where: { companyId },
-    });
-    if (measurementUnitCount === 0) {
-      const measurementUnits = this.parseJsonArray<MeasurementUnitProfile>(
-        process.env.MEASUREMENT_UNITS_JSON,
-        [DEFAULT_MEASUREMENT_UNIT],
-      );
-      await this.db.measurementUnitSetting.createMany({
-        data: measurementUnits.map((unit) => ({
-          id: this.resolveDefaultMeasurementUnitId(unit, companyId),
-          companyId,
-          name: this.stringOrDefault(
-            unit.name,
-            this.stringOrDefault(DEFAULT_MEASUREMENT_UNIT.name, 'Штука'),
-          ),
-          shortName: this.stringOrDefault(
-            unit.short_name,
-            this.stringOrDefault(DEFAULT_MEASUREMENT_UNIT.short_name, 'шт'),
-          ),
-          precision: this.stringOrDefault(
-            unit.precision,
-            this.stringOrDefault(DEFAULT_MEASUREMENT_UNIT.precision, '1'),
-          ),
-          isEditable: Boolean(unit.is_editable),
-          isDefault: Boolean(unit.is_default),
-        })),
-        skipDuplicates: true,
-      });
-    }
+    await this.ensureMeasurementUnitsSeeded(companyId);
 
     const priceTagCount = await this.db.priceTagSetting.count({
       where: { companyId },
@@ -2335,6 +2316,58 @@ export class CompanySettingsService {
         data: cheques.map((item) => this.toChequeRowData(item)),
         skipDuplicates: true,
       });
+    }
+  }
+
+  private async ensureMeasurementUnitsSeeded(companyId: string) {
+    try {
+    const companyExists = await this.db.company.findUnique({
+      where: { id: companyId },
+      select: { id: true },
+    });
+    if (!companyExists) {
+      this.logger.warn(
+        `Skipping measurement unit seed because company was not found: ${companyId}`,
+      );
+      return;
+    }
+
+    const measurementUnitCount = await this.db.measurementUnitSetting.count({
+      where: { companyId },
+    });
+    if (measurementUnitCount === 0) {
+      const measurementUnits = this.parseJsonArray<MeasurementUnitProfile>(
+        process.env.MEASUREMENT_UNITS_JSON,
+        [DEFAULT_MEASUREMENT_UNIT],
+      );
+      await this.db.measurementUnitSetting.createMany({
+        data: measurementUnits.map((unit) => ({
+          id: this.resolveDefaultMeasurementUnitId(unit, companyId),
+          companyId,
+          name: this.stringOrDefault(
+            unit.name,
+            this.stringOrDefault(DEFAULT_MEASUREMENT_UNIT.name, 'Штука'),
+          ),
+          shortName: this.stringOrDefault(
+            unit.short_name,
+            this.stringOrDefault(DEFAULT_MEASUREMENT_UNIT.short_name, 'шт'),
+          ),
+          precision: this.stringOrDefault(
+            unit.precision,
+            this.stringOrDefault(DEFAULT_MEASUREMENT_UNIT.precision, '1'),
+          ),
+          isEditable: Boolean(unit.is_editable),
+          isDefault: Boolean(unit.is_default),
+        })),
+        skipDuplicates: true,
+      });
+    }
+    } catch (error) {
+      this.logger.error(
+        `Failed to seed measurement units for companyId=${companyId}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      throw error;
     }
   }
 
@@ -2516,6 +2549,22 @@ export class CompanySettingsService {
   ) {
     const unitId = this.stringOrDefault(unit.id, randomUUID());
     return companyId === DEFAULT_COMPANY_ID ? unitId : `${companyId}:${unitId}`;
+  }
+
+  private resolveCompanyCurrencyConfigId(
+    companyId: string,
+    configuredId?: string,
+  ) {
+    const explicitId = this.optionalString(configuredId);
+    if (explicitId) {
+      return companyId === DEFAULT_COMPANY_ID
+        ? explicitId
+        : `${companyId}:${explicitId}`;
+    }
+
+    return companyId === DEFAULT_COMPANY_ID
+      ? DEFAULT_CURRENCY_CONFIG_ID
+      : `${companyId}:${DEFAULT_CURRENCY_CONFIG_ID}`;
   }
 
   private toMeasurementUnitResponse(unit: {
