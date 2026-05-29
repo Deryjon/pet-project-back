@@ -1655,7 +1655,9 @@ export class ProductsService {
         where,
         select: {
           id: true,
+          companyId: true,
           quantity: true,
+          metadata: true,
           purchasePrice: true,
           salePrice: true,
           stocks: {
@@ -1740,7 +1742,9 @@ export class ProductsService {
       where,
       select: {
         id: true,
+        companyId: true,
         quantity: true,
+        metadata: true,
         purchasePrice: true,
         salePrice: true,
         stocks: {
@@ -3831,11 +3835,13 @@ export class ProductsService {
   private toProductResponseV2(
     product: {
       id: number;
+      companyId?: string | null;
       name: string;
       sku: string | null;
       barcode: string | null;
       photo: string | null;
       quantity: number;
+      metadata?: unknown;
       purchasePrice: number | null;
       salePrice: number | null;
       productType: string | null;
@@ -3859,6 +3865,16 @@ export class ProductsService {
   ) {
     const currencyCode =
       this.companySettingsService.getDefaultCurrencyIsoCode();
+    const metadata =
+      product.metadata &&
+      typeof product.metadata === 'object' &&
+      !Array.isArray(product.metadata)
+        ? (product.metadata as Record<string, unknown>)
+        : {};
+    const measurementUnit = this.buildMeasurementUnitFromMetadata(
+      metadata,
+      product.companyId ?? '',
+    );
     const filteredStocks = this.filterStocksByBranchCodes(
       product.stocks,
       visibleBranchCodes,
@@ -3912,7 +3928,7 @@ export class ProductsService {
         total_active_measurement_value: totalMeasurementValue,
         total_inactive_measurement_value: 0,
       },
-      measurement_unit: DEFAULT_MEASUREMENT_UNIT,
+      measurement_unit: measurementUnit,
       shop_measurement_values: stockSummaries.map((stock) => ({
         small_left_measurement_value: 0,
         has_trigger: false,
@@ -4844,7 +4860,9 @@ export class ProductsService {
   private buildProductsStatistics(
     products: {
       id: number;
+      companyId?: string | null;
       quantity: number;
+      metadata?: unknown;
       purchasePrice: number | null;
       salePrice: number | null;
       stocks: {
@@ -4856,11 +4874,22 @@ export class ProductsService {
   ) {
     const currencyCode =
       this.companySettingsService.getDefaultCurrencyIsoCode();
+    const measurementUnits = new Map<string, number>();
     const totals = products.reduce(
       (acc, product) => {
         const measurementValue = product.stocks.length
           ? product.stocks.reduce((sum, stock) => sum + stock.quantity, 0)
           : product.quantity;
+        const metadata =
+          product.metadata &&
+          typeof product.metadata === 'object' &&
+          !Array.isArray(product.metadata)
+            ? (product.metadata as Record<string, unknown>)
+            : {};
+        const measurementUnit = this.buildMeasurementUnitFromMetadata(
+          metadata,
+          product.companyId ?? '',
+        );
 
         const supplySum = product.stocks.length
           ? product.stocks.reduce(
@@ -4887,6 +4916,11 @@ export class ProductsService {
         acc.zeroLeftCount += measurementValue <= 0 ? 1 : 0;
         acc.smallLeftCount +=
           measurementValue > 0 && measurementValue <= 5 ? 1 : 0;
+        measurementUnits.set(
+          measurementUnit.short_name,
+          (measurementUnits.get(measurementUnit.short_name) ?? 0) +
+            measurementValue,
+        );
         return acc;
       },
       {
@@ -4897,6 +4931,12 @@ export class ProductsService {
         smallLeftCount: 0,
       },
     );
+    const measurementUnitsList = [
+      ...measurementUnits.entries(),
+    ].map(([measurementUnit, measurementValue]) => ({
+      measurement_unit: measurementUnit,
+      measurement_value: measurementValue,
+    }));
 
     return {
       statistics: {
@@ -4919,30 +4959,18 @@ export class ProductsService {
         total_inactive_measurement_value: 0,
         measurement_value: {
           total: totals.totalMeasurementValue,
-          measurement_units: [
-            {
-              measurement_unit: DEFAULT_MEASUREMENT_UNIT.short_name,
-              measurement_value: totals.totalMeasurementValue,
-            },
-          ],
+          measurement_units: measurementUnitsList,
         },
         active_measurement_value: {
           total: totals.totalMeasurementValue,
-          measurement_units: [
-            {
-              measurement_unit: DEFAULT_MEASUREMENT_UNIT.short_name,
-              measurement_value: totals.totalMeasurementValue,
-            },
-          ],
+          measurement_units: measurementUnitsList,
         },
         inactive_measurement_value: {
           total: 0,
-          measurement_units: [
-            {
-              measurement_unit: DEFAULT_MEASUREMENT_UNIT.short_name,
-              measurement_value: 0,
-            },
-          ],
+          measurement_units: measurementUnitsList.map((item) => ({
+            measurement_unit: item.measurement_unit,
+            measurement_value: 0,
+          })),
         },
         small_left_count: totals.smallLeftCount,
         zero_left_count: totals.zeroLeftCount,
