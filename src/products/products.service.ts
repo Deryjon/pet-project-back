@@ -1656,6 +1656,7 @@ export class ProductsService {
         select: {
           id: true,
           companyId: true,
+          unit: true,
           quantity: true,
           metadata: true,
           purchasePrice: true,
@@ -1743,6 +1744,7 @@ export class ProductsService {
       select: {
         id: true,
         companyId: true,
+        unit: true,
         quantity: true,
         metadata: true,
         purchasePrice: true,
@@ -3612,6 +3614,17 @@ export class ProductsService {
     arrivalBranchCode: string,
     shopLookup: Map<string, ResolvedShop>,
   ) {
+    const metadata =
+      product.metadata &&
+      typeof product.metadata === 'object' &&
+      !Array.isArray(product.metadata)
+        ? (product.metadata as Record<string, unknown>)
+        : {};
+    const measurementUnit = this.buildMeasurementUnitFromMetadata(
+      metadata,
+      product.companyId ?? COMPANY_ID,
+      product.unit,
+    );
     const departureShop = this.resolveShopByBranchCode(
       departureBranchCode,
       shopLookup,
@@ -3748,7 +3761,7 @@ export class ProductsService {
       },
       supply_price: product.purchasePrice ?? 0,
       departure_shop_supply_price: departureSupplyPrice,
-      measurement_unit: DEFAULT_MEASUREMENT_UNIT,
+      measurement_unit: measurementUnit,
       custom_fields: null,
       base_name: product.name,
       product_attributes: [],
@@ -3836,6 +3849,7 @@ export class ProductsService {
     product: {
       id: number;
       companyId?: string | null;
+      unit?: string | null;
       name: string;
       sku: string | null;
       barcode: string | null;
@@ -3874,6 +3888,7 @@ export class ProductsService {
     const measurementUnit = this.buildMeasurementUnitFromMetadata(
       metadata,
       product.companyId ?? '',
+      product.unit,
     );
     const filteredStocks = this.filterStocksByBranchCodes(
       product.stocks,
@@ -4068,13 +4083,12 @@ export class ProductsService {
       !Array.isArray(product.metadata)
         ? (product.metadata as Record<string, unknown>)
         : {};
-    const measurementUnitId =
-      this.optionalString(metadata.measurement_unit_id) ??
-      DEFAULT_MEASUREMENT_UNIT.id;
     const measurementUnit = this.buildMeasurementUnitFromMetadata(
       metadata,
       product.companyId ?? context?.companyId ?? '',
+      product.unit,
     );
+    const measurementUnitId = measurementUnit.id;
     const description = this.optionalString(metadata.description) ?? '';
     const freePrice = this.toBooleanValue(metadata.free_price);
     const isVariative = this.toBooleanValue(metadata.is_variative);
@@ -4861,6 +4875,7 @@ export class ProductsService {
     products: {
       id: number;
       companyId?: string | null;
+      unit?: string | null;
       quantity: number;
       metadata?: unknown;
       purchasePrice: number | null;
@@ -4889,6 +4904,7 @@ export class ProductsService {
         const measurementUnit = this.buildMeasurementUnitFromMetadata(
           metadata,
           product.companyId ?? '',
+          product.unit,
         );
 
         const supplySum = product.stocks.length
@@ -5326,6 +5342,15 @@ export class ProductsService {
       }
 
       const differentFields = this.collectDifferentFields(existingProduct, row);
+      const measurementUnit = this.buildImportMeasurementUnit(
+        companyId,
+        row.measurementUnit,
+      );
+      const measurementType =
+        this.resolveMeasurementTypeValue(
+          row.measurementUnit,
+          measurementUnit.short_name,
+        ) || 'COUNTABLE';
 
       items.push({
         id: randomUUID(),
@@ -5340,9 +5365,9 @@ export class ProductsService {
         retail_price: row.retailPrice,
         supply_currency: currencyCode,
         retail_currency: currencyCode,
-        measurement_type: 'COUNTABLE',
+        measurement_type: measurementType,
         measurement_value: row.quantity,
-        measurement_unit: DEFAULT_MEASUREMENT_UNIT,
+        measurement_unit: measurementUnit,
         company_id: companyId,
         difference: differentFields.length > 0,
         different_fields: differentFields,
@@ -5499,6 +5524,17 @@ export class ProductsService {
     product: CatalogProductWithRelations,
     branchCode: string,
   ) {
+    const metadata =
+      product.metadata &&
+      typeof product.metadata === 'object' &&
+      !Array.isArray(product.metadata)
+        ? (product.metadata as Record<string, unknown>)
+        : {};
+    const measurementUnit = this.buildMeasurementUnitFromMetadata(
+      metadata,
+      product.companyId ?? '',
+      product.unit,
+    );
     const relevantStock = product.stocks.find(
       (stock) => stock.branchCode === branchCode,
     );
@@ -5527,7 +5563,7 @@ export class ProductsService {
         total_active_measurement_value: totalMeasurementValue,
         total_inactive_measurement_value: 0,
       },
-      measurement_unit: DEFAULT_MEASUREMENT_UNIT,
+      measurement_unit: measurementUnit,
       shop_measurement_values: product.stocks.map((stock) => ({
         small_left_measurement_value: 0,
         has_trigger: false,
@@ -5725,7 +5761,11 @@ export class ProductsService {
           salePrice: row.retailPrice,
           quantity: row.quantity,
           unit: row.measurementUnit,
-          metadata: this.buildImportMetadata(companyId, row.description ?? ''),
+          metadata: this.buildImportMetadata(
+            companyId,
+            row.description ?? '',
+            row.measurementUnit,
+          ),
           category: row.categoryName
             ? {
                 connectOrCreate: {
@@ -5929,6 +5969,9 @@ export class ProductsService {
             this.shouldUseFileValue(onMatchPolicy.description)
               ? (row.description ?? '')
               : this.resolveDescriptionFromMetadata(existingProduct.metadata),
+            this.shouldUseFileValue(onMatchPolicy.measurementUnit)
+              ? row.measurementUnit
+              : existingProduct.unit,
           ),
           category:
             this.shouldUseFileValue(onMatchPolicy.category) && row.categoryName
@@ -6640,11 +6683,30 @@ export class ProductsService {
     }
   }
 
-  private buildImportMetadata(companyId: string, description: string) {
+  private buildImportMeasurementUnit(
+    companyId: string,
+    measurementUnit?: string | null,
+  ) {
+    return this.buildMeasurementUnitFromMetadata(
+      {},
+      companyId,
+      measurementUnit,
+    );
+  }
+
+  private buildImportMetadata(
+    companyId: string,
+    description: string,
+    measurementUnit?: string | null,
+  ) {
+    const normalizedMeasurementUnit = this.optionalString(measurementUnit);
     return {
       company_id: companyId,
       description,
       imported: true,
+      measurement_unit_name: normalizedMeasurementUnit ?? null,
+      measurement_unit_short_name: normalizedMeasurementUnit ?? null,
+      measurement_unit_precision: DEFAULT_MEASUREMENT_UNIT.precision,
     } satisfies Prisma.InputJsonObject;
   }
 
@@ -7366,25 +7428,38 @@ export class ProductsService {
   private buildMeasurementUnitFromMetadata(
     metadata: Record<string, unknown>,
     companyId?: string | null,
+    fallbackUnit?: string | null,
   ) {
+    const normalizedFallbackUnit = this.optionalString(fallbackUnit);
+    const measurementUnitId =
+      this.optionalString(metadata.measurement_unit_id) ?? null;
+    const measurementUnitShortName =
+      this.optionalString(metadata.measurement_unit_short_name) ??
+      normalizedFallbackUnit ??
+      DEFAULT_MEASUREMENT_UNIT.short_name;
+    const measurementUnitName =
+      this.optionalString(metadata.measurement_unit_name) ??
+      normalizedFallbackUnit ??
+      DEFAULT_MEASUREMENT_UNIT.name;
+
     return {
       ...DEFAULT_MEASUREMENT_UNIT,
       id:
-        this.optionalString(metadata.measurement_unit_id) ??
-        DEFAULT_MEASUREMENT_UNIT.id,
-      name:
-        this.optionalString(metadata.measurement_unit_name) ??
-        DEFAULT_MEASUREMENT_UNIT.name,
+        measurementUnitId ??
+        (normalizedFallbackUnit &&
+        normalizedFallbackUnit !== DEFAULT_MEASUREMENT_UNIT.short_name
+          ? ''
+          : DEFAULT_MEASUREMENT_UNIT.id),
+      name: measurementUnitName,
       company_id: companyId ?? '',
-      short_name:
-        this.optionalString(metadata.measurement_unit_short_name) ??
-        DEFAULT_MEASUREMENT_UNIT.short_name,
+      short_name: measurementUnitShortName,
       precision:
         this.optionalString(metadata.measurement_unit_precision) ??
         DEFAULT_MEASUREMENT_UNIT.precision,
       is_default:
-        (this.optionalString(metadata.measurement_unit_id) ??
-          DEFAULT_MEASUREMENT_UNIT.id) === DEFAULT_MEASUREMENT_UNIT.id,
+        !measurementUnitId &&
+        (!normalizedFallbackUnit ||
+          normalizedFallbackUnit === DEFAULT_MEASUREMENT_UNIT.short_name),
     };
   }
 

@@ -2483,7 +2483,17 @@ export class SalesService {
       where: this.buildOpenSaleWhere(context, branchCode),
       include: {
         user: true,
-        items: true,
+        items: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                unit: true,
+                metadata: true,
+              },
+            },
+          },
+        },
       },
       orderBy: {
         updatedAt: 'desc',
@@ -2514,7 +2524,17 @@ export class SalesService {
       },
       include: {
         user: true,
-        items: true,
+        items: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                unit: true,
+                metadata: true,
+              },
+            },
+          },
+        },
       },
     });
   }
@@ -2599,7 +2619,17 @@ export class SalesService {
       where: { id },
       include: {
         user: true,
-        items: true,
+        items: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                unit: true,
+                metadata: true,
+              },
+            },
+          },
+        },
       },
     });
 
@@ -2731,6 +2761,11 @@ export class SalesService {
         barcode: string | null;
         sku: string | null;
         quantity: number;
+        product?: {
+          id: number;
+          unit?: string | null;
+          metadata?: unknown;
+        } | null;
       }[];
     },
     context?: any,
@@ -2753,7 +2788,22 @@ export class SalesService {
       items: sale.items.map((item) => ({
         id: item.id,
         product_id: item.productId,
-        product: item.productId ? { id: item.productId } : null,
+        product:
+          item.productId && item.product
+            ? {
+                id: item.product.id,
+                measurement_type: this.resolveMeasurementType(
+                  item.product.unit,
+                  this.extractMeasurementUnitShortName(item.product.metadata),
+                ),
+                measurement_unit: this.resolveMeasurementUnitFromMetadata(
+                  item.product.metadata,
+                  COMPANY_ID,
+                ),
+              }
+            : item.productId
+              ? { id: item.productId }
+              : null,
         name: item.name,
         sale_price: item.salePrice,
         barcode: item.barcode,
