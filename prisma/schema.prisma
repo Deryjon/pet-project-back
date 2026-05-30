@@ -200,11 +200,29 @@ model User {
   clientDebtRepayments ClientDebtRepayment[]
   createdTransfers   Transfer[]          @relation("TransferCreatedBy")
   acceptedTransfers  Transfer[]          @relation("TransferAcceptedBy")
+  authSessions       AuthSession[]
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
   @@unique([companyId, phoneNumber])
   @@index([status])
+}
+
+model AuthSession {
+  id               String    @id
+  userId           Int
+  refreshTokenHash String
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  replacedById     String?
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacedBy       AuthSession? @relation("AuthSessionReplacement", fields: [replacedById], references: [id], onDelete: SetNull)
+  previousSessions AuthSession[] @relation("AuthSessionReplacement")
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([userId, expiresAt])
+  @@index([userId, revokedAt])
 }
 
 model Plan {

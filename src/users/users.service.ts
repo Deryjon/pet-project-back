@@ -1364,6 +1364,28 @@ export class UsersService {
     };
   }
 
+  async assertAuthSessionIsActive(sessionId: string, userId: number) {
+    const session = await this.db.authSession.findUnique({
+      where: {
+        id: sessionId,
+      },
+      select: {
+        userId: true,
+        revokedAt: true,
+        expiresAt: true,
+      },
+    });
+
+    if (
+      !session ||
+      session.userId !== userId ||
+      session.revokedAt ||
+      session.expiresAt.getTime() <= Date.now()
+    ) {
+      throw new UnauthorizedException('Session is invalid');
+    }
+  }
+
   async toAuthProfile(userInput: UserWithRelations) {
     const user = await this.prepareAuthenticatedUser(userInput.id);
 
@@ -2762,7 +2784,11 @@ export class UsersService {
     try {
       const payload = await this.jwtService.verifyAsync<{
         sub: number;
+        sessionId?: string;
       }>(token);
+      if (payload.sessionId) {
+        await this.assertAuthSessionIsActive(payload.sessionId, payload.sub);
+      }
       const user = await this.findByIdOrThrow(payload.sub);
       await this.assertUserCanAuthenticate(user);
 
