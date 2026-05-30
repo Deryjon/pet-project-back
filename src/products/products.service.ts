@@ -6699,12 +6699,15 @@ export class ProductsService {
     description: string,
     measurementUnit?: string | null,
   ) {
-    const normalizedMeasurementUnit = this.optionalString(measurementUnit);
+    const normalizedMeasurementUnit = this.normalizeMeasurementUnitShortName(
+      measurementUnit,
+    );
     return {
       company_id: companyId,
       description,
       imported: true,
-      measurement_unit_name: normalizedMeasurementUnit ?? null,
+      measurement_unit_name:
+        this.normalizeMeasurementUnitName(normalizedMeasurementUnit) ?? null,
       measurement_unit_short_name: normalizedMeasurementUnit ?? null,
       measurement_unit_precision: DEFAULT_MEASUREMENT_UNIT.precision,
     } satisfies Prisma.InputJsonObject;
@@ -7430,15 +7433,21 @@ export class ProductsService {
     companyId?: string | null,
     fallbackUnit?: string | null,
   ) {
-    const normalizedFallbackUnit = this.optionalString(fallbackUnit);
+    const normalizedFallbackUnit = this.normalizeMeasurementUnitShortName(
+      fallbackUnit,
+    );
     const measurementUnitId =
       this.optionalString(metadata.measurement_unit_id) ?? null;
     const measurementUnitShortName =
-      this.optionalString(metadata.measurement_unit_short_name) ??
+      this.normalizeMeasurementUnitShortName(
+        this.optionalString(metadata.measurement_unit_short_name),
+      ) ??
       normalizedFallbackUnit ??
       DEFAULT_MEASUREMENT_UNIT.short_name;
     const measurementUnitName =
-      this.optionalString(metadata.measurement_unit_name) ??
+      this.normalizeMeasurementUnitName(
+        this.optionalString(metadata.measurement_unit_name),
+      ) ??
       normalizedFallbackUnit ??
       DEFAULT_MEASUREMENT_UNIT.name;
 
@@ -7468,7 +7477,9 @@ export class ProductsService {
     measurementUnitShortName?: string | null,
   ) {
     const normalizedValue = this.optionalString(value);
-    const normalizedShortName = this.optionalString(measurementUnitShortName);
+    const normalizedShortName = this.normalizeMeasurementUnitShortName(
+      measurementUnitShortName,
+    );
 
     if (
       !normalizedValue ||
@@ -7476,6 +7487,38 @@ export class ProductsService {
       normalizedValue.toLowerCase() === 'countable'
     ) {
       return normalizedShortName ?? normalizedValue ?? '';
+    }
+
+    return normalizedValue;
+  }
+
+  private normalizeMeasurementUnitShortName(value?: string | null) {
+    const normalizedValue = this.optionalString(value);
+    if (!normalizedValue) {
+      return null;
+    }
+
+    if (
+      normalizedValue.toLowerCase() === 'unit' ||
+      normalizedValue.toLowerCase() === 'countable'
+    ) {
+      return DEFAULT_MEASUREMENT_UNIT.short_name;
+    }
+
+    return normalizedValue;
+  }
+
+  private normalizeMeasurementUnitName(value?: string | null) {
+    const normalizedValue = this.optionalString(value);
+    if (!normalizedValue) {
+      return null;
+    }
+
+    if (
+      normalizedValue.toLowerCase() === 'unit' ||
+      normalizedValue.toLowerCase() === 'countable'
+    ) {
+      return DEFAULT_MEASUREMENT_UNIT.name;
     }
 
     return normalizedValue;
@@ -7529,11 +7572,15 @@ export class ProductsService {
         null,
       measurement_unit_name:
         measurementUnit?.name ??
-        this.optionalString(existingMetadata?.measurement_unit_name) ??
+        this.normalizeMeasurementUnitName(
+          this.optionalString(existingMetadata?.measurement_unit_name),
+        ) ??
         null,
       measurement_unit_short_name:
         measurementUnit?.short_name ??
-        this.optionalString(existingMetadata?.measurement_unit_short_name) ??
+        this.normalizeMeasurementUnitShortName(
+          this.optionalString(existingMetadata?.measurement_unit_short_name),
+        ) ??
         null,
       measurement_unit_precision:
         measurementUnit?.precision ??
