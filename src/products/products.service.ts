@@ -2707,7 +2707,7 @@ export class ProductsService {
       product_ids: products.map((product) => product.publicId),
       archived_at: this.companySettingsService.toIsoForCompany(
         archivedAt,
-        writeContext.companyId,
+        writeContext.companyId ?? undefined,
       ),
       archived_by: {
         id: String(writeContext.userId),
@@ -6835,7 +6835,7 @@ export class ProductsService {
         ),
       created_at: this.formatDateTime(
         movement.createdAt,
-        movement.companyId ?? context?.companyId ?? undefined,
+        undefined,
       ),
       external_id: movement.externalId || movement.order?.orderNumber || '',
       measurement_value: Number(movement.quantity ?? 0),
