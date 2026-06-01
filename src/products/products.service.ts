@@ -56,6 +56,20 @@ type ImportRowInput = {
   description?: string;
 };
 
+type ImportValidationIssue = {
+  code:
+    | 'missing_identifier'
+    | 'duplicate_sku'
+    | 'duplicate_barcode'
+    | 'invalid_quantity'
+    | 'missing_supply_price'
+    | 'missing_retail_price'
+    | 'retail_below_supply'
+    | 'match_error';
+  field?: string;
+  message: string;
+};
+
 type PreparedImportItem = {
   id: string;
   import_id: string;
@@ -83,6 +97,7 @@ type PreparedImportItem = {
   supplier_id: string;
   description: string;
   error?: string;
+  validation_issues: ImportValidationIssue[];
   action: 'create' | 'update' | 'error';
   raw: ImportRowInput;
 };
@@ -171,12 +186,16 @@ type ImportOnMatchPolicy = {
   description: ImportFieldResolution;
   measurementUnit: ImportFieldResolution;
   supplier: ImportFieldResolution;
+  supplyPrice: ImportFieldResolution;
+  retailPrice: ImportFieldResolution;
 };
 
 type ImportDryRunSummary = {
   create_count: number;
   update_count: number;
   error_count: number;
+  blocking_error_count: number;
+  conflicted_count: number;
   conflict_fields: Record<string, number>;
 };
 
@@ -1018,6 +1037,29 @@ export class ProductsService {
       this.defaultImportOnMatchPolicy();
     const now = this.formatDateTime(new Date());
     const importId = randomUUID();
+    const previewItems = await this.prepareImportItems(
+      importId,
+      companyId,
+      rows,
+      branchCode,
+      writeContext.companyId,
+    );
+
+    if (previewItems.some((item) => item.validation_issues.length > 0)) {
+      throw new BadRequestException({
+        message: 'Import without check contains validation errors',
+        import_id: importId,
+        errors: previewItems
+          .filter((item) => item.validation_issues.length > 0)
+          .map((item) => ({
+            row: item.row_number,
+            sku: item.product_sku,
+            barcode: item.product_barcode,
+            issues: item.validation_issues,
+          })),
+      });
+    }
+
     const result = await this.applyImportRows(
       rows,
       companyId,
@@ -1038,9 +1080,9 @@ export class ProductsService {
       status: 'completed',
       fields: this.extractImportFields(body),
       rows,
-      items: [],
+      items: previewItems,
       onMatchPolicy,
-      dryRunSummary: undefined,
+      dryRunSummary: this.buildImportDryRunSummary(previewItems),
       result,
       createdAt: now,
       updatedAt: now,
@@ -1078,6 +1120,12 @@ export class ProductsService {
       session.status = 'importing';
       session.updatedAt = this.formatDateTime(new Date());
       await this.ensureImportPreviewItems(session);
+      if (session.items.some((item) => item.validation_issues.length > 0)) {
+        session.status = 'preview_ready';
+        throw new BadRequestException(
+          this.buildImportCommitValidationError(session),
+        );
+      }
       const result = await this.applyImportRows(
         session.items
           .filter((item) => item.action !== 'error')
@@ -1157,6 +1205,140 @@ export class ProductsService {
     return value === 'without_check' ? 'without_check' : 'with_check';
   }
 
+  private normalizeImportFieldValue(value?: string | null) {
+    return value?.trim().toLocaleLowerCase() ?? '';
+  }
+
+  private buildImportDuplicateCounts(rows: ImportRowInput[]) {
+    const skuCounts = new Map<string, number>();
+    const barcodeCounts = new Map<string, number>();
+
+    for (const row of rows) {
+      const sku = this.normalizeImportFieldValue(row.sku);
+      const barcode = this.normalizeImportFieldValue(row.barcode);
+
+      if (sku) {
+        skuCounts.set(sku, (skuCounts.get(sku) ?? 0) + 1);
+      }
+
+      if (barcode) {
+        barcodeCounts.set(barcode, (barcodeCounts.get(barcode) ?? 0) + 1);
+      }
+    }
+
+    return {
+      skuCounts,
+      barcodeCounts,
+    };
+  }
+
+  private buildImportValidationIssues(
+    row: ImportRowInput,
+    options?: {
+      skuCounts?: Map<string, number>;
+      barcodeCounts?: Map<string, number>;
+      matchError?: string | null;
+    },
+  ): ImportValidationIssue[] {
+    const issues: ImportValidationIssue[] = [];
+    const sku = this.normalizeImportFieldValue(row.sku);
+    const barcode = this.normalizeImportFieldValue(row.barcode);
+
+    if (row.quantity <= 0) {
+      issues.push({
+        code: 'invalid_quantity',
+        field: 'quantity',
+        message: 'quantity must be greater than 0',
+      });
+    }
+
+    if (row.supplyPrice <= 0) {
+      issues.push({
+        code: 'missing_supply_price',
+        field: 'supply_price',
+        message: 'supply_price must be greater than 0',
+      });
+    }
+
+    if (row.retailPrice <= 0) {
+      issues.push({
+        code: 'missing_retail_price',
+        field: 'retail_price',
+        message: 'retail_price must be greater than 0',
+      });
+    }
+
+    if (row.retailPrice < row.supplyPrice) {
+      issues.push({
+        code: 'retail_below_supply',
+        field: 'retail_price',
+        message: 'retail_price cannot be lower than supply_price',
+      });
+    }
+
+    if (!row.name && !sku && !barcode) {
+      issues.push({
+        code: 'missing_identifier',
+        message: 'row must contain at least one identifier',
+      });
+    }
+
+    if (sku && (options?.skuCounts?.get(sku) ?? 0) > 1) {
+      issues.push({
+        code: 'duplicate_sku',
+        field: 'sku',
+        message: `sku "${row.sku}" is duplicated in the import file`,
+      });
+    }
+
+    if (barcode && (options?.barcodeCounts?.get(barcode) ?? 0) > 1) {
+      issues.push({
+        code: 'duplicate_barcode',
+        field: 'barcode',
+        message: `barcode "${row.barcode}" is duplicated in the import file`,
+      });
+    }
+
+    if (options?.matchError) {
+      issues.push({
+        code: 'match_error',
+        message: options.matchError,
+      });
+    }
+
+    return issues;
+  }
+
+  private buildImportCommitValidationError(session: ImportSession) {
+    const invalidItems = session.items
+      .filter((item) => item.validation_issues.length > 0)
+      .map((item) => ({
+        row: item.row_number,
+        sku: item.product_sku,
+        barcode: item.product_barcode,
+        issues: item.validation_issues,
+      }));
+
+    return {
+      message: 'Import contains validation errors',
+      import_id: session.id,
+      error_count: invalidItems.length,
+      errors: invalidItems,
+    };
+  }
+
+  private resolveProductCurrentSupplierName(
+    product: CatalogProductWithRelations,
+  ) {
+    return product.suppliers[0]?.supplier?.name?.trim() ?? '';
+  }
+
+  private resolveProductCurrentDescription(
+    product: CatalogProductWithRelations,
+  ) {
+    return this.resolveDescriptionFromMetadata(product.metadata).trim();
+  }
+
   private defaultImportOnMatchPolicy(): ImportOnMatchPolicy {
     return {
       name: 'keep_store',
@@ -1165,6 +1347,8 @@ export class ProductsService {
       description: 'keep_store',
       measurementUnit: 'keep_store',
       supplier: 'keep_store',
+      supplyPrice: 'keep_store',
+      retailPrice: 'keep_store',
     };
   }
 
@@ -1209,6 +1393,10 @@ export class ProductsService {
       'measurement_unit',
       'measurementUnit',
       'supplier',
+      'supply_price',
+      'supplyPrice',
+      'retail_price',
+      'retailPrice',
     ]);
 
     for (const key of Object.keys(policy)) {
@@ -1240,6 +1428,16 @@ export class ProductsService {
         'supplier',
         strict,
       ),
+      supplyPrice: this.parseImportFieldResolution(
+        policy.supply_price ?? policy.supplyPrice,
+        'supply_price',
+        strict,
+      ),
+      retailPrice: this.parseImportFieldResolution(
+        policy.retail_price ?? policy.retailPrice,
+        'retail_price',
+        strict,
+      ),
     };
   }
 
@@ -1254,6 +1452,8 @@ export class ProductsService {
       create_count: 0,
       update_count: 0,
       error_count: 0,
+      blocking_error_count: 0,
+      conflicted_count: 0,
       conflict_fields: {},
     };
 
@@ -1264,6 +1464,14 @@ export class ProductsService {
         summary.update_count += 1;
       } else {
         summary.error_count += 1;
+      }
+
+      if (item.validation_issues.length > 0) {
+        summary.blocking_error_count += 1;
+      }
+
+      if (item.different_fields.length > 0) {
+        summary.conflicted_count += 1;
       }
 
       for (const field of item.different_fields) {
@@ -5323,25 +5531,35 @@ export class ProductsService {
     const currencyCode = this.companySettingsService.getDefaultCurrencyIsoCode(
       contextCompanyId ?? companyId,
     );
+    const { skuCounts, barcodeCounts } = this.buildImportDuplicateCounts(rows);
 
     const items: PreparedImportItem[] = [];
     for (let index = 0; index < rows.length; index += 1) {
       const row = rows[index];
       let existingProduct: CatalogProductWithRelations | null = null;
-      let error = this.validateImportRow(row);
+      let matchError: string | null = null;
 
-      if (!error) {
+      if (!matchError) {
         try {
           existingProduct = await this.findImportMatchedProduct(companyId, row);
-        } catch (matchError) {
-          error =
-            matchError instanceof Error
-              ? matchError.message
+        } catch (error) {
+          matchError =
+            error instanceof Error
+              ? error.message
               : 'Failed to match import row';
         }
       }
 
-      const differentFields = this.collectDifferentFields(existingProduct, row);
+      const validationIssues = this.buildImportValidationIssues(row, {
+        skuCounts,
+        barcodeCounts,
+        matchError,
+      });
+      const differentFields = this.collectDifferentFields(
+        existingProduct,
+        row,
+        branchCode,
+      );
       const measurementUnit = this.buildImportMeasurementUnit(
         companyId,
         row.measurementUnit,
@@ -5382,8 +5600,14 @@ export class ProductsService {
         is_undeclared: false,
         supplier_id: '',
         description: row.description ?? '',
-        error: error ?? undefined,
-        action: error ? 'error' : existingProduct ? 'update' : 'create',
+        error: validationIssues[0]?.message,
+        validation_issues: validationIssues,
+        action:
+          validationIssues.length > 0
+            ? 'error'
+            : existingProduct
+              ? 'update'
+              : 'create',
         raw: row,
       });
     }
@@ -5392,19 +5616,7 @@ export class ProductsService {
   }
 
   private validateImportRow(row: ImportRowInput) {
-    if (row.quantity <= 0) {
-      return 'quantity must be greater than 0';
-    }
-
-    if (row.retailPrice < row.supplyPrice) {
-      return 'retail_price cannot be lower than supply_price';
-    }
-
-    if (!row.name && !row.sku && !row.barcode) {
-      return 'row must contain at least one identifier';
-    }
-
-    return null;
+    return this.buildImportValidationIssues(row)[0]?.message ?? null;
   }
 
   private async findImportMatchedProduct(
@@ -5492,12 +5704,31 @@ export class ProductsService {
   private collectDifferentFields(
     product: CatalogProductWithRelations | null,
     row: ImportRowInput,
+    branchCode: string,
   ) {
     if (!product) {
       return [];
     }
 
     const differentFields: string[] = [];
+    const existingStock = product.stocks.find(
+      (stock) => stock.branchCode === branchCode,
+    );
+    const currentSupplyPrice =
+      existingStock?.purchasePrice ?? product.purchasePrice ?? 0;
+    const currentRetailPrice = existingStock?.salePrice ?? product.salePrice ?? 0;
+    const currentMeasurementUnit = this.normalizeImportFieldValue(product.unit);
+    const fileMeasurementUnit = this.normalizeImportFieldValue(
+      row.measurementUnit,
+    );
+    const currentSupplier = this.normalizeImportFieldValue(
+      this.resolveProductCurrentSupplierName(product),
+    );
+    const fileSupplier = this.normalizeImportFieldValue(row.supplier);
+    const currentDescription = this.normalizeImportFieldValue(
+      this.resolveProductCurrentDescription(product),
+    );
+    const fileDescription = this.normalizeImportFieldValue(row.description);
 
     if (row.name && product.name.trim() !== row.name.trim()) {
       differentFields.push('name');
@@ -5515,6 +5746,26 @@ export class ProductsService {
       (product.category?.name ?? '').trim() !== row.categoryName.trim()
     ) {
       differentFields.push('category');
+    }
+
+    if (row.supplyPrice !== currentSupplyPrice) {
+      differentFields.push('supply_price');
+    }
+
+    if (row.retailPrice !== currentRetailPrice) {
+      differentFields.push('retail_price');
+    }
+
+    if (fileMeasurementUnit && currentMeasurementUnit !== fileMeasurementUnit) {
+      differentFields.push('measurement_unit');
+    }
+
+    if (fileSupplier && currentSupplier !== fileSupplier) {
+      differentFields.push('supplier');
+    }
+
+    if (fileDescription && currentDescription !== fileDescription) {
+      differentFields.push('description');
     }
 
     return differentFields;
@@ -5900,6 +6151,12 @@ export class ProductsService {
         existingStock?.salePrice ?? existingProduct.salePrice ?? 0;
       const beforeQuantity = existingStock?.quantity ?? 0;
       const afterQuantity = beforeQuantity + row.quantity;
+      const appliedSupplyPrice = this.shouldUseFileValue(onMatchPolicy.supplyPrice)
+        ? row.supplyPrice
+        : previousSupplyPrice;
+      const appliedRetailPrice = this.shouldUseFileValue(onMatchPolicy.retailPrice)
+        ? row.retailPrice
+        : previousRetailPrice;
 
       if (existingStock) {
         await tx.productStock.update({
@@ -5908,8 +6165,8 @@ export class ProductsService {
           },
           data: {
             quantity: afterQuantity,
-            purchasePrice: row.supplyPrice,
-            salePrice: row.retailPrice,
+            purchasePrice: appliedSupplyPrice,
+            salePrice: appliedRetailPrice,
           },
         });
         changedFields.push({
@@ -5922,8 +6179,8 @@ export class ProductsService {
             productId,
             branchCode,
             quantity: afterQuantity,
-            purchasePrice: row.supplyPrice,
-            salePrice: row.retailPrice,
+            purchasePrice: appliedSupplyPrice,
+            salePrice: appliedRetailPrice,
           },
         });
         changedFields.push({
@@ -5932,14 +6189,18 @@ export class ProductsService {
         });
       }
 
-      changedFields.push({
-        field: 'purchasePrice',
-        reason: 'replaced_with_last_arrival',
-      });
-      changedFields.push({
-        field: 'salePrice',
-        reason: 'replaced_with_last_arrival',
-      });
+      if (this.shouldUseFileValue(onMatchPolicy.supplyPrice)) {
+        changedFields.push({
+          field: 'purchasePrice',
+          reason: 'replaced_with_last_arrival',
+        });
+      }
+      if (this.shouldUseFileValue(onMatchPolicy.retailPrice)) {
+        changedFields.push({
+          field: 'salePrice',
+          reason: 'replaced_with_last_arrival',
+        });
+      }
 
       const allStocks = await tx.productStock.findMany({
         where: {
@@ -5956,8 +6217,8 @@ export class ProductsService {
             this.shouldUseFileValue(onMatchPolicy.name) && row.name
               ? row.name
               : undefined,
-          purchasePrice: row.supplyPrice,
-          salePrice: row.retailPrice,
+          purchasePrice: appliedSupplyPrice,
+          salePrice: appliedRetailPrice,
           quantity: allStocks.reduce((sum, stock) => sum + stock.quantity, 0),
           unit:
             this.shouldUseFileValue(onMatchPolicy.measurementUnit) &&
@@ -6044,11 +6305,11 @@ export class ProductsService {
         });
       }
 
-      if (previousSupplyPrice !== row.supplyPrice) {
+      if (previousSupplyPrice !== appliedSupplyPrice) {
         await this.recordSupplyPriceHistory(tx, {
           productId,
           shopId,
-          supplyPrice: row.supplyPrice,
+          supplyPrice: appliedSupplyPrice,
           oldSupplyPrice: previousSupplyPrice,
           createdById,
         });
@@ -6066,9 +6327,9 @@ export class ProductsService {
         externalId: '',
         fromShopId: shopId,
         toShopId: shopId,
-        supplyPrice: row.supplyPrice,
-        retailPrice: row.retailPrice,
-        newRetailPrice: row.retailPrice,
+        supplyPrice: appliedSupplyPrice,
+        retailPrice: appliedRetailPrice,
+        newRetailPrice: appliedRetailPrice,
         fromRetailPrice: previousRetailPrice,
         fromSupplyPrice: previousSupplyPrice,
       });
@@ -6104,6 +6365,18 @@ export class ProductsService {
     if (this.shouldUseFileValue(onMatchPolicy.category) && row.categoryName) {
       changedFields.push({
         field: 'category',
+        reason: 'updated_from_file_by_policy',
+      });
+    }
+    if (this.shouldUseFileValue(onMatchPolicy.supplyPrice)) {
+      changedFields.push({
+        field: 'supplyPrice',
+        reason: 'updated_from_file_by_policy',
+      });
+    }
+    if (this.shouldUseFileValue(onMatchPolicy.retailPrice)) {
+      changedFields.push({
+        field: 'retailPrice',
         reason: 'updated_from_file_by_policy',
       });
     }
@@ -7840,7 +8113,7 @@ export class ProductsService {
       return this.toBooleanValue(explicitAutoCommit);
     }
 
-    return true;
+    return false;
   }
 
   private extractFirstImage(value: unknown) {
