@@ -51,6 +51,22 @@ export class CompanySettingsController {
     return this.companySettingsService.getCompany();
   }
 
+  @Put('company')
+  @Put('v1/company')
+  async updateCompany(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const context = authorization
+      ? await this.usersService.getRequestContext(authorization)
+      : null;
+
+    return this.companySettingsService.updateCompany(
+      body,
+      context?.companyId || undefined,
+    );
+  }
+
   @Get('shop')
   async getShops(
     @Query('limit') limit?: string,

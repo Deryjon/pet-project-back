@@ -680,6 +680,121 @@ export class CompanySettingsService {
     };
   }
 
+  async updateCompany(
+    body: Record<string, unknown>,
+    companyId?: string,
+  ) {
+    const targetCompanyId =
+      (await this.resolveCompanyId(companyId ?? this.optionalString(body.company_id))) ??
+      this.optionalString(body.company_id) ??
+      DEFAULT_COMPANY_ID;
+
+    await this.ensureCompanySettingsSeeded(targetCompanyId);
+
+    const company = await this.db.company.findUnique({
+      where: { id: targetCompanyId },
+      select: { id: true, name: true, subdomain: true, isActive: true },
+    });
+
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    const existingProfile = await this.db.companyProfileSetting.findUnique({
+      where: { companyId: targetCompanyId },
+    });
+    const nextProfile = {
+      ...DEFAULT_COMPANY_PROFILE,
+      ...this.objectOrDefault(existingProfile?.data, {}),
+    } as Record<string, unknown>;
+
+    const rawTimeZoneId = this.optionalString(body.time_zone_id);
+    const rawTimeZoneName = this.optionalString(body.time_zone_name);
+
+    if (rawTimeZoneId || rawTimeZoneName) {
+      await this.ensureReferenceDataSeeded();
+
+      const zone = await this.db.timeZoneReference.findFirst({
+        where: rawTimeZoneId
+          ? { id: rawTimeZoneId }
+          : {
+              shortName: rawTimeZoneName,
+            },
+      });
+
+      if (!zone) {
+        throw new BadRequestException('time_zone_id or time_zone_name is invalid');
+      }
+
+      nextProfile.time_zone_id = zone.id;
+      nextProfile.time_zone_name = zone.shortName;
+      nextProfile.time_zone_gmt = zone.gmtOffset;
+    }
+
+    const updatedProfile = await this.db.companyProfileSetting.upsert({
+      where: { companyId: targetCompanyId },
+      update: {
+        data: nextProfile,
+      },
+      create: {
+        companyId: targetCompanyId,
+        data: nextProfile,
+      },
+    });
+
+    const merged = {
+      ...DEFAULT_COMPANY_PROFILE,
+      ...this.objectOrDefault(updatedProfile.data, {}),
+      id: company.id,
+      name: company.name,
+      subdomen: company.subdomain,
+      is_active: company.isActive,
+    };
+
+    return merged;
+  }
+
+  async getCompanyTimeZone(companyId?: string) {
+    const targetCompanyId =
+      (await this.resolveCompanyId(companyId)) ?? companyId?.trim() ?? DEFAULT_COMPANY_ID;
+
+    await this.ensureCompanySettingsSeeded(targetCompanyId);
+    await this.ensureReferenceDataSeeded();
+
+    const profile = await this.db.companyProfileSetting.findUnique({
+      where: { companyId: targetCompanyId },
+    });
+    const merged = {
+      ...DEFAULT_COMPANY_PROFILE,
+      ...this.objectOrDefault(profile?.data, {}),
+    } as Record<string, unknown>;
+
+    const zone = await this.db.timeZoneReference.findFirst({
+      where: {
+        OR: [
+          {
+            id: this.stringOrDefault(merged.time_zone_id, ''),
+          },
+          {
+            shortName: this.stringOrDefault(merged.time_zone_name, ''),
+          },
+        ],
+      },
+    });
+
+    return {
+      company_id: targetCompanyId,
+      time_zone_id:
+        zone?.id ?? this.stringOrDefault(merged.time_zone_id, ''),
+      time_zone_name:
+        zone?.shortName ??
+        this.stringOrDefault(merged.time_zone_name, 'Asia/Tashkent'),
+      time_zone_gmt:
+        zone?.gmtOffset ??
+        this.stringOrDefault(merged.time_zone_gmt, '+05:00'),
+    };
+  }
+
   async getShops(query: {
     page?: number;
     limit?: number;
