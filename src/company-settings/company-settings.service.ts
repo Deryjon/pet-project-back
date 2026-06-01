@@ -523,6 +523,10 @@ const DEFAULT_PRICE_TAGS: PriceTagProfile[] = [
 @Injectable()
 export class CompanySettingsService {
   private currencyIsoCache = new Map<string, string>();
+  private companyTimeZoneCache = new Map<
+    string,
+    { id: string; name: string; gmtOffset: string }
+  >();
   private readonly logger = new Logger(CompanySettingsService.name);
 
   constructor(private readonly prisma: PrismaService) {}
@@ -575,6 +579,65 @@ export class CompanySettingsService {
   getDefaultCurrencyIsoCode(companyId?: string): string {
     const key = companyId?.trim() || DEFAULT_COMPANY_ID;
     return this.currencyIsoCache.get(key) ?? DEFAULT_CURRENCY_ISO_CODE;
+  }
+
+  getDefaultTimeZone(companyId?: string) {
+    const key = companyId?.trim() || DEFAULT_COMPANY_ID;
+    return (
+      this.companyTimeZoneCache.get(key) ?? {
+        id: this.stringOrDefault(DEFAULT_COMPANY_PROFILE.time_zone_id, ''),
+        name: this.stringOrDefault(
+          DEFAULT_COMPANY_PROFILE.time_zone_name,
+          'Asia/Tashkent',
+        ),
+        gmtOffset: this.stringOrDefault(
+          DEFAULT_COMPANY_PROFILE.time_zone_gmt,
+          '+05:00',
+        ),
+      }
+    );
+  }
+
+  formatDateTimeForCompany(
+    value: Date | string | null | undefined,
+    companyId?: string,
+  ) {
+    const date = this.normalizeDate(value);
+    if (!date) {
+      return '';
+    }
+
+    const timeZone = this.getDefaultTimeZone(companyId).name;
+    const parts = this.getDateParts(date, timeZone);
+    return `${parts.year}-${parts.month}-${parts.day} ${parts.hours}:${parts.minutes}:${parts.seconds}`;
+  }
+
+  formatDateForCompany(
+    value: Date | string | null | undefined,
+    companyId?: string,
+  ) {
+    const date = this.normalizeDate(value);
+    if (!date) {
+      return '';
+    }
+
+    const timeZone = this.getDefaultTimeZone(companyId).name;
+    const parts = this.getDateParts(date, timeZone);
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  }
+
+  toIsoForCompany(
+    value: Date | string | null | undefined,
+    companyId?: string,
+  ) {
+    const date = this.normalizeDate(value);
+    if (!date) {
+      return '';
+    }
+
+    const timeZone = this.getDefaultTimeZone(companyId).name;
+    const parts = this.getDateParts(date, timeZone);
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hours}:${parts.minutes}:${parts.seconds}`;
   }
 
   async getCountries(limit?: number) {
@@ -672,6 +735,12 @@ export class CompanySettingsService {
       return merged;
     }
 
+    this.companyTimeZoneCache.set(companyFromDb?.id ?? DEFAULT_COMPANY_ID, {
+      id: selectedZone.id,
+      name: selectedZone.shortName,
+      gmtOffset: selectedZone.gmtOffset,
+    });
+
     return {
       ...merged,
       time_zone_id: merged.time_zone_id || selectedZone.id,
@@ -729,6 +798,11 @@ export class CompanySettingsService {
       nextProfile.time_zone_id = zone.id;
       nextProfile.time_zone_name = zone.shortName;
       nextProfile.time_zone_gmt = zone.gmtOffset;
+      this.companyTimeZoneCache.set(targetCompanyId, {
+        id: zone.id,
+        name: zone.shortName,
+        gmtOffset: zone.gmtOffset,
+      });
     }
 
     const updatedProfile = await this.db.companyProfileSetting.upsert({
@@ -782,7 +856,7 @@ export class CompanySettingsService {
       },
     });
 
-    return {
+    const response = {
       company_id: targetCompanyId,
       time_zone_id:
         zone?.id ?? this.stringOrDefault(merged.time_zone_id, ''),
@@ -793,6 +867,14 @@ export class CompanySettingsService {
         zone?.gmtOffset ??
         this.stringOrDefault(merged.time_zone_gmt, '+05:00'),
     };
+
+    this.companyTimeZoneCache.set(targetCompanyId, {
+      id: response.time_zone_id,
+      name: response.time_zone_name,
+      gmtOffset: response.time_zone_gmt,
+    });
+
+    return response;
   }
 
   async getShops(query: {
@@ -2740,6 +2822,40 @@ export class CompanySettingsService {
     }
 
     return normalized;
+  }
+
+  private normalizeDate(value: Date | string | null | undefined) {
+    if (!value) {
+      return null;
+    }
+
+    const date = value instanceof Date ? value : new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  private getDateParts(value: Date, timeZone: string) {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    });
+
+    const parts = formatter.formatToParts(value);
+    const map = new Map(parts.map((part) => [part.type, part.value]));
+
+    return {
+      year: map.get('year') ?? '0000',
+      month: map.get('month') ?? '00',
+      day: map.get('day') ?? '00',
+      hours: map.get('hour') ?? '00',
+      minutes: map.get('minute') ?? '00',
+      seconds: map.get('second') ?? '00',
+    };
   }
 
   private optionalBoolean(value: unknown) {

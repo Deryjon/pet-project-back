@@ -100,11 +100,15 @@ export class DashboardService {
       }
       const actualEndDate = nextBucketStart ? new Date(nextBucketStart.getTime() - 1) : bucketEndDate;
 
-      return { start_date: this.formatDateTime(bucketStart), end_date: this.formatDateTime(actualEndDate), total_price: 0 };
+      return {
+        start_date: this.formatDateTime(bucketStart, companyId),
+        end_date: this.formatDateTime(actualEndDate, companyId),
+        total_price: 0,
+      };
     });
     const shopOrders = bucketStarts.map((bucketStart) => {
       const row: Record<string, number | string> = {
-        start_date: this.formatDateTime(bucketStart),
+        start_date: this.formatDateTime(bucketStart, companyId),
       };
 
       for (const shop of shops) {
@@ -420,15 +424,8 @@ export class DashboardService {
     return -1; // Not found
   }
 
-  private formatDateTime(value: Date) {
-    const year = value.getFullYear();
-    const month = String(value.getMonth() + 1).padStart(2, '0');
-    const day = String(value.getDate()).padStart(2, '0');
-    const hours = String(value.getHours()).padStart(2, '0');
-    const minutes = String(value.getMinutes()).padStart(2, '0');
-    const seconds = String(value.getSeconds()).padStart(2, '0');
-
-    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  private formatDateTime(value: Date, companyId?: string) {
+    return this.companySettingsService.formatDateTimeForCompany(value, companyId);
   }
 
   private getSignedSaleAmount(sale: {

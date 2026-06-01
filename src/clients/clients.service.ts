@@ -9,6 +9,7 @@ import {
   ClientGender,
   Prisma,
 } from '@prisma/client';
+import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 
@@ -25,6 +26,7 @@ type ClientListRecord = Prisma.ClientGetPayload<{
 export class ClientsService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly companySettingsService: CompanySettingsService,
     private readonly usersService: UsersService,
   ) {}
 
@@ -403,7 +405,10 @@ export class ClientsService {
         type: 'log',
         title: 'Добавление клиента в систему',
         description: null,
-        happened_at: client.createdAt.toISOString(),
+        happened_at: this.companySettingsService.toIsoForCompany(
+          client.createdAt,
+          context.companyId,
+        ),
         amount_uzs: null,
         order_id: null,
       },
@@ -413,7 +418,10 @@ export class ClientsService {
         type: 'purchase',
         title: `Покупка №${order.number}`,
         description: null,
-        happened_at: (order.paidAt ?? order.createdAt).toISOString(),
+        happened_at: this.companySettingsService.toIsoForCompany(
+          order.paidAt ?? order.createdAt,
+          context.companyId,
+        ),
         amount_uzs: Number(order.payableTotal ?? 0),
         order_id: order.id,
       })),
@@ -423,7 +431,10 @@ export class ClientsService {
         type: 'log',
         title: 'Добавлена заметка',
         description: note.text,
-        happened_at: note.createdAt.toISOString(),
+        happened_at: this.companySettingsService.toIsoForCompany(
+          note.createdAt,
+          context.companyId,
+        ),
         amount_uzs: null,
         order_id: null,
       })),
@@ -433,7 +444,10 @@ export class ClientsService {
         type: 'log',
         title: 'Создан долг',
         description: null,
-        happened_at: debt.createdAt.toISOString(),
+        happened_at: this.companySettingsService.toIsoForCompany(
+          debt.createdAt,
+          context.companyId,
+        ),
         amount_uzs: this.decimalToNumber(debt.amountUzs),
         order_id: null,
       })),
@@ -443,7 +457,10 @@ export class ClientsService {
         type: 'log',
         title: 'Погашение долга',
         description: `Долг ${repayment.debtId}`,
-        happened_at: repayment.createdAt.toISOString(),
+        happened_at: this.companySettingsService.toIsoForCompany(
+          repayment.createdAt,
+          context.companyId,
+        ),
         amount_uzs: this.decimalToNumber(repayment.amountUzs),
         order_id: null,
       })),
@@ -636,7 +653,10 @@ export class ClientsService {
       status: debt.status,
       comment: debt.comment,
       shop: null,
-      created_at: debt.createdAt.toISOString(),
+      created_at: this.companySettingsService.toIsoForCompany(
+        debt.createdAt,
+        context.companyId,
+      ),
       receipt_url: debt.receiptUrl,
     };
   }
@@ -712,7 +732,10 @@ export class ClientsService {
       due_date: this.toDateOnly(debt.dueDate),
       status: debt.status,
       comment: debt.comment,
-      created_at: debt.createdAt.toISOString(),
+      created_at: this.companySettingsService.toIsoForCompany(
+        debt.createdAt,
+        context.companyId,
+      ),
       receipt_url: debt.receiptUrl,
     };
   }
@@ -731,8 +754,18 @@ export class ClientsService {
       type: card.type,
       number: card.number,
       is_active: card.isActive,
-      issued_at: card.issuedAt?.toISOString() ?? null,
-      expires_at: card.expiresAt?.toISOString() ?? null,
+      issued_at: card.issuedAt
+        ? this.companySettingsService.toIsoForCompany(
+            card.issuedAt,
+            context.companyId,
+          )
+        : null,
+      expires_at: card.expiresAt
+        ? this.companySettingsService.toIsoForCompany(
+            card.expiresAt,
+            context.companyId,
+          )
+        : null,
     }));
   }
 
@@ -1048,14 +1081,14 @@ export class ClientsService {
       metrics.set(item.clientId, {
         totalPurchases: Number(item._sum.payableTotal ?? 0),
         visitsCount: item._count._all,
-        lastPurchaseAt:
-          item._max.paidAt?.toISOString() ??
-          item._max.createdAt?.toISOString() ??
-          null,
-        firstPurchaseAt:
-          item._min.paidAt?.toISOString() ??
-          item._min.createdAt?.toISOString() ??
-          null,
+        lastPurchaseAt: this.companySettingsService.toIsoForCompany(
+          item._max.paidAt ?? item._max.createdAt ?? null,
+          context.companyId,
+        ),
+        firstPurchaseAt: this.companySettingsService.toIsoForCompany(
+          item._min.paidAt ?? item._min.createdAt ?? null,
+          context.companyId,
+        ),
       });
     }
 
@@ -1088,9 +1121,17 @@ export class ClientsService {
       total_purchases_uzs:
         metric?.totalPurchases ?? this.decimalToNumber(client.totalPurchasesUzs),
       last_purchase_at:
-        metric?.lastPurchaseAt ?? client.lastPurchaseAt?.toISOString() ?? null,
+        metric?.lastPurchaseAt ??
+        this.companySettingsService.toIsoForCompany(
+          client.lastPurchaseAt,
+          client.companyId,
+        ) ??
+        null,
       birth_date: this.toDateOnly(client.birthDate),
-      registered_at: client.registeredAt.toISOString(),
+      registered_at: this.companySettingsService.toIsoForCompany(
+        client.registeredAt,
+        client.companyId,
+      ),
       registration_shop: client.registrationShop
         ? { id: client.registrationShop.id, name: client.registrationShop.name }
         : null,
@@ -1126,7 +1167,13 @@ export class ClientsService {
         : { id: '', name: '' },
       registered_shop_name: '',
       last_purchase_date: this.toBillzDateTime(
-        metric?.lastPurchaseAt ?? client.lastPurchaseAt?.toISOString() ?? null,
+        metric?.lastPurchaseAt ??
+          this.companySettingsService.toIsoForCompany(
+            client.lastPurchaseAt,
+            client.companyId,
+          ) ??
+          null,
+        client.companyId,
       ),
       channel: { id: '', company_id: '', name: '' },
       sms_notification: client.smsNotifications,
@@ -1147,10 +1194,10 @@ export class ClientsService {
         ? client.tags.map((item) => item.tag.name)
         : null,
       cards: [],
-      created_at: this.toBillzDateTime(client.createdAt),
+      created_at: this.toBillzDateTime(client.createdAt, client.companyId),
       loyalty_program_id: '',
       loyalty_program_level_id: '',
-      last_update_date: this.toBillzDateTime(client.updatedAt),
+      last_update_date: this.toBillzDateTime(client.updatedAt, client.companyId),
       balance: this.decimalToNumber(client.balanceUzs),
       company_name: '',
       chat_id: '',
@@ -1439,7 +1486,10 @@ export class ClientsService {
             name: `${note.createdBy.firstName} ${note.createdBy.lastName}`.trim(),
           }
         : null,
-      created_at: note.createdAt.toISOString(),
+      created_at: this.companySettingsService.toIsoForCompany(
+        note.createdAt,
+        undefined,
+      ),
     };
   }
 
@@ -1558,15 +1608,11 @@ export class ClientsService {
     return value ? value.toISOString().slice(0, 10) : null;
   }
 
-  private toBillzDateTime(value: string | Date | null | undefined) {
-    if (!value) {
-      return '';
-    }
-    const date = value instanceof Date ? value : new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return '';
-    }
-    return date.toISOString().slice(0, 19).replace('T', ' ');
+  private toBillzDateTime(
+    value: string | Date | null | undefined,
+    companyId?: string,
+  ) {
+    return this.companySettingsService.formatDateTimeForCompany(value, companyId);
   }
 
   private parseNullableGender(value: string | string[] | undefined) {

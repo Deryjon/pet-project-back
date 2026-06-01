@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { ReportsMapper } from './reports.mapper';
@@ -14,6 +15,7 @@ import { SellerReportsService } from './seller-reports.service';
 export class ReportsService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly companySettingsService: CompanySettingsService,
     private readonly usersService: UsersService,
     private readonly reportsRepository: ReportsRepository,
     private readonly reportsMapper: ReportsMapper,
@@ -2340,7 +2342,7 @@ export class ReportsService {
         is_import: false,
         is_supplier_order: false,
         type: '',
-        date: this.formatDateTime(item.createdAt),
+        date: this.formatDateTime(item.createdAt, item.companyId),
         imported_qty: quantity,
         imported_retail_sum: quantity * retailPrice,
         imported_supply_sum: quantity * supplyPrice,
@@ -2541,7 +2543,10 @@ export class ReportsService {
             supply_price: supplyPrice,
             retail_price: retailPrice,
             measurement_value: quantity,
-            last_import: this.formatDateTime(product.updatedAt ?? product.createdAt ?? new Date()),
+            last_import: this.formatDateTime(
+              product.updatedAt ?? product.createdAt ?? new Date(),
+              product.companyId,
+            ),
             estimated_income: estimatedIncome,
             estimated_margin: estimatedMargin,
             rows_count: 0,
@@ -2838,7 +2843,7 @@ export class ReportsService {
   private groupSalesByDay(sales: any[]) {
     const byDay = new Map<string, number>();
     for (const sale of sales) {
-      const key = this.formatDate(sale.paidAt ?? sale.createdAt);
+      const key = this.formatDate(sale.paidAt ?? sale.createdAt, sale.companyId);
       byDay.set(key, (byDay.get(key) ?? 0) + this.getSaleNetAmount(sale));
     }
     return [...byDay.entries()].map(([date, amount]) => ({ date, amount }));
@@ -2847,7 +2852,7 @@ export class ReportsService {
   private groupProfitByDay(sales: any[]) {
     const byDay = new Map<string, number>();
     for (const sale of sales) {
-      const key = this.formatDate(sale.paidAt ?? sale.createdAt);
+      const key = this.formatDate(sale.paidAt ?? sale.createdAt, sale.companyId);
       const profit = sale.items.reduce(
         (sum: number, item: any) => sum + this.getItemProfit(item) * this.getSaleSign(sale),
         0,
@@ -3511,20 +3516,18 @@ export class ReportsService {
     return end;
   }
 
-  private formatDate(value: Date) {
-    return value.toISOString().slice(0, 10);
+  private formatDate(value: Date, companyId?: string | null) {
+    return this.companySettingsService.formatDateForCompany(
+      value,
+      companyId ?? undefined,
+    );
   }
 
-  private formatDateTime(value: Date | string) {
-    const date = new Date(value);
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    const seconds = String(date.getSeconds()).padStart(2, '0');
-
-    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  private formatDateTime(value: Date | string, companyId?: string | null) {
+    return this.companySettingsService.formatDateTimeForCompany(
+      value,
+      companyId ?? undefined,
+    );
   }
 
   private optionalString(value: unknown) {

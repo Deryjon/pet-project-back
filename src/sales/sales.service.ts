@@ -336,7 +336,7 @@ export class SalesService {
 
     const grouped = new Map<string, unknown[]>();
     for (const sale of sales) {
-      const date = this.formatDate(sale.createdAt);
+      const date = this.formatDate(sale.createdAt, sale.companyId);
       const orders = grouped.get(date) ?? [];
       orders.push(await this.toV2OrderResponse(sale, context, shopLookup));
       grouped.set(date, orders);
@@ -3139,7 +3139,7 @@ export class SalesService {
             : 0,
         version_number: 1,
         comment: '',
-        created_at: this.formatDateTime(sale.createdAt),
+        created_at: this.formatDateTime(sale.createdAt, sale.companyId),
         created_at_utc: '',
         order_items: orderItems,
         order_payments:
@@ -3194,7 +3194,7 @@ export class SalesService {
         has_payment_token: false,
         payment_token: '',
       },
-      created_at: this.formatDateTime(sale.createdAt),
+      created_at: this.formatDateTime(sale.createdAt, sale.companyId),
       deleted_at: 0,
       created_at_utc: '',
       future_time: '',
@@ -3209,7 +3209,7 @@ export class SalesService {
       epos_logs: null,
       finished_at: '',
       display_finished_at: '',
-      sold_at: sale.isDraft ? '' : this.formatDateTime(sale.updatedAt),
+      sold_at: sale.isDraft ? '' : this.formatDateTime(sale.updatedAt, sale.companyId),
       display_sold_at: '',
       display_deleted_at: '',
       order_debt_payments: null,
@@ -3217,7 +3217,7 @@ export class SalesService {
       park_note: sale.parkNote ?? '',
       exchange_disabled: false,
       total_remaining_debt_in_chain: 0,
-      updated_at: this.formatDateTime(sale.updatedAt),
+      updated_at: this.formatDateTime(sale.updatedAt, sale.companyId),
       has_insurance: false,
       insurance: null,
       is_calculated: true,
@@ -4163,22 +4163,17 @@ export class SalesService {
     };
   }
 
-  private formatDateTime(value: Date) {
-    const year = value.getFullYear();
-    const month = String(value.getMonth() + 1).padStart(2, '0');
-    const day = String(value.getDate()).padStart(2, '0');
-    const hours = String(value.getHours()).padStart(2, '0');
-    const minutes = String(value.getMinutes()).padStart(2, '0');
-    const seconds = String(value.getSeconds()).padStart(2, '0');
-
-    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  private formatDateTime(value: Date, companyId?: string | null) {
+    return this.companySettingsService.formatDateTimeForCompany(
+      value,
+      companyId ?? undefined,
+    );
   }
 
-  private formatDate(value: Date) {
-    const year = value.getFullYear();
-    const month = String(value.getMonth() + 1).padStart(2, '0');
-    const day = String(value.getDate()).padStart(2, '0');
-
-    return `${year}-${month}-${day}`;
+  private formatDate(value: Date, companyId?: string | null) {
+    return this.companySettingsService.formatDateForCompany(
+      value,
+      companyId ?? undefined,
+    );
   }
 }

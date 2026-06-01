@@ -2705,7 +2705,10 @@ export class ProductsService {
     return {
       count: productsToArchive.length,
       product_ids: products.map((product) => product.publicId),
-      archived_at: archivedAt.toISOString(),
+      archived_at: this.companySettingsService.toIsoForCompany(
+        archivedAt,
+        writeContext.companyId,
+      ),
       archived_by: {
         id: String(writeContext.userId),
         name: writeContext.fullName,
@@ -2899,7 +2902,10 @@ export class ProductsService {
         supply_price: Number(item.supplyPrice ?? 0),
         supply_currency: item.supplyCurrency,
         old_supply_price: Number(item.oldSupplyPrice ?? 0),
-        created_at: item.createdAt.toISOString(),
+        created_at: this.companySettingsService.toIsoForCompany(
+          item.createdAt,
+          context?.companyId ?? undefined,
+        ),
       })),
       accepted_order: Number(acceptedOrderAggregate._sum.quantity ?? 0),
     };
@@ -3710,9 +3716,9 @@ export class ProductsService {
       status: String(transfer.status ?? 'DRAFT').toLowerCase(),
       created_by: this.toLegacyTransferActor(transfer.createdBy),
       accepted_by: this.toLegacyTransferActor(transfer.acceptedBy),
-      created_at: this.formatDateTime(transfer.createdAt),
+      created_at: this.formatDateTime(transfer.createdAt, transfer.companyId),
       accepted_at: transfer.acceptedAt
-        ? this.formatDateTime(transfer.acceptedAt)
+        ? this.formatDateTime(transfer.acceptedAt, transfer.companyId)
         : '',
       transfer_items: null,
       differs: 'false',
@@ -3767,7 +3773,9 @@ export class ProductsService {
       transfer_id: item?.transferId ?? '',
       product_id: this.getProductPublicId(product),
       transfer_measurement_value: Number(item?.quantity ?? 0),
-      updated_at: item?.updatedAt ? this.formatDate(item.updatedAt) : '',
+      updated_at: item?.updatedAt
+        ? this.formatDate(item.updatedAt, product.companyId ?? transfer.companyId ?? undefined)
+        : '',
       updated_at_int: item?.updatedAt ? Number(item.updatedAt.getTime()) : 0,
       product: this.buildTransferProductPayload(
         product,
@@ -3791,7 +3799,10 @@ export class ProductsService {
       transfer_id: item.transferId,
       product_id: this.getProductPublicId(item.product),
       transfer_measurement_value: Number(item.quantity ?? 0),
-      updated_at: this.formatDate(item.updatedAt),
+      updated_at: this.formatDate(
+        item.updatedAt,
+        item.product?.companyId ?? transfer.companyId ?? undefined,
+      ),
       updated_at_int: Number(item.updatedAt.getTime()),
       product: this.buildTransferProductPayload(
         item.product,
@@ -4000,11 +4011,11 @@ export class ProductsService {
     });
   }
 
-  private formatDate(value: Date) {
-    const year = value.getFullYear();
-    const month = String(value.getMonth() + 1).padStart(2, '0');
-    const day = String(value.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+  private formatDate(value: Date, companyId?: string | null) {
+    return this.companySettingsService.formatDateForCompany(
+      value,
+      companyId ?? undefined,
+    );
   }
 
   private toProductResponse(product: {
@@ -4221,8 +4232,8 @@ export class ProductsService {
         total_inactive_retail_price: 0,
       },
       product_type_id: product.productType ?? DEFAULT_PRODUCT_TYPE_ID,
-      created_at: this.formatDateTime(product.createdAt),
-      updated_at: this.formatDateTime(product.updatedAt),
+      created_at: this.formatDateTime(product.createdAt, product.companyId),
+      updated_at: this.formatDateTime(product.updatedAt, product.companyId),
       base_name: product.name,
       archived_at: this.toArchivedAtResponse(product.archivedAt),
       archived_by: this.toArchivedByResponse(product),
@@ -4476,8 +4487,14 @@ export class ProductsService {
       is_divisible: false,
       measurement_unit: measurementUnit,
       custom_fields: [],
-      created_at: product.createdAt.toISOString(),
-      updated_at: product.updatedAt.toISOString(),
+      created_at: this.companySettingsService.toIsoForCompany(
+        product.createdAt,
+        product.companyId ?? context?.companyId ?? undefined,
+      ),
+      updated_at: this.companySettingsService.toIsoForCompany(
+        product.updatedAt,
+        product.companyId ?? context?.companyId ?? undefined,
+      ),
       is_archived: Boolean(product.archivedAt),
       brand_name: product.brand?.name ?? '',
       product_supply_stock: stockSummaries.map((item) => ({
@@ -4673,7 +4690,10 @@ export class ProductsService {
       brand_name: product.brand?.name ?? '',
       categories: null,
       company_id: context.companyId ?? COMPANY_ID,
-      created_at: this.formatDateTime(product.createdAt),
+      created_at: this.formatDateTime(
+        product.createdAt,
+        product.companyId ?? context?.companyId ?? undefined,
+      ),
       custom_fields: [],
       deleted: false,
       description: this.optionalString(body.description) ?? '',
@@ -6542,7 +6562,10 @@ export class ProductsService {
           internal_id: saleItem.id,
           id: String(saleItem.id),
           type: 'order',
-          created_at: this.formatDateTime(saleItem.sale.createdAt),
+          created_at: this.formatDateTime(
+            saleItem.sale.createdAt,
+            context?.companyId ?? undefined,
+          ),
           external_id: saleItem.sale.number,
           measurement_value: saleItem.quantity,
           loaded_measurement_value: 0,
@@ -6810,7 +6833,10 @@ export class ProductsService {
           movement.order?.orderType,
           movement.order?.status,
         ),
-      created_at: this.formatDateTime(movement.createdAt),
+      created_at: this.formatDateTime(
+        movement.createdAt,
+        movement.companyId ?? context?.companyId ?? undefined,
+      ),
       external_id: movement.externalId || movement.order?.orderNumber || '',
       measurement_value: Number(movement.quantity ?? 0),
       loaded_measurement_value: Number(
@@ -7623,8 +7649,11 @@ export class ProductsService {
     return publicId || String(product.id);
   }
 
-  private toArchivedAtResponse(value?: Date | null) {
-    return value ? value.toISOString() : '';
+  private toArchivedAtResponse(value?: Date | null, companyId?: string | null) {
+    return this.companySettingsService.toIsoForCompany(
+      value,
+      companyId ?? undefined,
+    );
   }
 
   private toArchivedByResponse(product: {
@@ -8076,15 +8105,11 @@ export class ProductsService {
     return resolvedBranch ?? normalizedShopId;
   }
 
-  private formatDateTime(value: Date) {
-    const year = value.getFullYear();
-    const month = String(value.getMonth() + 1).padStart(2, '0');
-    const day = String(value.getDate()).padStart(2, '0');
-    const hours = String(value.getHours()).padStart(2, '0');
-    const minutes = String(value.getMinutes()).padStart(2, '0');
-    const seconds = String(value.getSeconds()).padStart(2, '0');
-
-    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  private formatDateTime(value: Date, companyId?: string | null) {
+    return this.companySettingsService.formatDateTimeForCompany(
+      value,
+      companyId ?? undefined,
+    );
   }
 
   private toStringArrayValue(value: unknown) {
