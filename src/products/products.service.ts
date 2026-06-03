@@ -108,6 +108,7 @@ type ImportSession = {
   companyId: string;
   shopId: string;
   branchCode: string;
+  stocktakingId?: string;
   name: string;
   mode: 'with_check' | 'without_check';
   status:
@@ -145,6 +146,46 @@ type ImportSession = {
   };
   createdAt: string;
   updatedAt: string;
+};
+
+type StocktakingLogEntry = {
+  id: string;
+  action_code: string;
+  created_at: string;
+};
+
+type StocktakingItem = {
+  id: string;
+  expected_measurement_value: number;
+  scanned_measurement_value: number;
+  importItemId: string;
+  product_id: string;
+  product_name: string;
+  product_barcode: string;
+  product_sku: string;
+  supply_price: number;
+  retail_price: number;
+  measurement_unit: typeof DEFAULT_MEASUREMENT_UNIT;
+  is_added: boolean;
+  last_scan_num: number;
+};
+
+type StocktakingSession = {
+  id: string;
+  importId: string;
+  companyId: string;
+  shopId: string;
+  name: string;
+  useOldPrices: boolean;
+  useImportProperties: boolean;
+  createdBy: {
+    id: string;
+    name: string;
+  };
+  createdAt: string;
+  acceptedAt?: string;
+  items: StocktakingItem[];
+  logs: StocktakingLogEntry[];
 };
 
 type ImportJob = {
@@ -390,6 +431,7 @@ const EXCEL_IMPORT_PROPERTIES = [
 
 const IMPORT_JOBS = new Map<string, ImportJob>();
 const IMPORT_SESSIONS = new Map<string, ImportSession>();
+const STOCKTAKING_SESSIONS = new Map<string, StocktakingSession>();
 const IMPORT_COMMIT_LOCKS = new Set<string>();
 const PRODUCT_IMPORT_LOCKS = new Set<string>();
 
@@ -882,6 +924,7 @@ export class ProductsService {
     );
     const dryRunSummary = this.buildImportDryRunSummary(items);
 
+    const mode = existingSession?.mode ?? this.parseImportMode(body.mode);
     const now = this.formatDateTime(new Date());
     IMPORT_SESSIONS.set(importId, {
       id: importId,
@@ -893,7 +936,7 @@ export class ProductsService {
         this.optionalString(body.name) ??
         existingSession?.name ??
         `Import ${now}`,
-      mode: existingSession?.mode ?? this.parseImportMode(body.mode),
+      mode,
       status: 'preview_ready',
       fields,
       rows,
@@ -915,7 +958,8 @@ export class ProductsService {
       importId,
     });
 
-    const shouldAutoCommit = this.shouldAutoCommitImport(body);
+    const shouldAutoCommit =
+      mode === 'without_check' && this.shouldAutoCommitImport(body);
     if (shouldAutoCommit) {
       const commitResult = await this.commitImport(importId, authorization);
       return {
@@ -1094,7 +1138,301 @@ export class ProductsService {
     };
   }
 
-  async commitImport(id: string, authorization?: string) {
+  async createImportInventory(
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const session = this.resolveImportSession(
+      this.requireString(body.import_id, 'import_id'),
+    );
+    if (!session) {
+      throw new NotFoundException('Import session not found');
+    }
+
+    await this.ensureImportPreviewItems(session);
+
+    const stocktakingId = session.stocktakingId ?? randomUUID();
+    const useOldPrices = this.toBooleanValue(body.use_old_prices);
+    const useImportProperties = this.toBooleanValue(body.use_import_properties);
+    const actor = {
+      id: String(context?.userId ?? ''),
+      name: context?.fullName ?? '',
+    };
+    const createdAt = this.formatDateTime(new Date(), session.companyId);
+    const items = session.items.map((item) => ({
+      id: randomUUID(),
+      expected_measurement_value: item.measurement_value,
+      scanned_measurement_value: 0,
+      importItemId: item.id,
+      product_id: item.product_id,
+      product_name: item.product_name,
+      product_barcode: item.product_barcode,
+      product_sku: item.product_sku,
+      supply_price: item.supply_price,
+      retail_price: item.retail_price,
+      measurement_unit: item.measurement_unit,
+      is_added: false,
+      last_scan_num: 0,
+    }));
+
+    STOCKTAKING_SESSIONS.set(stocktakingId, {
+      id: stocktakingId,
+      importId: session.id,
+      companyId: session.companyId,
+      shopId: session.shopId,
+      name: `Импорт ${this.buildLegacyImportNumericId(session, 0)}`,
+      useOldPrices,
+      useImportProperties,
+      createdBy: actor,
+      createdAt,
+      items,
+      logs: [
+        this.createStocktakingLogEntry('user_enter_stocktaking'),
+        this.createStocktakingLogEntry('user_exit_stocktaking'),
+      ],
+    });
+    session.stocktakingId = stocktakingId;
+    session.updatedAt = this.formatDateTime(new Date(), session.companyId);
+
+    return {
+      session_id: randomUUID(),
+      company_id: session.companyId,
+      status_code: 200,
+      id: session.id,
+      error: {
+        code: '',
+        message: '',
+      },
+      data: {
+        ProcessID: '',
+        ProcessType: 0,
+        company_id: session.companyId,
+        correlation_id: '',
+        created_by: {
+          id: '',
+          name: '',
+        },
+        external_id: 1000000 + this.buildLegacyImportNumericId(session, 1),
+        id: stocktakingId,
+        import_id: session.id,
+        is_resulting: false,
+        items: items.map((item) => this.toStocktakingCreatedItemResponse(item)),
+        name: `Импорт ${1000000 + this.buildLegacyImportNumericId(session, 1)}`,
+        order_id: '',
+        portion_size: 0,
+        product_ids: null,
+        products: items
+          .filter((item) => item.product_id)
+          .map((item) => ({
+            product_id: item.product_id,
+          })),
+        sent: 0,
+        session_id: randomUUID(),
+        shop_id: session.shopId,
+        total: 0,
+        transfer_id: '',
+        type: 'IMPORT',
+      },
+      correlation_id: randomUUID(),
+      topic: 'v2.inventory_service.stocktaking.created',
+    };
+  }
+
+  getStocktakingById(
+    id: string,
+    query: { page: number; limit: number; type?: string },
+  ) {
+    const stocktaking = this.resolveStocktakingSession(id);
+    if (!stocktaking) {
+      throw new NotFoundException('Stocktaking not found');
+    }
+
+    const safeLimit = Math.max(1, Math.min(query.limit, 1000));
+    const safePage = Math.max(1, query.page);
+    const sourceItems =
+      query.type === 'scanned'
+        ? stocktaking.items.filter((item) => item.scanned_measurement_value > 0)
+        : stocktaking.items;
+    const items = sourceItems.slice(
+      (safePage - 1) * safeLimit,
+      safePage * safeLimit,
+    );
+
+    return {
+      count: sourceItems.length,
+      items: items.length
+        ? items.map((item) => this.toStocktakingListItemResponse(stocktaking, item))
+        : null,
+    };
+  }
+
+  getStocktakingLogs(id: string, query: { page: number; limit: number }) {
+    const stocktaking = this.resolveStocktakingSession(id);
+    if (!stocktaking) {
+      throw new NotFoundException('Stocktaking not found');
+    }
+
+    const safeLimit = Math.max(1, Math.min(query.limit, 100));
+    const safePage = Math.max(1, query.page);
+    const logs = stocktaking.logs
+      .slice()
+      .reverse()
+      .slice((safePage - 1) * safeLimit, safePage * safeLimit);
+
+    return {
+      count: stocktaking.logs.length,
+      logs: logs.map((entry) => this.toStocktakingLogResponse(stocktaking, entry)),
+      users: stocktaking.createdBy.id
+        ? [
+            {
+              id: stocktaking.createdBy.id,
+              name: stocktaking.createdBy.name,
+            },
+          ]
+        : [],
+    };
+  }
+
+  async setStocktakingProductByBarcode(
+    id: string,
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const stocktaking = this.resolveStocktakingSession(id);
+    if (!stocktaking) {
+      throw new NotFoundException('Stocktaking not found');
+    }
+
+    const context = await this.getRequestContext(authorization);
+    const productBarcode = this.requireString(body.product_barcode, 'product_barcode');
+    const requestedProductId = this.optionalString(body.product_id) ?? '';
+    const requestedValue =
+      this.toNumber(body.measurement_value ?? body.quantity ?? 1) ?? 1;
+    const item = stocktaking.items.find(
+      (candidate) =>
+        candidate.product_barcode === productBarcode &&
+        (!requestedProductId || candidate.product_id === requestedProductId),
+    );
+
+    if (!item) {
+      throw new NotFoundException('Stocktaking item not found by barcode');
+    }
+
+    item.scanned_measurement_value += requestedValue;
+    item.last_scan_num = Math.trunc(Date.now() / 1000);
+
+    const session = this.resolveImportSession(stocktaking.importId);
+    const importItem = session?.items.find((candidate) => candidate.id === item.importItemId);
+    const productInfo =
+      importItem?.product_info && !stocktaking.useImportProperties
+        ? importItem.product_info
+        : null;
+    const productName =
+      !stocktaking.useImportProperties && productInfo
+        ? this.optionalString((productInfo as Record<string, unknown>).name) ??
+          item.product_name
+        : item.product_name;
+
+    return {
+      session_id: randomUUID(),
+      status_code: 200,
+      id: randomUUID(),
+      error: {
+        code: '',
+        message: '',
+      },
+      data: {
+        company_id: '',
+        item: {
+          excluded_after_archive: false,
+          expected_measurement_value: item.expected_measurement_value,
+          id: item.id,
+          is_added: false,
+          last_scan_num: item.last_scan_num,
+          measurement_unit: item.measurement_unit,
+          min_movement_date: '',
+          min_movement_date_num: 0,
+          postponed_measurement_value: 0,
+          product_archived: false,
+          product_attributes: '',
+          product_barcode: item.product_barcode,
+          product_base_name: '',
+          product_id: item.product_id,
+          product_name: productName,
+          product_sku: item.product_sku,
+          retail_price: item.retail_price,
+          scanned_measurement_value: item.scanned_measurement_value,
+          stocktaking_id: stocktaking.id,
+          supply_price: stocktaking.useOldPrices ? 0 : item.supply_price,
+          to_import: 0,
+          to_write_off: 0,
+          total_active_measurement_value: 0,
+          total_imported_measurement_value: 0,
+          total_in_transfer_measurement_value: 0,
+          total_inactive_measurement_value: 0,
+          total_measurement_value: 0,
+          total_sold_measurement_value: 0,
+          total_transfer_arrived_measurement_value: 0,
+          total_transfered_measurement_value: 0,
+          total_written_off_measurement_value: 0,
+          type: 'ok',
+        },
+        measurement_value: 0,
+        product_barcode: item.product_barcode,
+        product_id: item.product_id,
+        skip_archived: false,
+        stocktaking: this.toStocktakingSessionResponse(stocktaking),
+        stocktaking_id: '',
+        unarchive: false,
+        user: {
+          id: String(context?.userId ?? ''),
+          name: context?.fullName ?? '',
+        },
+      },
+      correlation_id: randomUUID(),
+      topic: 'v2.inventory_service.stocktaking.item.set.measurement_value',
+    };
+  }
+
+  async acceptStocktakingImport(id: string, authorization?: string) {
+    const stocktaking = this.resolveStocktakingSession(id);
+    if (!stocktaking) {
+      throw new NotFoundException('Stocktaking not found');
+    }
+
+    const session = this.resolveImportSession(stocktaking.importId);
+    if (!session) {
+      throw new NotFoundException('Import session not found');
+    }
+
+    if (stocktaking.acceptedAt && session.result) {
+      return {
+        import_id: session.id,
+        stocktaking_id: stocktaking.id,
+        idempotent: true,
+        ...session.result,
+      };
+    }
+
+    const result = await this.commitImport(session.id, authorization, {
+      forceWithCheckAccept: true,
+    });
+    stocktaking.acceptedAt = this.formatDateTime(new Date(), stocktaking.companyId);
+
+    return {
+      import_id: session.id,
+      stocktaking_id: stocktaking.id,
+      accepted_at: stocktaking.acceptedAt,
+      ...result,
+    };
+  }
+
+  async commitImport(
+    id: string,
+    authorization?: string,
+    options?: { forceWithCheckAccept?: boolean },
+  ) {
     const session = this.resolveImportSession(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
@@ -1102,6 +1440,12 @@ export class ProductsService {
 
     const context = await this.getRequestContext(authorization);
     const writeContext = this.requireCatalogWriteContext(context);
+
+    if (session.mode === 'with_check' && !options?.forceWithCheckAccept) {
+      throw new BadRequestException(
+        'Import with check must be accepted explicitly before products are created',
+      );
+    }
 
     if (session.status === 'completed' && session.result) {
       return {
@@ -1181,6 +1525,18 @@ export class ProductsService {
     }
 
     return IMPORT_SESSIONS.get(job.importId);
+  }
+
+  private resolveStocktakingSession(id: string) {
+    return STOCKTAKING_SESSIONS.get(id);
+  }
+
+  private createStocktakingLogEntry(actionCode: string): StocktakingLogEntry {
+    return {
+      id: randomUUID(),
+      action_code: actionCode,
+      created_at: new Date().toISOString(),
+    };
   }
 
   private async ensureImportPreviewItems(session: ImportSession) {
@@ -1494,6 +1850,7 @@ export class ProductsService {
       company_id: session.companyId,
       shop_id: session.shopId,
       branch_code: session.branchCode,
+      stocktaking_id: session.stocktakingId ?? '',
       created_at: session.createdAt,
       updated_at: session.updatedAt,
       rows_count: session.rows.length,
@@ -1560,7 +1917,7 @@ export class ProductsService {
       session_id: '',
       process_percentage: processPercentage,
       total_processed_measurement_value: 0,
-      stocktaking_id: '',
+      stocktaking_id: session.stocktakingId ?? '',
       process_id: session.jobId,
       int_id: 12000000 + legacyNumericId,
     };
@@ -1632,6 +1989,185 @@ export class ProductsService {
     }
 
     return hash;
+  }
+
+  private toStocktakingCreatedItemResponse(item: StocktakingItem) {
+    return {
+      excluded_after_archive: false,
+      expected_measurement_value: item.expected_measurement_value,
+      id: item.id,
+      is_added: false,
+      last_scan_num: 0,
+      measurement_unit: {
+        company_id: '',
+        id: '',
+        is_default: false,
+        is_editable: false,
+        name: '',
+        precision: '',
+        short_name: '',
+      },
+      min_movement_date: '',
+      min_movement_date_num: 0,
+      postponed_measurement_value: 0,
+      product_archived: false,
+      product_attributes: '',
+      product_barcode: item.product_barcode,
+      product_base_name: '',
+      product_id: item.product_id,
+      product_name: item.product_name,
+      product_sku: item.product_sku,
+      retail_price: item.retail_price,
+      scanned_measurement_value: 0,
+      stocktaking_id: '',
+      supply_price: item.supply_price,
+      to_import: 0,
+      to_write_off: 0,
+      total_active_measurement_value: 0,
+      total_imported_measurement_value: 0,
+      total_in_transfer_measurement_value: 0,
+      total_inactive_measurement_value: 0,
+      total_measurement_value: 0,
+      total_sold_measurement_value: 0,
+      total_transfer_arrived_measurement_value: 0,
+      total_transfered_measurement_value: 0,
+      total_written_off_measurement_value: 0,
+      type: '',
+    };
+  }
+
+  private toStocktakingListItemResponse(
+    stocktaking: StocktakingSession,
+    item: StocktakingItem,
+  ) {
+    return {
+      id: item.id,
+      stocktaking_id: stocktaking.id,
+      product_id: item.product_id,
+      product_barcode: item.product_barcode,
+      product_sku: item.product_sku,
+      product_name: item.product_name,
+      expected_measurement_value: item.expected_measurement_value,
+      scanned_measurement_value: item.scanned_measurement_value,
+      supply_price: stocktaking.useOldPrices ? 0 : item.supply_price,
+      retail_price: item.retail_price,
+      measurement_unit: item.measurement_unit,
+      type: item.scanned_measurement_value > 0 ? 'ok' : '',
+      updated_at_int: item.last_scan_num,
+      updated_at: item.last_scan_num
+        ? this.formatDateTime(new Date(item.last_scan_num * 1000), stocktaking.companyId)
+        : '',
+    };
+  }
+
+  private toStocktakingLogResponse(
+    stocktaking: StocktakingSession,
+    entry: StocktakingLogEntry,
+  ) {
+    const actionName =
+      entry.action_code === 'user_enter_stocktaking'
+        ? 'User enter stocktaking'
+        : 'Exit stocktaking';
+    return {
+      id: entry.id,
+      stocktaking_id: stocktaking.id,
+      company_id: stocktaking.companyId,
+      action_name: {
+        en: actionName,
+      },
+      product_id: '',
+      product_name: '',
+      product_barcode: '',
+      product_sku: '',
+      user: {
+        id: stocktaking.createdBy.id,
+        external_id: 0,
+        company_id: stocktaking.companyId,
+        phone_number: '',
+        first_name: stocktaking.createdBy.name.split(' ')[0] ?? '',
+        last_name: stocktaking.createdBy.name.split(' ').slice(1).join(' '),
+        image: '',
+        image_url: '',
+      },
+      quantity: 0,
+      action_code: entry.action_code,
+      created_at: entry.created_at,
+    };
+  }
+
+  private toStocktakingSessionResponse(stocktaking: StocktakingSession) {
+    const totalMeasurementValue = stocktaking.items.reduce(
+      (sum, item) => sum + item.expected_measurement_value,
+      0,
+    );
+    const totalScannedMeasurementValue = stocktaking.items.reduce(
+      (sum, item) => sum + item.scanned_measurement_value,
+      0,
+    );
+    const shortageSupply = stocktaking.items.reduce((sum, item) => {
+      const missing = Math.max(
+        0,
+        item.expected_measurement_value - item.scanned_measurement_value,
+      );
+      return sum + missing * item.supply_price;
+    }, 0);
+
+    return {
+      company_id: stocktaking.companyId,
+      created_at: stocktaking.createdAt,
+      created_by: {
+        id: '',
+        name: '',
+      },
+      deleted: false,
+      difference_sum: 0,
+      external_id: 1000000,
+      finished_at: '',
+      finished_by: {
+        id: '',
+        name: '',
+      },
+      id: stocktaking.id,
+      import_id: stocktaking.importId,
+      items: null,
+      locked: false,
+      name: stocktaking.name,
+      new_products: 0,
+      order_id: '',
+      postponed: 0,
+      postponed_sum_retail: 0,
+      postponed_sum_supply: 0,
+      process_id: '',
+      process_percentage: 100,
+      process_type: 0,
+      shop_id: stocktaking.shopId,
+      shop_name: this.resolveShopByBranchCode(
+        this.resolveBranchCodeByShopId(stocktaking.shopId),
+      ).shop_name,
+      shortage: 0,
+      shortage_sum_retail: 0,
+      shortage_sum_supply: shortageSupply,
+      status_id: '7cbb2295-559e-4b72-a3c1-11ac24dffc6b',
+      surplus: 0,
+      surplus_sum_retail: 0,
+      surplus_sum_supply: 0,
+      total: stocktaking.items.length,
+      total_import_accepted_rows: 0,
+      total_measurement_value: totalMeasurementValue,
+      total_resort_rows: 0,
+      total_scanned_measurement_value: totalScannedMeasurementValue,
+      total_scanned_rows: stocktaking.items.filter(
+        (item) => item.scanned_measurement_value > 0,
+      ).length,
+      total_transfer_accepted_rows: 0,
+      total_undeclared_rows: 0,
+      transfer_id: '',
+      type: 'IMPORT',
+      type_id: '',
+      use_departure_price: false,
+      use_import_properties: stocktaking.useImportProperties,
+      use_old_prices: stocktaking.useOldPrices,
+    };
   }
 
   private resolveImportCompanyId(

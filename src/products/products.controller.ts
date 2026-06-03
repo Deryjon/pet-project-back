@@ -5,6 +5,7 @@ import {
   Get,
   Headers,
   HttpCode,
+  Patch,
   Param,
   Post,
   Put,
@@ -180,6 +181,61 @@ export class ProductsController {
     @Headers('authorization') authorization?: string,
   ) {
     return this.productsService.importWithoutCheck(body, authorization);
+  }
+
+  @Post('v2/import/inventory')
+  createImportInventory(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.createImportInventory(body, authorization);
+  }
+
+  @Get('v2/stocktaking/:id')
+  getStocktakingById(
+    @Param('id') id: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('type') type?: string,
+  ) {
+    return this.productsService.getStocktakingById(id, {
+      page: Number(page) || 1,
+      limit: Number(limit) || 10,
+      type: type?.trim(),
+    });
+  }
+
+  @Get('v2/stocktaking-logs/:id')
+  getStocktakingLogs(
+    @Param('id') id: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.productsService.getStocktakingLogs(id, {
+      page: Number(page) || 1,
+      limit: Number(limit) || 10,
+    });
+  }
+
+  @Patch('v2/stocktaking/:id/set-product-by-barcode')
+  setStocktakingProductByBarcode(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.setStocktakingProductByBarcode(
+      id,
+      body,
+      authorization,
+    );
+  }
+
+  @Post('v2/stocktaking/:id/accept')
+  acceptStocktakingImport(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.acceptStocktakingImport(id, authorization);
   }
 
   @Get('v2/product')
