@@ -991,28 +991,12 @@ export class ProductsService {
       importId,
     });
 
-    const shouldAutoCommit =
-      mode === 'without_check' && this.shouldAutoCommitImport(body);
-    if (shouldAutoCommit) {
-      const commitResult = await this.commitImport(importId, authorization);
-      return {
-        message: jobId,
-        job_id: jobId,
-        correlation_id: importId,
-        import_id: importId,
-        dry_run_summary: dryRunSummary,
-        auto_committed: true,
-        commit_result: commitResult,
-      };
-    }
-
     return {
       message: jobId,
       job_id: jobId,
       correlation_id: importId,
       import_id: importId,
       dry_run_summary: dryRunSummary,
-      auto_committed: false,
     };
   }
 
@@ -9021,15 +9005,6 @@ export class ProductsService {
 
     if (typeof value === 'string') {
       return value === 'true';
-    }
-
-    return false;
-  }
-
-  private shouldAutoCommitImport(body: Record<string, unknown>) {
-    const explicitAutoCommit = body.auto_commit ?? body.autoCommit;
-    if (explicitAutoCommit !== undefined) {
-      return this.toBooleanValue(explicitAutoCommit);
     }
 
     return false;
