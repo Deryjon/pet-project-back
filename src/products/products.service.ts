@@ -108,6 +108,7 @@ type ImportSession = {
   companyId: string;
   shopId: string;
   branchCode: string;
+  branchName?: string;
   stocktakingId?: string;
   name: string;
   mode: 'with_check' | 'without_check';
@@ -144,6 +145,34 @@ type ImportSession = {
       user_type: string;
     };
   };
+  createdAt: string;
+  updatedAt: string;
+};
+
+type PersistedImportSessionRow = {
+  id: string;
+  jobId: string;
+  companyId: string;
+  shopId: string;
+  branchCode: string;
+  branchName: string | null;
+  stocktakingId: string | null;
+  name: string;
+  mode: 'with_check' | 'without_check';
+  status:
+    | 'draft'
+    | 'validating'
+    | 'preview_ready'
+    | 'importing'
+    | 'completed'
+    | 'cancelled'
+    | 'failed';
+  fields: unknown;
+  rows: unknown;
+  items: unknown;
+  onMatchPolicy: unknown;
+  dryRunSummary: unknown;
+  result: unknown;
   createdAt: string;
   updatedAt: string;
 };
@@ -826,6 +855,7 @@ export class ProductsService {
     };
 
     IMPORT_SESSIONS.set(importId, session);
+    await this.persistImportSession(session);
 
     return this.toImportSessionSummary(session);
   }
@@ -837,25 +867,26 @@ export class ProductsService {
     const safePage = Math.max(1, query.page ?? 1);
     const safeLimit = Math.min(Math.max(1, query.limit ?? 10), 100);
     const context = await this.getRequestContext(authorization);
-    const imports = [...IMPORT_SESSIONS.values()]
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .slice((safePage - 1) * safeLimit, safePage * safeLimit)
-      .map((session, index) =>
-        this.toLegacyImportListItem(
-          session,
-          (safePage - 1) * safeLimit + index,
-          context,
-        ),
-      );
+    const sessions = await this.listPersistedImportSessions(
+      (safePage - 1) * safeLimit,
+      safeLimit,
+    );
+    const imports = sessions.map((session, index) =>
+      this.toLegacyImportListItem(
+        session,
+        (safePage - 1) * safeLimit + index,
+        context,
+      ),
+    );
 
     return {
       imports,
-      count: IMPORT_SESSIONS.size,
+      count: await this.countPersistedImportSessions(),
     };
   }
 
-  getImportById(id: string) {
-    const session = this.resolveImportSession(id);
+  async getImportById(id: string) {
+    const session = await this.resolveImportSessionFromStore(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
@@ -880,7 +911,7 @@ export class ProductsService {
       this.optionalString(body.import_id) ??
       this.optionalString(body.id) ??
       randomUUID();
-    const existingSession = IMPORT_SESSIONS.get(importId);
+    const existingSession = await this.resolveImportSessionFromStore(importId);
     const shopId =
       this.optionalString(body.shop_id) ?? existingSession?.shopId ?? '';
 
@@ -926,7 +957,7 @@ export class ProductsService {
 
     const mode = existingSession?.mode ?? this.parseImportMode(body.mode);
     const now = this.formatDateTime(new Date());
-    IMPORT_SESSIONS.set(importId, {
+    const session: ImportSession = {
       id: importId,
       jobId,
       companyId,
@@ -946,7 +977,9 @@ export class ProductsService {
       result: existingSession?.result,
       createdAt: existingSession?.createdAt ?? now,
       updatedAt: now,
-    });
+    };
+    IMPORT_SESSIONS.set(importId, session);
+    await this.persistImportSession(session);
 
     IMPORT_JOBS.set(jobId, {
       correlation_id: importId,
@@ -983,28 +1016,47 @@ export class ProductsService {
     };
   }
 
-  getImportProgress(id: string) {
+  async getImportProgress(id: string) {
     const resolvedJobId = IMPORT_JOBS.has(id)
       ? id
       : (this.resolveImportSession(id)?.jobId ?? '');
     const job = resolvedJobId ? IMPORT_JOBS.get(resolvedJobId) : undefined;
-    if (!job) {
+    if (job) {
+      return {
+        correlation_id: job.correlation_id,
+        import_id: job.importId,
+        message: job.message,
+        total: job.total,
+        current: job.current,
+        percent: job.percent,
+        is_finished: job.is_finished,
+      };
+    }
+
+    const session = await this.resolveImportSessionFromStore(id);
+    if (!session) {
       throw new NotFoundException('Import job not found');
     }
 
+    const isFinished =
+      session.status === 'preview_ready' ||
+      session.status === 'completed' ||
+      session.status === 'cancelled' ||
+      session.status === 'failed';
+
     return {
-      correlation_id: job.correlation_id,
-      import_id: job.importId,
-      message: job.message,
-      total: job.total,
-      current: job.current,
-      percent: job.percent,
-      is_finished: job.is_finished,
+      correlation_id: session.id,
+      import_id: session.id,
+      message: 'product-load',
+      total: session.rows.length,
+      current: isFinished ? session.rows.length : 0,
+      percent: isFinished ? 100 : 0,
+      is_finished: isFinished,
     };
   }
 
   async getImportItemsDp(id: string) {
-    const session = this.resolveImportSession(id);
+    const session = await this.resolveImportSessionFromStore(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
@@ -1025,7 +1077,7 @@ export class ProductsService {
       difference: boolean;
     },
   ) {
-    const session = this.resolveImportSession(id);
+    const session = await this.resolveImportSessionFromStore(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
@@ -1113,7 +1165,7 @@ export class ProductsService {
       writeContext.userId,
     );
 
-    IMPORT_SESSIONS.set(importId, {
+    const session: ImportSession = {
       id: importId,
       jobId: '',
       companyId,
@@ -1130,7 +1182,9 @@ export class ProductsService {
       result,
       createdAt: now,
       updatedAt: now,
-    });
+    };
+    IMPORT_SESSIONS.set(importId, session);
+    await this.persistImportSession(session);
 
     return {
       import_id: importId,
@@ -1143,7 +1197,7 @@ export class ProductsService {
     authorization?: string,
   ) {
     const context = await this.getRequestContext(authorization);
-    const session = this.resolveImportSession(
+    const session = await this.resolveImportSessionFromStore(
       this.requireString(body.import_id, 'import_id'),
     );
     if (!session) {
@@ -1194,6 +1248,7 @@ export class ProductsService {
     });
     session.stocktakingId = stocktakingId;
     session.updatedAt = this.formatDateTime(new Date(), session.companyId);
+    await this.persistImportSession(session);
 
     return {
       session_id: randomUUID(),
@@ -1433,7 +1488,7 @@ export class ProductsService {
     authorization?: string,
     options?: { forceWithCheckAccept?: boolean },
   ) {
-    const session = this.resolveImportSession(id);
+    const session = await this.resolveImportSessionFromStore(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
@@ -1463,9 +1518,11 @@ export class ProductsService {
     try {
       session.status = 'importing';
       session.updatedAt = this.formatDateTime(new Date());
+      await this.persistImportSession(session);
       await this.ensureImportPreviewItems(session);
       if (session.items.some((item) => item.validation_issues.length > 0)) {
         session.status = 'preview_ready';
+        await this.persistImportSession(session);
         throw new BadRequestException(
           this.buildImportCommitValidationError(session),
         );
@@ -1491,6 +1548,7 @@ export class ProductsService {
       };
       session.status = 'completed';
       session.updatedAt = this.formatDateTime(new Date());
+      await this.persistImportSession(session);
     } finally {
       IMPORT_COMMIT_LOCKS.delete(session.id);
     }
@@ -1501,14 +1559,15 @@ export class ProductsService {
     };
   }
 
-  cancelImport(id: string) {
-    const session = this.resolveImportSession(id);
+  async cancelImport(id: string) {
+    const session = await this.resolveImportSessionFromStore(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
 
     session.status = 'cancelled';
     session.updatedAt = this.formatDateTime(new Date());
+    await this.persistImportSession(session);
 
     return this.toImportSessionSummary(session);
   }
@@ -1525,6 +1584,261 @@ export class ProductsService {
     }
 
     return IMPORT_SESSIONS.get(job.importId);
+  }
+
+  private async resolveImportSessionFromStore(id: string) {
+    const directSession = this.resolveImportSession(id);
+    if (directSession) {
+      return directSession;
+    }
+
+    const persistedSession =
+      (await this.loadPersistedImportSessionById(id)) ??
+      (await this.loadPersistedImportSessionByJobId(id));
+
+    if (!persistedSession) {
+      return undefined;
+    }
+
+    IMPORT_SESSIONS.set(persistedSession.id, persistedSession);
+    if (persistedSession.jobId) {
+      IMPORT_JOBS.set(persistedSession.jobId, {
+        correlation_id: persistedSession.id,
+        message: 'product-load',
+        total: persistedSession.rows.length,
+        current:
+          persistedSession.status === 'completed' ||
+          persistedSession.status === 'preview_ready' ||
+          persistedSession.status === 'cancelled' ||
+          persistedSession.status === 'failed'
+            ? persistedSession.rows.length
+            : 0,
+        percent:
+          persistedSession.status === 'completed' ||
+          persistedSession.status === 'preview_ready' ||
+          persistedSession.status === 'cancelled' ||
+          persistedSession.status === 'failed'
+            ? 100
+            : 0,
+        is_finished:
+          persistedSession.status === 'completed' ||
+          persistedSession.status === 'preview_ready' ||
+          persistedSession.status === 'cancelled' ||
+          persistedSession.status === 'failed',
+        importId: persistedSession.id,
+      });
+    }
+
+    return persistedSession;
+  }
+
+  private async persistImportSession(session: ImportSession) {
+    const branchName =
+      session.branchName ??
+      this.resolveShopByBranchCode(session.branchCode).shop_name;
+    session.branchName = branchName;
+
+    await this.prisma.$executeRaw(
+      Prisma.sql`
+        INSERT INTO "ProductImportSession" (
+          "id",
+          "jobId",
+          "companyId",
+          "shopId",
+          "branchCode",
+          "branchName",
+          "stocktakingId",
+          "name",
+          "mode",
+          "status",
+          "fields",
+          "rows",
+          "items",
+          "onMatchPolicy",
+          "dryRunSummary",
+          "result",
+          "createdAt",
+          "updatedAt"
+        )
+        VALUES (
+          ${session.id},
+          ${session.jobId},
+          ${session.companyId},
+          ${session.shopId},
+          ${session.branchCode},
+          ${branchName},
+          ${session.stocktakingId ?? null},
+          ${session.name},
+          ${session.mode},
+          ${session.status},
+          ${this.asJsonb(session.fields)},
+          ${this.asJsonb(session.rows)},
+          ${this.asJsonb(session.items)},
+          ${this.asJsonb(session.onMatchPolicy)},
+          ${this.asJsonb(session.dryRunSummary ?? null)},
+          ${this.asJsonb(session.result ?? null)},
+          ${session.createdAt},
+          ${session.updatedAt}
+        )
+        ON CONFLICT ("id") DO UPDATE SET
+          "jobId" = EXCLUDED."jobId",
+          "companyId" = EXCLUDED."companyId",
+          "shopId" = EXCLUDED."shopId",
+          "branchCode" = EXCLUDED."branchCode",
+          "branchName" = EXCLUDED."branchName",
+          "stocktakingId" = EXCLUDED."stocktakingId",
+          "name" = EXCLUDED."name",
+          "mode" = EXCLUDED."mode",
+          "status" = EXCLUDED."status",
+          "fields" = EXCLUDED."fields",
+          "rows" = EXCLUDED."rows",
+          "items" = EXCLUDED."items",
+          "onMatchPolicy" = EXCLUDED."onMatchPolicy",
+          "dryRunSummary" = EXCLUDED."dryRunSummary",
+          "result" = EXCLUDED."result",
+          "createdAt" = EXCLUDED."createdAt",
+          "updatedAt" = EXCLUDED."updatedAt"
+      `,
+    );
+  }
+
+  private async loadPersistedImportSessionById(id: string) {
+    const rows = await this.prisma.$queryRaw<PersistedImportSessionRow[]>(
+      Prisma.sql`
+        SELECT
+          "id",
+          "jobId",
+          "companyId",
+          "shopId",
+          "branchCode",
+          "branchName",
+          "stocktakingId",
+          "name",
+          "mode",
+          "status",
+          "fields",
+          "rows",
+          "items",
+          "onMatchPolicy",
+          "dryRunSummary",
+          "result",
+          "createdAt",
+          "updatedAt"
+        FROM "ProductImportSession"
+        WHERE "id" = ${id}
+        LIMIT 1
+      `,
+    );
+
+    return rows[0] ? this.deserializePersistedImportSession(rows[0]) : undefined;
+  }
+
+  private async loadPersistedImportSessionByJobId(jobId: string) {
+    const rows = await this.prisma.$queryRaw<PersistedImportSessionRow[]>(
+      Prisma.sql`
+        SELECT
+          "id",
+          "jobId",
+          "companyId",
+          "shopId",
+          "branchCode",
+          "branchName",
+          "stocktakingId",
+          "name",
+          "mode",
+          "status",
+          "fields",
+          "rows",
+          "items",
+          "onMatchPolicy",
+          "dryRunSummary",
+          "result",
+          "createdAt",
+          "updatedAt"
+        FROM "ProductImportSession"
+        WHERE "jobId" = ${jobId}
+        LIMIT 1
+      `,
+    );
+
+    return rows[0] ? this.deserializePersistedImportSession(rows[0]) : undefined;
+  }
+
+  private async listPersistedImportSessions(offset: number, limit: number) {
+    const rows = await this.prisma.$queryRaw<PersistedImportSessionRow[]>(
+      Prisma.sql`
+        SELECT
+          "id",
+          "jobId",
+          "companyId",
+          "shopId",
+          "branchCode",
+          "branchName",
+          "stocktakingId",
+          "name",
+          "mode",
+          "status",
+          "fields",
+          "rows",
+          "items",
+          "onMatchPolicy",
+          "dryRunSummary",
+          "result",
+          "createdAt",
+          "updatedAt"
+        FROM "ProductImportSession"
+        ORDER BY "createdAt" DESC
+        OFFSET ${offset}
+        LIMIT ${limit}
+      `,
+    );
+
+    return rows.map((row) => this.deserializePersistedImportSession(row));
+  }
+
+  private async countPersistedImportSessions() {
+    const rows = await this.prisma.$queryRaw<Array<{ count: bigint | number }>>(
+      Prisma.sql`
+        SELECT COUNT(*)::bigint AS "count"
+        FROM "ProductImportSession"
+      `,
+    );
+
+    const count = rows[0]?.count ?? 0;
+    return typeof count === 'bigint' ? Number(count) : count;
+  }
+
+  private deserializePersistedImportSession(
+    row: PersistedImportSessionRow,
+  ): ImportSession {
+    return {
+      id: row.id,
+      jobId: row.jobId,
+      companyId: row.companyId,
+      shopId: row.shopId,
+      branchCode: row.branchCode,
+      branchName: row.branchName ?? undefined,
+      stocktakingId: row.stocktakingId ?? undefined,
+      name: row.name,
+      mode: row.mode,
+      status: row.status,
+      fields: this.toImportFieldsArray(row.fields),
+      rows: this.toImportRowsArray(row.rows),
+      items: this.toPreparedImportItemsArray(row.items),
+      onMatchPolicy: this.toImportOnMatchPolicy(row.onMatchPolicy),
+      dryRunSummary: this.toImportDryRunSummary(row.dryRunSummary),
+      result: this.toImportCommitResult(row.result),
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  private asJsonb(value: unknown) {
+    if (value === undefined) {
+      return Prisma.sql`NULL::jsonb`;
+    }
+
+    return Prisma.sql`CAST(${JSON.stringify(value)} AS jsonb)`;
   }
 
   private resolveStocktakingSession(id: string) {
@@ -1553,8 +1867,47 @@ export class ProductsService {
     );
     session.dryRunSummary = this.buildImportDryRunSummary(session.items);
     session.updatedAt = this.formatDateTime(new Date());
+    await this.persistImportSession(session);
 
     return session.items;
+  }
+
+  private toImportFieldsArray(value: unknown): ImportSession['fields'] {
+    return Array.isArray(value)
+      ? (value as ImportSession['fields'])
+      : [];
+  }
+
+  private toImportRowsArray(value: unknown): ImportRowInput[] {
+    return Array.isArray(value) ? (value as ImportRowInput[]) : [];
+  }
+
+  private toPreparedImportItemsArray(value: unknown): PreparedImportItem[] {
+    return Array.isArray(value) ? (value as PreparedImportItem[]) : [];
+  }
+
+  private toImportOnMatchPolicy(value: unknown): ImportOnMatchPolicy {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return this.defaultImportOnMatchPolicy();
+    }
+
+    return value as ImportOnMatchPolicy;
+  }
+
+  private toImportDryRunSummary(value: unknown) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return undefined;
+    }
+
+    return value as ImportDryRunSummary;
+  }
+
+  private toImportCommitResult(value: unknown): ImportSession['result'] {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return undefined;
+    }
+
+    return value as ImportSession['result'];
   }
 
   private parseImportMode(value: unknown): 'with_check' | 'without_check' {
@@ -1840,7 +2193,9 @@ export class ProductsService {
   }
 
   private toImportSessionSummary(session: ImportSession) {
-    const shop = this.resolveShopByBranchCode(session.branchCode);
+    const shopName =
+      session.branchName ??
+      this.resolveShopByBranchCode(session.branchCode).shop_name;
 
     return {
       id: session.id,
@@ -1852,7 +2207,7 @@ export class ProductsService {
       company_id: session.companyId,
       shop_id: session.shopId,
       branch_code: session.branchCode,
-      branch_name: shop.shop_name,
+      branch_name: shopName,
       stocktaking_id: session.stocktakingId ?? '',
       created_at: session.createdAt,
       updated_at: session.updatedAt,

@@ -4,7 +4,6 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 enum UserType {
@@ -347,6 +346,31 @@ model Supplier {
 
   @@unique([companyId, name])
   @@index([companyId])
+}
+
+model ProductImportSession {
+  id            String @id
+  jobId         String
+  companyId     String
+  shopId        String
+  branchCode    String
+  branchName    String?
+  stocktakingId String?
+  name          String
+  mode          String
+  status        String
+  fields        Json
+  rows          Json
+  items         Json
+  onMatchPolicy Json
+  dryRunSummary Json?
+  result        Json?
+  createdAt     String
+  updatedAt     String
+
+  @@index([companyId, status])
+  @@index([shopId])
+  @@index([jobId])
 }
 
 model Product {
