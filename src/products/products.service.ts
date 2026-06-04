@@ -2254,7 +2254,10 @@ export class ProductsService {
       comment: '',
       created_at: session.createdAt,
       created_by: actor,
-      finished_at: session.result?.committed_at ?? session.updatedAt,
+      finished_at:
+        session.status === 'completed'
+          ? (session.result?.committed_at ?? session.updatedAt)
+          : '',
       finished_by: finishedActor,
       session_id: '',
       process_percentage: processPercentage,
