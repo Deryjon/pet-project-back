@@ -1840,6 +1840,8 @@ export class ProductsService {
   }
 
   private toImportSessionSummary(session: ImportSession) {
+    const shop = this.resolveShopByBranchCode(session.branchCode);
+
     return {
       id: session.id,
       import_id: session.id,
@@ -1850,6 +1852,7 @@ export class ProductsService {
       company_id: session.companyId,
       shop_id: session.shopId,
       branch_code: session.branchCode,
+      branch_name: shop.shop_name,
       stocktaking_id: session.stocktakingId ?? '',
       created_at: session.createdAt,
       updated_at: session.updatedAt,
