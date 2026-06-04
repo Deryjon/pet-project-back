@@ -1421,10 +1421,10 @@ export class ProductsService {
     stocktaking.acceptedAt = this.formatDateTime(new Date(), stocktaking.companyId);
 
     return {
+      ...result,
       import_id: session.id,
       stocktaking_id: stocktaking.id,
       accepted_at: stocktaking.acceptedAt,
-      ...result,
     };
   }
 
