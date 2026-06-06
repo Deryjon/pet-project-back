@@ -1894,6 +1894,35 @@ export class ProductsService {
     return value as ImportSession['result'];
   }
 
+  private getImportStatusName(status: ImportSession['status']) {
+    switch (status) {
+      case 'draft':
+        return 'Новый';
+      case 'preview_ready':
+        return 'В Ожидании';
+      case 'failed':
+        return 'Проверка';
+      case 'completed':
+        return 'Завершен';
+      case 'cancelled':
+        return 'Отменен';
+      case 'validating':
+        return 'Проверяется';
+      case 'importing':
+        return 'Загружается';
+      default:
+        return 'Новый';
+    }
+  }
+
+  private requiresImportApproval(session: ImportSession) {
+    return session.status === 'preview_ready';
+  }
+
+  private isTerminalImportStatus(status: ImportSession['status']) {
+    return status === 'completed' || status === 'cancelled';
+  }
+
   private parseImportMode(value: unknown): 'with_check' | 'without_check' {
     return value === 'without_check' ? 'without_check' : 'with_check';
   }
@@ -2180,6 +2209,8 @@ export class ProductsService {
     const shopName =
       session.branchName ??
       this.resolveShopByBranchCode(session.branchCode).shop_name;
+    const statusName = this.getImportStatusName(session.status);
+    const requiresApproval = this.requiresImportApproval(session);
 
     return {
       id: session.id,
@@ -2187,11 +2218,15 @@ export class ProductsService {
       job_id: session.jobId,
       name: session.name,
       mode: session.mode,
-      status: session.status,
+      status: statusName,
+      status_code: session.status,
       company_id: session.companyId,
       shop_id: session.shopId,
       branch_code: session.branchCode,
       branch_name: shopName,
+      requires_approval: requiresApproval,
+      can_commit: requiresApproval,
+      is_finished: this.isTerminalImportStatus(session.status),
       stocktaking_id: session.stocktakingId ?? '',
       created_at: session.createdAt,
       updated_at: session.updatedAt,
@@ -2215,6 +2250,8 @@ export class ProductsService {
     const actor = this.resolveLegacyImportActor(session, context);
     const finishedActor =
       session.status === 'completed' ? actor : { id: '', name: '' };
+    const statusName = this.getImportStatusName(session.status);
+    const requiresApproval = this.requiresImportApproval(session);
     const processJob = session.jobId
       ? IMPORT_JOBS.get(session.jobId)
       : undefined;
@@ -2234,6 +2271,8 @@ export class ProductsService {
       external_id: String(1000000 + legacyNumericId),
       company_id: session.companyId ?? '',
       name: session.name,
+      status: statusName,
+      status_code: session.status,
       shop_id: shop.shop_id,
       shop_name: shop.shop_name,
       import_type_id:
@@ -2254,6 +2293,9 @@ export class ProductsService {
       comment: '',
       created_at: session.createdAt,
       created_by: actor,
+      requires_approval: requiresApproval,
+      can_commit: requiresApproval,
+      is_finished: this.isTerminalImportStatus(session.status),
       finished_at:
         session.status === 'completed'
           ? (session.result?.committed_at ?? session.updatedAt)
