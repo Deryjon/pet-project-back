@@ -28,7 +28,7 @@ export class ProductsController {
 
   @Get('products/search')
   @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
-  @Permissions('orders.read')
+  @Permissions('catalog-operations')
   searchForPos(
     @Query('q') q?: string,
     @Query('shopId') shopId?: string,
@@ -46,6 +46,8 @@ export class ProductsController {
   }
 
   @Get('products')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('catalog-operations')
   findAll(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -248,6 +250,8 @@ export class ProductsController {
   }
 
   @Get('v2/product')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('catalog-operations')
   findAllV2(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -302,6 +306,8 @@ export class ProductsController {
   }
 
   @Get('v2/product-stats')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('catalog-operations')
   getProductStats(
     @Query('search') search?: string,
     @Query('field_search_key') fieldSearchKey?: string,
@@ -348,6 +354,8 @@ export class ProductsController {
   }
 
   @Get('v2/product/:id')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('catalog-operations')
   getProductById(
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
@@ -357,6 +365,8 @@ export class ProductsController {
 
   @Post('v2/product')
   @HttpCode(200)
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('catalog-operations')
   findAllV2Post(
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
@@ -486,6 +496,8 @@ export class ProductsController {
 
   @Post('v2/product-search-with-filters')
   @HttpCode(200)
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('catalog-operations')
   findAllV2Catalog(
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
@@ -522,6 +534,8 @@ export class ProductsController {
 
   @Post('v2/product-search-stats-with-filters')
   @HttpCode(200)
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('catalog-operations')
   getProductStatsWithFilters(
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,

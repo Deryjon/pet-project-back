@@ -5,8 +5,18 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { getPermissionIdsBySlug } from '../../roles/roles.permissions';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PERMISSIONS_KEY } from '../permissions.decorator';
+
+const LEGACY_PERMISSION_ALIASES: Record<string, string[]> = {
+  'orders.read': ['orders'],
+  'orders.create': ['orders'],
+  'orders.cancel': ['orders'],
+  'orders.complete': ['orders'],
+  'payments.create': ['payment-types'],
+  'cashboxes.manage': ['cashbox-list', 'cashbox-create'],
+};
 
 @Injectable()
 export class PermissionsGuard implements CanActivate {
@@ -48,20 +58,49 @@ export class PermissionsGuard implements CanActivate {
       return true;
     }
 
-    const activePermissions = await this.prisma.rolePermission.count({
+    const resolvedPermissions = requiredPermissions.map((permission) => ({
+      key: permission,
+      permissionIds: this.resolvePermissionIds(permission),
+    }));
+
+    const activePermissions = await this.prisma.rolePermission.findMany({
       where: {
         roleId,
-        permissionId: {
-          in: requiredPermissions,
-        },
         isActive: true,
       },
+      select: {
+        permissionId: true,
+      },
     });
+    const activePermissionIds = new Set(
+      activePermissions.map((item) => item.permissionId),
+    );
 
-    if (activePermissions < requiredPermissions.length) {
+    const hasAllPermissions = resolvedPermissions.every((permission) =>
+      permission.permissionIds.some((permissionId) =>
+        activePermissionIds.has(permissionId),
+      ),
+    );
+
+    if (!hasAllPermissions) {
       throw new ForbiddenException('Insufficient permissions');
     }
 
     return true;
+  }
+
+  private resolvePermissionIds(permission: string) {
+    const normalizedPermission = permission.trim().toLowerCase();
+    const aliasPermissions =
+      LEGACY_PERMISSION_ALIASES[normalizedPermission] ?? [normalizedPermission];
+    const resolvedPermissionIds = aliasPermissions.flatMap((item) =>
+      getPermissionIdsBySlug(item),
+    );
+
+    if (resolvedPermissionIds.length > 0) {
+      return [...new Set(resolvedPermissionIds)];
+    }
+
+    return [permission.trim()];
   }
 }

@@ -1718,5 +1718,29 @@ export const ROLE_PERMISSIONS_PAYLOAD = {
 
 export const ROLE_PERMISSION_SECTIONS = ROLE_PERMISSIONS_PAYLOAD.sections;
 
+const PERMISSION_IDS_BY_SLUG = new Map<string, string[]>();
+
+for (const section of ROLE_PERMISSION_SECTIONS) {
+  for (const permission of section.permissions) {
+    const permissionSlug = permission.slug.trim().toLowerCase();
+    PERMISSION_IDS_BY_SLUG.set(permissionSlug, [
+      ...(PERMISSION_IDS_BY_SLUG.get(permissionSlug) ?? []),
+      permission.id,
+    ]);
+
+    for (const child of permission.children) {
+      const childSlug = child.slug.trim().toLowerCase();
+      PERMISSION_IDS_BY_SLUG.set(childSlug, [
+        ...(PERMISSION_IDS_BY_SLUG.get(childSlug) ?? []),
+        child.id,
+      ]);
+    }
+  }
+}
+
+export function getPermissionIdsBySlug(slug: string) {
+  return PERMISSION_IDS_BY_SLUG.get(slug.trim().toLowerCase()) ?? [];
+}
+
 export type RolePermissionSection =
   (typeof ROLE_PERMISSIONS_PAYLOAD.sections)[number];
