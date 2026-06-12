@@ -808,11 +808,11 @@ export class CompanySettingsService {
     const updatedProfile = await this.db.companyProfileSetting.upsert({
       where: { companyId: targetCompanyId },
       update: {
-        data: nextProfile,
+        data: nextProfile as any,
       },
       create: {
         companyId: targetCompanyId,
-        data: nextProfile,
+        data: nextProfile as any,
       },
     });
 
@@ -1190,7 +1190,7 @@ export class CompanySettingsService {
         barcodeTypeId:
           this.optionalString(body.barcode_type_id) ??
           '5517af95-ea38-444e-bf19-90fe4e9e4df7',
-        properties: body.properties ?? null,
+        properties: (body.properties ?? null) as any,
       },
     });
 
@@ -1239,8 +1239,8 @@ export class CompanySettingsService {
               ),
             }
           : {}),
-        ...(body.properties !== undefined ? { properties: body.properties } : {}),
-      },
+        ...(body.properties !== undefined ? { properties: body.properties as any } : {}),
+      } as any,
     });
 
     return {
@@ -1392,7 +1392,7 @@ export class CompanySettingsService {
     }
 
     const row = await this.db.chequeSetting.create({
-      data: this.toChequeRowData(created),
+      data: this.toChequeRowData(created) as any,
     });
     return this.toChequeResponse(this.toChequeProfile(row), 0);
   }
@@ -1422,7 +1422,7 @@ export class CompanySettingsService {
 
     const updated = await this.db.chequeSetting.update({
       where: { id: chequeId },
-      data: this.toChequeRowData(cheque),
+      data: this.toChequeRowData(cheque) as any,
     });
 
     return this.toChequeResponse(this.toChequeProfile(updated), 0);
@@ -2495,8 +2495,8 @@ export class CompanySettingsService {
             item.barcode_type_id,
             '5517af95-ea38-444e-bf19-90fe4e9e4df7',
           ),
-          properties: item.properties ?? null,
-        })),
+          properties: (item.properties ?? null) as any,
+        })) as any,
         skipDuplicates: true,
       });
     }
@@ -2510,7 +2510,7 @@ export class CompanySettingsService {
         DEFAULT_CHEQUES,
       ).filter((item) => this.stringOrDefault(item.company_id, '') === companyId);
       await this.db.chequeSetting.createMany({
-        data: cheques.map((item) => this.toChequeRowData(item)),
+        data: cheques.map((item) => this.toChequeRowData(item)) as any,
         skipDuplicates: true,
       });
     }
@@ -2601,7 +2601,7 @@ export class CompanySettingsService {
           instagram: this.stringOrDefault(shop.instagram, ''),
           telegram: this.stringOrDefault(shop.telegram, ''),
           website: this.stringOrDefault(shop.website, ''),
-          workingHours: shop.working_hours ?? null,
+          workingHours: (shop.working_hours ?? null) as any,
           isActive: shop.is_active !== false,
         },
       });

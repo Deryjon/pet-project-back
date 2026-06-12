@@ -46,7 +46,7 @@ const DEFAULT_COMPANY_ROLES = [
 type UserWithRelations = any;
 type CompanyRoleRecord = {
   id: string;
-  companyId: string;
+  companyId: string | null;
   code: string;
   name: string;
   isSystem: boolean;
@@ -72,6 +72,13 @@ export class UsersService {
 
   private hasCompanyRoleStorage(db: PrismaService = this.db) {
     return Boolean(this.getCompanyRoleDelegate(db));
+  }
+
+  private requireCompanyId(companyId: string | null | undefined): string {
+    if (!companyId) {
+      throw new ForbiddenException('Company context required');
+    }
+    return companyId;
   }
 
   private assertCompanyRoleStorageAvailable() {
@@ -343,12 +350,13 @@ export class UsersService {
       );
     }
 
-    await this.ensureDefaultCompanyRoles(actor.companyId);
+    const actorCompanyId = actor.companyId;
+    await this.ensureDefaultCompanyRoles(actorCompanyId);
 
     const roles = !this.hasCompanyRoleStorage()
       ? DEFAULT_COMPANY_ROLES.map((role) => ({
           id: role.code,
-          companyId: actor.companyId,
+          companyId: actorCompanyId,
           code: role.code,
           name: role.name,
           isSystem: role.isSystem,
@@ -358,7 +366,7 @@ export class UsersService {
         }))
       : await this.db.companyRole.findMany({
           where: {
-            companyId: actor.companyId,
+            companyId: actorCompanyId,
           },
           orderBy: [{ isSystem: 'desc' }, { createdAt: 'asc' }],
         });
@@ -379,18 +387,19 @@ export class UsersService {
     authorization?: string,
   ) {
     const actor = await this.assertCompanyAdminAccess(authorization);
+    const actorCompanyId = this.requireCompanyId(actor.companyId);
     this.assertCompanyRoleStorageAvailable();
-    await this.ensureDefaultCompanyRoles(actor.companyId);
+    await this.ensureDefaultCompanyRoles(actorCompanyId);
 
     const name = this.requireString(body.name, 'name');
     const requestedCode = this.optionalString(body.code);
     const code = requestedCode
       ? this.normalizeCompanyRoleCode(requestedCode, 'code')
-      : await this.generateUniqueCompanyRoleCode(actor.companyId, name);
+      : await this.generateUniqueCompanyRoleCode(actorCompanyId, name);
 
     const existingRole = await this.db.companyRole.findFirst({
       where: {
-        companyId: actor.companyId,
+        companyId: actorCompanyId,
         code,
       },
     });
@@ -401,7 +410,7 @@ export class UsersService {
 
     const role = await this.db.companyRole.create({
       data: {
-        companyId: actor.companyId,
+        companyId: actorCompanyId,
         code,
         name,
         isSystem: false,
@@ -418,10 +427,11 @@ export class UsersService {
     authorization?: string,
   ) {
     const actor = await this.assertCompanyAdminAccess(authorization);
+    const actorCompanyId = this.requireCompanyId(actor.companyId);
     this.assertCompanyRoleStorageAvailable();
-    await this.ensureDefaultCompanyRoles(actor.companyId);
+    await this.ensureDefaultCompanyRoles(actorCompanyId);
 
-    const role = await this.findCompanyRoleByIdOrThrow(roleId, actor.companyId);
+    const role = await this.findCompanyRoleByIdOrThrow(roleId, actorCompanyId);
     const data: Record<string, unknown> = {};
 
     if (body.name !== undefined) {
@@ -443,7 +453,7 @@ export class UsersService {
 
       const duplicate = await this.db.companyRole.findFirst({
         where: {
-          companyId: actor.companyId,
+          companyId: actorCompanyId,
           code: nextCode,
           id: {
             not: role.id,
@@ -508,10 +518,11 @@ export class UsersService {
 
   async removeCompanyRole(roleId: string, authorization?: string) {
     const actor = await this.assertCompanyAdminAccess(authorization);
+    const actorCompanyId = this.requireCompanyId(actor.companyId);
     this.assertCompanyRoleStorageAvailable();
-    await this.ensureDefaultCompanyRoles(actor.companyId);
+    await this.ensureDefaultCompanyRoles(actorCompanyId);
 
-    const role = await this.findCompanyRoleByIdOrThrow(roleId, actor.companyId);
+    const role = await this.findCompanyRoleByIdOrThrow(roleId, actorCompanyId);
 
     if (role.isSystem) {
       throw new BadRequestException('System roles cannot be deleted');
@@ -519,9 +530,9 @@ export class UsersService {
 
     const assignedUsersCount = await this.db.user.count({
       where: {
-        companyId: actor.companyId,
-        userType: 'company',
-        role: role.code,
+        companyId: actorCompanyId,
+        userType: 'company' as const,
+        crmRoleId: role.id,
       },
     });
 
@@ -960,9 +971,9 @@ export class UsersService {
                 (companyChanged
                   ? undefined
                   : targetUser.shopAccesses.map((access) => access.shopId)),
-              this.optionalString(body.current_shop_id) ??
+              (this.optionalString(body.current_shop_id) ??
                 this.optionalString(body.branch_location) ??
-                (companyChanged ? undefined : targetUser.currentShopId),
+                (companyChanged ? undefined : targetUser.currentShopId)) ?? undefined,
             )
           : targetUser.shopAccesses.map((access) => access.shop);
 
@@ -973,9 +984,9 @@ export class UsersService {
         companyChanged
           ? await this.resolveCurrentShopForWrite(
               companyId,
-              this.optionalString(body.current_shop_id) ??
+              (this.optionalString(body.current_shop_id) ??
                 this.optionalString(body.branch_location) ??
-                (companyChanged ? undefined : targetUser.currentShopId),
+                (companyChanged ? undefined : targetUser.currentShopId)) ?? undefined,
               allowedShops,
             )
           : targetUser.currentShop;
@@ -1013,7 +1024,7 @@ export class UsersService {
           id: {
             not: id,
           },
-          phoneNumber: data.phoneNumber,
+          phoneNumber: typeof data.phoneNumber === 'string' ? data.phoneNumber : undefined,
           userType: targetUser.userType,
           companyId,
         },
@@ -1352,7 +1363,7 @@ export class UsersService {
     if (user.userType === 'platform') {
       const platformRole = user.platformRole;
       const roles = await this.resolveRoles(
-        platformRole,
+        platformRole ?? '',
         user.userType,
         user.companyId,
       );
@@ -1717,7 +1728,7 @@ export class UsersService {
     return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
   }
 
-  private buildUserVisibilityWhere(actor: UserWithRelations) {
+  private buildUserVisibilityWhere(actor: UserWithRelations): Prisma.UserWhereInput {
     if (this.isPlatformAdmin(actor)) {
       return {
         deletedAt: 0,
@@ -1726,7 +1737,7 @@ export class UsersService {
 
     if (actor.userType === 'company' && actor.companyId) {
       return {
-        userType: 'company',
+        userType: 'company' as const,
         companyId: actor.companyId,
         deletedAt: 0,
       };
@@ -1992,7 +2003,7 @@ export class UsersService {
       return;
     }
 
-    await companyRole.createMany({
+    await (companyRole as any).createMany({
       data: DEFAULT_COMPANY_ROLES.map((role) => ({
         companyId,
         code: role.code,
@@ -2184,7 +2195,7 @@ export class UsersService {
     return {
       id: publicId,
       role_id: role.id,
-      company_id: role.companyId,
+      company_id: role.companyId ?? '',
       code: role.code,
       name: displayName,
       is_system: role.isSystem,

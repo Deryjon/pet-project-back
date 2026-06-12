@@ -34,19 +34,19 @@ export class ReportsRepository {
   ) {
     return this.db.sellerSalarySettings.upsert({
       where: { userId: sellerId },
-      update: data,
+      update: data as any,
       create: {
         userId: sellerId,
         fixedSalary: data.fixedSalary ?? 0,
         salaryPercent: data.salaryPercent ?? 0,
-        calculationType: data.calculationType ?? 'FIXED_PLUS_PROFIT',
+        calculationType: (data.calculationType ?? 'FIXED_PLUS_PROFIT') as any,
         bonusEnabled: data.bonusEnabled ?? true,
         isActive: data.isActive ?? true,
       },
     });
   }
 
-  async getSaleItemFacts(filter: ReportFilterDto, context: any) {
+  async getSaleItemFacts(filter: ReportFilterDto, context: any): Promise<any[]> {
     const { clauses, params } = await this.buildSaleItemWhere(filter, context);
     const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const sql = `
@@ -84,10 +84,10 @@ export class ReportsRepository {
       ORDER BY COALESCE(s."paidAt", s."createdAt") DESC, s.id DESC, si.id DESC
     `;
 
-    return this.db.$queryRawUnsafe(sql, ...params);
+    return this.db.$queryRawUnsafe(sql, ...params) as Promise<any[]>;
   }
 
-  async getSellerAggregateRows(filter: ReportFilterDto, context: any) {
+  async getSellerAggregateRows(filter: ReportFilterDto, context: any): Promise<any[]> {
     const { clauses, params } = await this.buildSaleItemWhere(filter, context);
     const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const sql = `
@@ -114,7 +114,7 @@ export class ReportsRepository {
       ORDER BY net_gross_sales DESC NULLS LAST
     `;
 
-    return this.db.$queryRawUnsafe(sql, ...params);
+    return this.db.$queryRawUnsafe(sql, ...params) as Promise<any[]>;
   }
 
   async resolveBranchCodes(filter: ReportFilterDto, context: any) {

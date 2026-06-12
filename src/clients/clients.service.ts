@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -14,6 +15,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 
 type ClientContext = Awaited<ReturnType<UsersService['getRequestContext']>>;
+type CompanyClientContext = Omit<ClientContext, 'companyId'> & { companyId: string };
 type ClientListRecord = Prisma.ClientGetPayload<{
   include: {
     registrationShop: true;
@@ -879,8 +881,12 @@ export class ClientsService {
     };
   }
 
-  private async getContext(authorization?: string) {
-    return this.usersService.getRequestContext(authorization);
+  private async getContext(authorization?: string): Promise<CompanyClientContext> {
+    const context = await this.usersService.getRequestContext(authorization);
+    if (!context.companyId) {
+      throw new ForbiddenException('Company context required');
+    }
+    return context as CompanyClientContext;
   }
 
   private async generateClientCode(companyId: string, tx: Prisma.TransactionClient) {
@@ -892,7 +898,7 @@ export class ClientsService {
 
   private async resolveRegistrationShopId(
     input: unknown,
-    context: ClientContext,
+    context: CompanyClientContext,
   ) {
     const shopId = this.optionalBodyString(input);
     if (!shopId) {
@@ -917,7 +923,7 @@ export class ClientsService {
     return shop.id;
   }
 
-  private async resolveDebtShopId(input: unknown, context: ClientContext) {
+  private async resolveDebtShopId(input: unknown, context: CompanyClientContext) {
     const shopId = this.optionalBodyString(input);
     if (!shopId) {
       return null;
@@ -1032,7 +1038,7 @@ export class ClientsService {
 
   private async completedSaleWhere(
     id: string,
-    context: ClientContext,
+    context: CompanyClientContext,
   ): Promise<Prisma.SaleWhereInput> {
     const branchCodes = await this.resolveAllowedBranchCodes(context);
     return {
@@ -1044,7 +1050,7 @@ export class ClientsService {
     };
   }
 
-  private async loadClientMetrics(clientIds: string[], context: ClientContext) {
+  private async loadClientMetrics(clientIds: string[], context: CompanyClientContext) {
     const metrics = new Map<
       string,
       {
@@ -1260,7 +1266,7 @@ export class ClientsService {
     return true;
   }
 
-  private async getListStats(context: ClientContext) {
+  private async getListStats(context: CompanyClientContext) {
     const clients = await this.prisma.client.findMany({
       where: { companyId: context.companyId },
       select: { id: true, birthDate: true, registeredAt: true },
@@ -1312,7 +1318,7 @@ export class ClientsService {
     };
   }
 
-  private async buildClientDashboard(id: string, context: ClientContext) {
+  private async buildClientDashboard(id: string, context: CompanyClientContext) {
     const sales = await this.prisma.sale.findMany({
       where: await this.completedSaleWhere(id, context),
       include: { items: true },
@@ -1726,7 +1732,7 @@ export class ClientsService {
 
   private buildDebtWhere(
     query: Record<string, string | undefined>,
-    context: ClientContext,
+    context: CompanyClientContext,
     args?: { clientId?: string },
   ): Prisma.ClientDebtWhereInput {
     const and: Prisma.ClientDebtWhereInput[] = [
@@ -1918,7 +1924,7 @@ export class ClientsService {
     return parsed;
   }
 
-  private async resolveAllowedBranchCodes(context: ClientContext) {
+  private async resolveAllowedBranchCodes(context: CompanyClientContext) {
     if (!context.allowedShopIds.length) {
       return [];
     }

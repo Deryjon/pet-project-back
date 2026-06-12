@@ -1040,8 +1040,8 @@ export class PlatformService {
   async updateSettings(body: Record<string, unknown>) {
     const settings = await this.db.platformSetting.upsert({
       where: { id: 'default' },
-      update: { data: body },
-      create: { id: 'default', data: body },
+      update: { data: body as any },
+      create: { id: 'default', data: body as any },
     });
 
     return settings.data;
