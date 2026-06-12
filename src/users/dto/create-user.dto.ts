@@ -22,7 +22,7 @@ export class CreateUserDto {
   phone_number!: string;
 
   @IsString()
-  @MinLength(1)
+  @MinLength(8)
   password!: string;
 
   @IsOptional()

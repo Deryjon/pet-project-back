@@ -9,10 +9,15 @@ import {
   ParseIntPipe,
   Post,
   Put,
+  Req,
+  UseGuards,
 } from '@nestjs/common';
+import { Request } from 'express';
+import { PlatformAdminGuard } from '../auth/guards/platform-admin.guard';
 import { CreateUserDto } from '../users/dto/create-user.dto';
 import { UpdateUserDto } from '../users/dto/update-user.dto';
 import { UsersService } from '../users/users.service';
+import { ChangePlanDto } from './dto/change-plan.dto';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { CreateShopDto } from './dto/create-shop.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
@@ -20,6 +25,7 @@ import { UpdateEntityStatusDto } from './dto/update-entity-status.dto';
 import { UpdateShopDto } from './dto/update-shop.dto';
 import { PlatformService } from './platform.service';
 
+@UseGuards(PlatformAdminGuard)
 @Controller()
 export class PlatformController {
   constructor(
@@ -28,32 +34,22 @@ export class PlatformController {
   ) {}
 
   @Get('platform/dashboard/stats')
-  async getDashboardStats(@Headers('authorization') authorization?: string) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
+  getDashboardStats() {
     return this.platformService.getDashboardStats();
   }
 
   @Get('platform/companies')
-  async findCompanies(@Headers('authorization') authorization?: string) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
+  findCompanies() {
     return this.platformService.findCompanies();
   }
 
   @Get('platform/companies/:companyId')
-  async findCompany(
-    @Param('companyId') companyId: string,
-    @Headers('authorization') authorization?: string,
-  ) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
+  findCompany(@Param('companyId') companyId: string) {
     return this.platformService.findCompany(companyId);
   }
 
   @Post('platform/companies')
-  async createCompany(
-    @Body() body: CreateCompanyDto,
-    @Headers('authorization') authorization?: string,
-  ) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
+  createCompany(@Body() body: CreateCompanyDto) {
     return this.platformService.createCompany(
       body as unknown as Record<string, unknown>,
     );
@@ -61,12 +57,10 @@ export class PlatformController {
 
   @Put('platform/companies/:companyId')
   @Patch('platform/companies/:companyId')
-  async updateCompany(
+  updateCompany(
     @Param('companyId') companyId: string,
     @Body() body: UpdateCompanyDto,
-    @Headers('authorization') authorization?: string,
   ) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
     return this.platformService.updateCompany(
       companyId,
       body as unknown as Record<string, unknown>,
@@ -74,12 +68,10 @@ export class PlatformController {
   }
 
   @Patch('platform/companies/:companyId/status')
-  async updateCompanyStatus(
+  updateCompanyStatus(
     @Param('companyId') companyId: string,
     @Body() body: UpdateEntityStatusDto,
-    @Headers('authorization') authorization?: string,
   ) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
     return this.platformService.updateCompanyStatus(
       companyId,
       body as unknown as Record<string, unknown>,
@@ -87,107 +79,97 @@ export class PlatformController {
   }
 
   @Post('platform/companies/:companyId/block')
-  async blockCompany(
+  blockCompany(
     @Param('companyId') companyId: string,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @Req() req: Request,
   ) {
-    const actor =
-      await this.usersService.assertPlatformAdminAccess(authorization);
-    return this.platformService.blockCompany(companyId, body, actor.id);
+    return this.platformService.blockCompany(
+      companyId,
+      body,
+      (req.user as { id: number }).id,
+    );
   }
 
   @Post('platform/companies/:companyId/unblock')
-  async unblockCompany(
+  unblockCompany(
     @Param('companyId') companyId: string,
-    @Headers('authorization') authorization?: string,
+    @Req() req: Request,
   ) {
-    const actor =
-      await this.usersService.assertPlatformAdminAccess(authorization);
-    return this.platformService.unblockCompany(companyId, actor.id);
+    return this.platformService.unblockCompany(
+      companyId,
+      (req.user as { id: number }).id,
+    );
   }
 
   @Delete('platform/companies/:companyId')
-  async removeCompany(
-    @Param('companyId') companyId: string,
-    @Headers('authorization') authorization?: string,
-  ) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
+  removeCompany(@Param('companyId') companyId: string) {
     return this.platformService.removeCompany(companyId);
   }
 
   @Get('platform/subscriptions')
-  async findSubscriptions(@Headers('authorization') authorization?: string) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
+  findSubscriptions() {
     return this.platformService.findSubscriptions();
   }
 
   @Post('platform/subscriptions/:id/renew')
-  async renewSubscription(
+  renewSubscription(@Param('id') id: string, @Req() req: Request) {
+    return this.platformService.renewSubscription(
+      id,
+      (req.user as { id: number }).id,
+    );
+  }
+
+  @Patch('platform/subscriptions/:id/plan')
+  changeSubscriptionPlan(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @Body() body: ChangePlanDto,
+    @Req() req: Request,
   ) {
-    const actor =
-      await this.usersService.assertPlatformAdminAccess(authorization);
-    return this.platformService.renewSubscription(id, actor.id);
+    return this.platformService.changePlan(
+      id,
+      body.plan_id,
+      (req.user as { id: number }).id,
+    );
   }
 
   @Post('platform/subscriptions/check-expired')
-  async checkExpiredSubscriptions(
-    @Headers('authorization') authorization?: string,
-  ) {
-    const actor =
-      await this.usersService.assertPlatformAdminAccess(authorization);
-    return this.platformService.checkExpiredSubscriptions(actor.id);
+  checkExpiredSubscriptions(@Req() req: Request) {
+    return this.platformService.checkExpiredSubscriptions(
+      (req.user as { id: number }).id,
+    );
   }
 
   @Get('platform/payments')
-  async findPayments(@Headers('authorization') authorization?: string) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
+  findPayments() {
     return this.platformService.findPayments();
   }
 
   @Post('platform/payments')
-  async createPayment(
-    @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
-  ) {
-    const actor =
-      await this.usersService.assertPlatformAdminAccess(authorization);
-    return this.platformService.createPayment(body, actor.id);
+  createPayment(@Body() body: Record<string, unknown>, @Req() req: Request) {
+    return this.platformService.createPayment(
+      body,
+      (req.user as { id: number }).id,
+    );
   }
 
   @Get('platform/plans')
-  async findPlans(@Headers('authorization') authorization?: string) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
+  findPlans() {
     return this.platformService.findPlans();
   }
 
   @Post('platform/plans')
-  async createPlan(
-    @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
-  ) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
+  createPlan(@Body() body: Record<string, unknown>) {
     return this.platformService.createPlan(body);
   }
 
   @Patch('platform/plans/:id')
-  async updatePlan(
-    @Param('id') id: string,
-    @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
-  ) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
+  updatePlan(@Param('id') id: string, @Body() body: Record<string, unknown>) {
     return this.platformService.updatePlan(id, body);
   }
 
   @Delete('platform/plans/:id')
-  async removePlan(
-    @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
-  ) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
+  removePlan(@Param('id') id: string) {
     return this.platformService.removePlan(id);
   }
 
@@ -206,62 +188,49 @@ export class PlatformController {
 
   @Put('platform/users/:id')
   @Patch('platform/users/:id')
-  async updatePlatformUser(
+  updatePlatformUser(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: UpdateUserDto,
-    @Headers('authorization') authorization?: string,
+    @Req() req: Request,
   ) {
-    const actor =
-      await this.usersService.assertPlatformAdminAccess(authorization);
     return this.usersService.update(
       id,
       body as unknown as Record<string, unknown>,
-      actor,
+      req.user as never,
     );
   }
 
   @Post('platform/users/:id/block')
-  async blockPlatformUser(
+  blockPlatformUser(
     @Param('id', ParseIntPipe) id: number,
-    @Headers('authorization') authorization?: string,
+    @Req() req: Request,
   ) {
-    const actor =
-      await this.usersService.assertPlatformAdminAccess(authorization);
-    return this.usersService.update(id, { is_active: false }, actor);
+    return this.usersService.update(id, { is_active: false }, req.user as never);
   }
 
   @Post('platform/users/:id/unblock')
-  async unblockPlatformUser(
+  unblockPlatformUser(
     @Param('id', ParseIntPipe) id: number,
-    @Headers('authorization') authorization?: string,
+    @Req() req: Request,
   ) {
-    const actor =
-      await this.usersService.assertPlatformAdminAccess(authorization);
-    return this.usersService.update(id, { is_active: true }, actor);
+    return this.usersService.update(id, { is_active: true }, req.user as never);
   }
 
   @Delete('platform/users/:id')
-  async removePlatformUser(
+  removePlatformUser(
     @Param('id', ParseIntPipe) id: number,
-    @Headers('authorization') authorization?: string,
+    @Req() req: Request,
   ) {
-    const actor =
-      await this.usersService.assertPlatformAdminAccess(authorization);
-    return this.usersService.remove(id, actor);
+    return this.usersService.remove(id, req.user as never);
   }
 
   @Get('platform/settings')
-  async getSettings(@Headers('authorization') authorization?: string) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
+  getSettings() {
     return this.platformService.getSettings();
   }
 
   @Patch('platform/settings')
-  async updateSettings(
-    @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
-  ) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
+  updateSettings(@Body() body: Record<string, unknown>) {
     return this.platformService.updateSettings(body);
   }
 
@@ -271,37 +240,26 @@ export class PlatformController {
   }
 
   @Post('platform/users')
-  async createPlatformUser(
-    @Body() body: CreateUserDto,
-    @Headers('authorization') authorization?: string,
-  ) {
-    const actor =
-      await this.usersService.assertPlatformAdminAccess(authorization);
+  createPlatformUser(@Body() body: CreateUserDto, @Req() req: Request) {
     return this.usersService.create(
       {
         ...body,
         user_type: 'platform',
       } as unknown as Record<string, unknown>,
-      actor,
+      req.user as never,
     );
   }
 
   @Get('platform/companies/:companyId/shops')
-  async findCompanyShops(
-    @Param('companyId') companyId: string,
-    @Headers('authorization') authorization?: string,
-  ) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
+  findCompanyShops(@Param('companyId') companyId: string) {
     return this.platformService.findCompanyShops(companyId);
   }
 
   @Post('platform/companies/:companyId/shops')
-  async createShop(
+  createShop(
     @Param('companyId') companyId: string,
     @Body() body: CreateShopDto,
-    @Headers('authorization') authorization?: string,
   ) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
     return this.platformService.createShop(
       companyId,
       body as unknown as Record<string, unknown>,
@@ -309,13 +267,11 @@ export class PlatformController {
   }
 
   @Put('platform/companies/:companyId/shops/:shopId')
-  async updateShop(
+  updateShop(
     @Param('companyId') companyId: string,
     @Param('shopId') shopId: string,
     @Body() body: UpdateShopDto,
-    @Headers('authorization') authorization?: string,
   ) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
     return this.platformService.updateShop(
       companyId,
       shopId,
@@ -324,13 +280,11 @@ export class PlatformController {
   }
 
   @Patch('platform/companies/:companyId/shops/:shopId/status')
-  async updateShopStatus(
+  updateShopStatus(
     @Param('companyId') companyId: string,
     @Param('shopId') shopId: string,
     @Body() body: UpdateEntityStatusDto,
-    @Headers('authorization') authorization?: string,
   ) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
     return this.platformService.updateShopStatus(
       companyId,
       shopId,
@@ -339,17 +293,15 @@ export class PlatformController {
   }
 
   @Delete('platform/companies/:companyId/shops/:shopId')
-  async removeShop(
+  removeShop(
     @Param('companyId') companyId: string,
     @Param('shopId') shopId: string,
-    @Headers('authorization') authorization?: string,
   ) {
-    await this.usersService.assertPlatformAdminAccess(authorization);
     return this.platformService.removeShop(companyId, shopId);
   }
 
   @Get('platform/companies/:companyId/users')
-  async findCompanyUsers(
+  findCompanyUsers(
     @Param('companyId') companyId: string,
     @Headers('authorization') authorization?: string,
   ) {
@@ -360,7 +312,7 @@ export class PlatformController {
   }
 
   @Get('platform/companies/:companyId/users/:id')
-  async findCompanyUser(
+  findCompanyUser(
     @Param('companyId') companyId: string,
     @Param('id', ParseIntPipe) id: number,
     @Headers('authorization') authorization?: string,
@@ -378,19 +330,12 @@ export class PlatformController {
     @Param('companyId') companyId: string,
     @Param('id', ParseIntPipe) id: number,
     @Body() body: UpdateUserDto,
-    @Headers('authorization') authorization?: string,
+    @Req() req: Request,
   ) {
-    console.log('PlatformController.updateCompanyUser authorization =', {
-      companyId,
-      id,
-      authorization: authorization ?? null,
-    });
-    const actor =
-      await this.usersService.assertPlatformAdminAccess(authorization);
     await this.usersService.findCompanyManagedUserForPlatform(
       companyId,
       id,
-      authorization,
+      req.headers.authorization,
     );
 
     return this.usersService.update(
@@ -400,7 +345,7 @@ export class PlatformController {
         company_id: companyId,
         user_type: 'company',
       } as unknown as Record<string, unknown>,
-      actor,
+      req.user as never,
     );
   }
 
@@ -408,20 +353,18 @@ export class PlatformController {
   async blockCompanyUser(
     @Param('companyId') companyId: string,
     @Param('id', ParseIntPipe) id: number,
-    @Headers('authorization') authorization?: string,
+    @Req() req: Request,
   ) {
-    const actor =
-      await this.usersService.assertPlatformAdminAccess(authorization);
     await this.usersService.findCompanyManagedUserForPlatform(
       companyId,
       id,
-      authorization,
+      req.headers.authorization,
     );
 
     return this.usersService.updateStatus(
       id,
       { is_active: false },
-      actor,
+      req.user as never,
     );
   }
 
@@ -429,51 +372,45 @@ export class PlatformController {
   async unblockCompanyUser(
     @Param('companyId') companyId: string,
     @Param('id', ParseIntPipe) id: number,
-    @Headers('authorization') authorization?: string,
+    @Req() req: Request,
   ) {
-    const actor =
-      await this.usersService.assertPlatformAdminAccess(authorization);
     await this.usersService.findCompanyManagedUserForPlatform(
       companyId,
       id,
-      authorization,
+      req.headers.authorization,
     );
 
-    return this.usersService.updateStatus(id, { is_active: true }, actor);
+    return this.usersService.updateStatus(id, { is_active: true }, req.user as never);
   }
 
   @Delete('platform/companies/:companyId/users/:id')
   async removeCompanyUser(
     @Param('companyId') companyId: string,
     @Param('id', ParseIntPipe) id: number,
-    @Headers('authorization') authorization?: string,
+    @Req() req: Request,
   ) {
-    const actor =
-      await this.usersService.assertPlatformAdminAccess(authorization);
     await this.usersService.findCompanyManagedUserForPlatform(
       companyId,
       id,
-      authorization,
+      req.headers.authorization,
     );
 
-    return this.usersService.remove(id, actor);
+    return this.usersService.remove(id, req.user as never);
   }
 
   @Post('platform/companies/:companyId/users')
-  async createCompanyUser(
+  createCompanyUser(
     @Param('companyId') companyId: string,
     @Body() body: CreateUserDto,
-    @Headers('authorization') authorization?: string,
+    @Req() req: Request,
   ) {
-    const actor =
-      await this.usersService.assertPlatformAdminAccess(authorization);
     return this.usersService.create(
       {
         ...body,
         company_id: companyId,
         user_type: 'company',
       } as unknown as Record<string, unknown>,
-      actor,
+      req.user as never,
     );
   }
 }

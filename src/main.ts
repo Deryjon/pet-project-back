@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import * as express from 'express';
 import { join } from 'path';
 import { AppModule } from './app.module';
+import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
 import { PrismaService } from './prisma/prisma.service';
 
 function firstHeaderValue(value: string | string[] | undefined) {
@@ -78,20 +79,7 @@ async function bootstrap() {
       next: express.NextFunction,
     ) => {
       normalizeApiPrefix(req);
-      console.log('RAW AUTH HEADER:', {
-        method: req.method,
-        url: req.originalUrl,
-        authorization: req.headers.authorization ?? null,
-        xAuthorization: req.headers['x-authorization'] ?? null,
-        xAccessToken: req.headers['x-access-token'] ?? null,
-        rawHeaders: req.rawHeaders,
-      });
       normalizeAuthorizationHeader(req);
-      console.log('NORMALIZED AUTH HEADER:', {
-        method: req.method,
-        url: req.originalUrl,
-        authorization: req.headers.authorization ?? null,
-      });
       next();
     },
   );
@@ -109,6 +97,7 @@ async function bootstrap() {
       forbidNonWhitelisted: true,
     }),
   );
+  app.useGlobalFilters(new PrismaExceptionFilter());
 
   const prismaService = app.get(PrismaService);
   prismaService.enableShutdownHooks(app);
@@ -125,7 +114,7 @@ async function bootstrap() {
       error.code === 'EADDRINUSE'
     ) {
       logger.error(
-        `Порт ${port} уже занят. Останови предыдущий процесс или запусти сервер с другим PORT.`,
+        `Port ${port} is already in use. Stop the existing process or set a different PORT.`,
       );
       await app.close();
       process.exit(1);

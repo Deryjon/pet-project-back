@@ -18,8 +18,8 @@ const DEFAULT_COMPANY_ROLES = [
 export class PlatformService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private get db(): any {
-    return this.prisma as any;
+  private get db(): PrismaService {
+    return this.prisma;
   }
 
   async createCompany(body: Record<string, unknown>) {
@@ -751,6 +751,46 @@ export class PlatformService {
     return subscriptions.map((subscription) =>
       this.toSubscriptionItem(subscription),
     );
+  }
+
+  async changePlan(
+    subscriptionId: string,
+    planId: string,
+    adminId: number,
+  ) {
+    const subscription = await this.findSubscriptionOrThrow(subscriptionId);
+
+    const plan = await this.db.plan.findUnique({ where: { id: planId } });
+    if (!plan || plan.status !== 'active') {
+      throw new BadRequestException('Active plan not found');
+    }
+
+    if (subscription.planId === planId) {
+      throw new BadRequestException('Company already uses this plan');
+    }
+
+    const oldPlanName = subscription.plan?.name ?? subscription.planId;
+
+    const updated = await this.db.$transaction(async (tx: any) => {
+      const result = await tx.subscription.update({
+        where: { id: subscriptionId },
+        data: { planId },
+        include: { company: true, plan: true },
+      });
+
+      await tx.platformActionLog.create({
+        data: {
+          adminId,
+          companyId: subscription.companyId,
+          action: 'plan_changed',
+          description: `Plan changed from "${oldPlanName}" to "${plan.name}"`,
+        },
+      });
+
+      return result;
+    });
+
+    return this.toSubscriptionItem(updated);
   }
 
   async renewSubscription(

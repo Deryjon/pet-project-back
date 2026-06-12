@@ -51,8 +51,8 @@ export class AuthService {
     private readonly prisma: PrismaService,
   ) {}
 
-  private get db(): any {
-    return this.prisma as any;
+  private get db(): PrismaService {
+    return this.prisma;
   }
 
   async companyLogin(dto: CompanyLoginDto) {
@@ -61,7 +61,7 @@ export class AuthService {
     );
 
     if (!company) {
-      throw new UnauthorizedException('Компания не найдена');
+      throw new UnauthorizedException('Company not found');
     }
 
     return {
@@ -75,7 +75,7 @@ export class AuthService {
     );
 
     if (!user) {
-      throw new UnauthorizedException('Пользователь не найден');
+      throw new UnauthorizedException('User not found');
     }
 
     await this.usersService.assertUserCanAuthenticate(user);
@@ -84,7 +84,7 @@ export class AuthService {
       user.passwordHash,
     );
     if (!isPasswordValid) {
-      throw new UnauthorizedException('Введен неправильный пароль');
+      throw new UnauthorizedException('Invalid password');
     }
 
     const authProfile = await this.usersService.toAuthProfile(user);
@@ -108,7 +108,7 @@ export class AuthService {
     );
 
     if (!companyId) {
-      throw new UnauthorizedException('Компания не найдена');
+      throw new UnauthorizedException('Company not found');
     }
 
     const user = await this.usersService.findByPhoneNumberAndCompany(
@@ -117,7 +117,7 @@ export class AuthService {
     );
 
     if (!user) {
-      throw new UnauthorizedException('Пользователь не найден');
+      throw new UnauthorizedException('User not found');
     }
 
     await this.usersService.assertUserCanAuthenticate(user);
@@ -126,7 +126,7 @@ export class AuthService {
       user.passwordHash,
     );
     if (!isPasswordValid) {
-      throw new UnauthorizedException('Неправильный пароль');
+      throw new UnauthorizedException('Invalid password');
     }
 
     const preparedUser =
@@ -220,9 +220,9 @@ export class AuthService {
     const platformRole = profile.platform_role ?? profile.role_code;
     if (
       profile.user_type !== 'platform' ||
-      !['platform_admin', 'superadmin'].includes(platformRole)
+      !['platform_admin', 'superadmin'].includes(platformRole ?? '')
     ) {
-      throw new ForbiddenException('Такой пользователь не имеет прав доступа');
+      throw new ForbiddenException('Access denied');
     }
 
     return profile;

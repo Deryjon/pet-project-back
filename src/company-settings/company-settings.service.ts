@@ -531,8 +531,8 @@ export class CompanySettingsService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  private get db(): any {
-    return this.prisma as any;
+  private get db(): PrismaService {
+    return this.prisma;
   }
 
   async getDefaultCurrency(companyId?: string): Promise<CompanyCurrencyConfig> {

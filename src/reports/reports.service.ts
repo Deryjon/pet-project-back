@@ -11,6 +11,8 @@ import { ReportsRepository } from './reports.repository';
 import { SalaryService } from './salary.service';
 import { SellerReportsService } from './seller-reports.service';
 
+const MAX_REPORT_RECORDS = 10_000;
+
 @Injectable()
 export class ReportsService {
   constructor(
@@ -23,8 +25,8 @@ export class ReportsService {
     private readonly sellerReportsService: SellerReportsService,
   ) {}
 
-  private get db(): any {
-    return this.prisma as any;
+  private get db(): PrismaService {
+    return this.prisma;
   }
 
   async getSummary(
@@ -1415,6 +1417,7 @@ export class ReportsService {
     const where = await this.buildReportWhere(query, context);
     return this.db.sale.findMany({
       where,
+      take: MAX_REPORT_RECORDS,
       include: {
         user: true,
         items: {
@@ -1483,6 +1486,7 @@ export class ReportsService {
     const where = await this.buildProductWhere(query, context);
     return this.db.product.findMany({
       where,
+      take: MAX_REPORT_RECORDS,
       include: {
         category: true,
         brand: true,
@@ -1506,6 +1510,7 @@ export class ReportsService {
     const where = await this.buildStockMovementWhere(query, context);
     return this.db.stockMovement.findMany({
       where,
+      take: MAX_REPORT_RECORDS,
       include: {
         shop: true,
         product: {

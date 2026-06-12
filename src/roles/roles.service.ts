@@ -18,8 +18,8 @@ export class RolesService {
     private readonly usersService: UsersService,
   ) {}
 
-  private get db(): any {
-    return this.prisma as any;
+  private get db(): PrismaService {
+    return this.prisma;
   }
 
   async create(body: Record<string, unknown>, authorization?: string) {

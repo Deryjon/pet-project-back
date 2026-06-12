@@ -6,7 +6,9 @@ import {
   Param,
   Patch,
   Post,
+  UseGuards,
 } from '@nestjs/common';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { CompanyLoginDto } from './dto/company-login.dto';
 import { LoginDto } from './dto/login.dto';
@@ -16,21 +18,29 @@ import { PlatformLoginDto } from './dto/platform-login.dto';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ auth: { limit: 5, ttl: 60000 } })
   @Post('auth/company-login')
   companyLogin(@Body() dto: CompanyLoginDto) {
     return this.authService.companyLogin(dto);
   }
 
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ auth: { limit: 5, ttl: 60000 } })
   @Post('auth/platform-login')
   platformLogin(@Body() dto: PlatformLoginDto) {
     return this.authService.platformLogin(dto);
   }
 
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ auth: { limit: 5, ttl: 60000 } })
   @Post('platform/auth/login')
   platformAuthLogin(@Body() dto: PlatformLoginDto) {
     return this.authService.platformLogin(dto);
   }
 
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ auth: { limit: 5, ttl: 60000 } })
   @Post('auth/login')
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);

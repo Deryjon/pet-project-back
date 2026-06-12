@@ -12,9 +12,11 @@ import {
   Put,
   Query,
   UploadedFile,
+  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateCompanyRoleDto } from './dto/create-company-role.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateCompanyRoleDto } from './dto/update-company-role.dto';
@@ -23,6 +25,7 @@ import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UsersService } from './users.service';
 
+@UseGuards(JwtAuthGuard)
 @Controller()
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
@@ -207,7 +210,19 @@ export class UsersController {
   }
 
   @Post('user/profile/avatar')
-  @UseInterceptors(FileInterceptor('avatar'))
+  @UseInterceptors(
+    FileInterceptor('avatar', {
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        const allowed = ['image/jpeg', 'image/png', 'image/webp'];
+        if (allowed.includes(file.mimetype)) {
+          cb(null, true);
+        } else {
+          cb(new Error('Only JPEG, PNG and WebP images are allowed'), false);
+        }
+      },
+    }),
+  )
   uploadAvatar(
     @Headers('authorization') authorization: string | undefined,
     @UploadedFile()

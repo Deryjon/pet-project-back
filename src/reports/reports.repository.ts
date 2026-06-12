@@ -6,8 +6,8 @@ import { ReportFilterDto } from './dto/report-filter.dto';
 export class ReportsRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  private get db(): any {
-    return this.prisma as any;
+  private get db(): PrismaService {
+    return this.prisma;
   }
 
   async findSellerById(sellerId: number) {

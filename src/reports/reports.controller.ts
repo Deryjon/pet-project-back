@@ -6,7 +6,9 @@ import {
   Param,
   Put,
   Query,
+  UseGuards,
 } from '@nestjs/common';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ReportsService } from './reports.service';
 
 const versioned = (routes: string[]) =>
@@ -119,6 +121,7 @@ const PRODUCT_SELLS_BY_SUPPLIERS_TABLE_API_ROUTES = versioned([
 ]);
 const STOCK_REPORT_TABLE_API_ROUTES = versioned(['stock-report-table']);
 
+@UseGuards(JwtAuthGuard)
 @Controller()
 export class ReportsController {
   constructor(private readonly reportsService: ReportsService) {}
