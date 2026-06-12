@@ -1350,6 +1350,59 @@ export class PlatformService {
     };
   }
 
+  async deleteCompanyProduct(companyId: string, productId: string, adminId: number) {
+    await this.findCompany(companyId);
+
+    const product = await this.db.product.findFirst({
+      where: { publicId: productId, companyId },
+    });
+
+    if (!product) {
+      throw new NotFoundException('Product not found');
+    }
+
+    await this.db.$transaction(async (tx: any) => {
+      await tx.product.delete({ where: { id: product.id } });
+      await tx.platformActionLog.create({
+        data: {
+          adminId,
+          companyId,
+          action: 'product_deleted',
+          description: `Product "${product.name}" (${productId}) deleted`,
+        },
+      });
+    });
+
+    return {
+      message: 'Product deleted',
+      product_id: productId,
+      company_id: companyId,
+    };
+  }
+
+  async deleteAllCompanyProducts(companyId: string, adminId: number) {
+    await this.findCompany(companyId);
+
+    const { count } = await this.db.$transaction(async (tx: any) => {
+      const result = await tx.product.deleteMany({ where: { companyId } });
+      await tx.platformActionLog.create({
+        data: {
+          adminId,
+          companyId,
+          action: 'all_products_deleted',
+          description: `All ${result.count} products deleted for company`,
+        },
+      });
+      return result;
+    });
+
+    return {
+      message: 'All products deleted',
+      deleted_count: count,
+      company_id: companyId,
+    };
+  }
+
   private toShopItem(shop: {
     id: string;
     companyId: string;

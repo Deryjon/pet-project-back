@@ -300,6 +300,30 @@ export class PlatformController {
     return this.platformService.removeShop(companyId, shopId);
   }
 
+  @Delete('platform/companies/:companyId/products')
+  deleteAllCompanyProducts(
+    @Param('companyId') companyId: string,
+    @Req() req: Request,
+  ) {
+    return this.platformService.deleteAllCompanyProducts(
+      companyId,
+      (req.user as { id: number }).id,
+    );
+  }
+
+  @Delete('platform/companies/:companyId/products/:productId')
+  deleteCompanyProduct(
+    @Param('companyId') companyId: string,
+    @Param('productId') productId: string,
+    @Req() req: Request,
+  ) {
+    return this.platformService.deleteCompanyProduct(
+      companyId,
+      productId,
+      (req.user as { id: number }).id,
+    );
+  }
+
   @Get('platform/companies/:companyId/users')
   findCompanyUsers(
     @Param('companyId') companyId: string,
