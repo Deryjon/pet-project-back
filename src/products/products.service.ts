@@ -7361,43 +7361,65 @@ export class ProductsService {
     let barcode = row.barcode?.trim() ?? '';
 
     if (!sku) {
-      sku = await this.generateUniqueImportIdentifier(companyId, 'sku', 'SKU');
-    }
-
-    if (!barcode) {
-      barcode = await this.generateUniqueImportIdentifier(
-        companyId,
-        'barcode',
-        'BC',
+      const prefix = this.normalizeSkuPrefix(
+        row.name ? this.buildSkuPrefix(row.name) : undefined,
       );
-    }
-
-    return { sku, barcode };
-  }
-
-  private async generateUniqueImportIdentifier(
-    companyId: string,
-    field: 'sku' | 'barcode',
-    prefix: string,
-  ) {
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      const candidate = `${prefix}-${randomUUID().replace(/-/g, '').slice(0, 12)}`;
-      const existing = await this.prisma.product.findFirst({
-        where: {
-          companyId,
-          [field]: candidate,
-        },
-        select: { id: true },
-      });
-
-      if (!existing) {
-        return candidate;
+      const nextSkuNumber = await this.getNextSkuNumber(companyId, prefix);
+      const maxSkuNumber = 10 ** SKU_NUMBER_LENGTH - 1;
+      for (
+        let skuNumber = nextSkuNumber;
+        skuNumber <= maxSkuNumber;
+        skuNumber += 1
+      ) {
+        const candidate = this.formatSku(prefix, skuNumber);
+        const existing = await this.prisma.product.findFirst({
+          where: { companyId, sku: candidate },
+          select: { id: true },
+        });
+        if (!existing) {
+          sku = candidate;
+          break;
+        }
+      }
+      if (!sku) {
+        throw new BadRequestException('Could not generate unique SKU for import');
       }
     }
 
-    throw new BadRequestException(
-      `Unable to generate unique ${field} for import`,
-    );
+    if (!barcode) {
+      const latestBarcodeRecords = await this.prisma.product.findMany({
+        where: { companyId, barcode: { startsWith: '2' } },
+        orderBy: { barcode: 'desc' },
+        select: { barcode: true },
+      });
+      const latestPayload = latestBarcodeRecords.reduce<number | null>(
+        (maxPayload, record) => {
+          const payload = this.extractEan13Payload(record.barcode);
+          if (payload === null) return maxPayload;
+          return maxPayload === null ? payload : Math.max(maxPayload, payload);
+        },
+        null,
+      );
+      let nextPayload =
+        latestPayload !== null ? latestPayload + 1 : BARCODE_PAYLOAD_BASE;
+      while (nextPayload <= BARCODE_PAYLOAD_MAX) {
+        const candidate = this.formatEan13Barcode(nextPayload);
+        const existing = await this.prisma.product.findFirst({
+          where: { companyId, barcode: candidate },
+          select: { id: true },
+        });
+        if (!existing) {
+          barcode = candidate;
+          break;
+        }
+        nextPayload += 1;
+      }
+      if (!barcode) {
+        throw new BadRequestException('Barcode range exceeded during import');
+      }
+    }
+
+    return { sku, barcode };
   }
 
   private resolveImportProductLockKey(companyId: string, row: ImportRowInput) {
