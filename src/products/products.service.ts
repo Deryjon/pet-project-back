@@ -8048,13 +8048,22 @@ export class ProductsService {
 
     if (context.allowedBranchCodes.length > 0) {
       scopedFilters.push({
-        stocks: {
-          some: {
-            branchCode: {
-              in: context.allowedBranchCodes,
+        OR: [
+          {
+            stocks: {
+              some: {
+                branchCode: {
+                  in: context.allowedBranchCodes,
+                },
+              },
             },
           },
-        },
+          {
+            stocks: {
+              none: {},
+            },
+          },
+        ],
       });
     }
 
