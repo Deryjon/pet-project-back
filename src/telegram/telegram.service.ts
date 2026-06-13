@@ -235,7 +235,7 @@ export class TelegramService {
         : null;
 
       const paymentLines: string[] = [];
-      if (extraPayments && extraPayments.length > 1) {
+      if (extraPayments && extraPayments.length > 0) {
         for (const p of extraPayments) {
           const pt = paymentTypeMap.get(p.payment_method);
           const label = pt
