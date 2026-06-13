@@ -179,7 +179,7 @@ export class ProductsController {
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
   ) {
-    return this.productsService.commitImport(id, authorization);
+    return this.productsService.commitImport(id, authorization, { forceWithCheckAccept: true });
   }
 
   @Post('v2/imports/:id/cancel')
