@@ -13,6 +13,8 @@ import { UsersService } from '../users/users.service';
 const COMPANY_ID = process.env.COMPANY_ID ?? '';
 const DEFAULT_PRODUCT_TYPE_ID =
   process.env.DEFAULT_PRODUCT_TYPE_ID ?? '69e939aa-9b8f-46a9-b605-8b2675475b7b';
+const SERVICE_PRODUCT_TYPE_ID =
+  process.env.PRODUCT_TYPE_SERVICE_ID ?? 'f3e4d8de-5d2c-4ff0-b1c2-5ed0f7a27401';
 const DEFAULT_MEASUREMENT_UNIT = {
   id: '12a69bc0-c575-4586-9f0f-76e8295d4139',
   name: 'Штука',
@@ -507,51 +509,53 @@ export class SalesService {
     const safeLimit = Math.min(Math.max(1, args.limit), 100);
     const branchCode = await this.resolveScopedBranchCode(args.shopId, context);
 
-    const where: any = args.search
-      ? {
-          OR: [
-            { name: { contains: args.search, mode: 'insensitive' as const } },
-            { sku: { contains: args.search, mode: 'insensitive' as const } },
-            {
-              barcode: { contains: args.search, mode: 'insensitive' as const },
-            },
-          ],
-        }
-      : {};
+    const and: any[] = [];
+
+    if (args.search) {
+      and.push({
+        OR: [
+          { name: { contains: args.search, mode: 'insensitive' as const } },
+          { sku: { contains: args.search, mode: 'insensitive' as const } },
+          { barcode: { contains: args.search, mode: 'insensitive' as const } },
+        ],
+      });
+    }
 
     if (context?.userType === 'company' && context.companyId) {
-      where.companyId = context.companyId;
+      and.push({ companyId: context.companyId });
     }
 
     if (branchCode) {
-      where.stocks = {
-        some: {
-          branchCode,
-          quantity: {
-            gt: 0,
-          },
-        },
-      };
+      and.push({
+        OR: [
+          { stocks: { some: { branchCode, quantity: { gt: 0 } } } },
+          { stocks: { none: {} } },
+        ],
+      });
     } else if (context?.allowedBranchCodes?.length) {
-      where.stocks = {
-        some: {
-          branchCode: {
-            in: context.allowedBranchCodes,
+      and.push({
+        OR: [
+          {
+            stocks: {
+              some: {
+                branchCode: { in: context.allowedBranchCodes },
+                quantity: { gt: 0 },
+              },
+            },
           },
-          quantity: {
-            gt: 0,
-          },
-        },
-      };
+          { stocks: { none: {} } },
+        ],
+      });
     } else {
-      where.stocks = {
-        some: {
-          quantity: {
-            gt: 0,
-          },
-        },
-      };
+      and.push({
+        OR: [
+          { stocks: { some: { quantity: { gt: 0 } } } },
+          { stocks: { none: {} } },
+        ],
+      });
     }
+
+    const where: any = and.length > 0 ? { AND: and } : {};
 
     const [count, products] = await this.prisma.$transaction([
       this.prisma.product.count({ where }),
@@ -3353,6 +3357,7 @@ export class SalesService {
     const currencyCode = this.companySettingsService.getDefaultCurrencyIsoCode(
       context?.companyId,
     );
+    const isService = product.productType === SERVICE_PRODUCT_TYPE_ID;
     const relevantStocks = branchCode
       ? product.stocks.filter((stock) => stock.branchCode === branchCode)
       : product.stocks;
@@ -3377,6 +3382,7 @@ export class SalesService {
       sku: product.sku,
       barcode: product.barcode,
       additional_barcodes: null,
+      stock: isService ? null : totalMeasurementValue,
       retail_price: product.salePrice ?? 0,
       supply_price: product.purchasePrice ?? 0,
       description:
