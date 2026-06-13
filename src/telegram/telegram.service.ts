@@ -155,6 +155,7 @@ export class TelegramService {
     total: number;
     userId: number | null;
     paymentMethod: string | null;
+    extraPayments: any;
     paidAt: Date | null;
   }): Promise<void> {
     if (!sale.companyId) return;
@@ -173,46 +174,136 @@ export class TelegramService {
 
       if (!subscribers.length) return;
 
-      let sellerName = '';
-      if (sale.userId) {
-        const seller = await this.prisma.user.findUnique({
-          where: { id: sale.userId },
-          select: { firstName: true, lastName: true },
-        });
-        if (seller) {
-          sellerName = `${seller.firstName} ${seller.lastName}`.trim();
+      // Fetch all needed data in parallel
+      const [seller, shop, items, paymentTypes] = await Promise.all([
+        sale.userId
+          ? this.prisma.user.findUnique({
+              where: { id: sale.userId },
+              select: { firstName: true, lastName: true },
+            })
+          : null,
+        sale.branchCode
+          ? this.prisma.shop.findFirst({
+              where: { companyId: sale.companyId, branchCode: sale.branchCode },
+              select: { name: true },
+            })
+          : null,
+        this.prisma.saleItem.findMany({
+          where: { saleId: sale.id },
+          select: {
+            name: true,
+            barcode: true,
+            sku: true,
+            quantity: true,
+            salePrice: true,
+            lineTotal: true,
+            discountAmount: true,
+          },
+        }),
+        this.prisma.paymentType.findMany({
+          where: { companyId: sale.companyId },
+          select: { id: true, name: true, isCash: true },
+        }),
+      ]);
+
+      const paymentTypeMap = new Map(paymentTypes.map((p) => [p.id, p]));
+
+      const sellerName = seller
+        ? `${seller.firstName} ${seller.lastName}`.trim()
+        : '';
+      const shopName = shop?.name ?? sale.branchCode ?? '';
+      const amount = sale.payableTotal || sale.total || 0;
+      const paidAt = sale.paidAt ?? new Date();
+
+      // Date formatting
+      const dateStr = paidAt.toLocaleDateString('ru-RU', {
+        timeZone: 'Asia/Tashkent',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      });
+      const timeStr = paidAt.toLocaleTimeString('ru-RU', {
+        timeZone: 'Asia/Tashkent',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+
+      // Payment breakdown
+      const extraPayments = Array.isArray(sale.extraPayments)
+        ? (sale.extraPayments as Array<{ payment_method: string; amount: number }>)
+        : null;
+
+      const paymentLines: string[] = [];
+      if (extraPayments && extraPayments.length > 1) {
+        for (const p of extraPayments) {
+          const pt = paymentTypeMap.get(p.payment_method);
+          const label = pt
+            ? `${pt.isCash ? '💵' : '💳'} ${pt.name}`
+            : `💳 ${p.payment_method}`;
+          paymentLines.push(`${label}: ${this.fmt(p.amount)} UZS`);
         }
+      } else {
+        const pt = sale.paymentMethod
+          ? paymentTypeMap.get(sale.paymentMethod)
+          : null;
+        const label = pt
+          ? `${pt.isCash ? '💵' : '💳'} ${pt.name}`
+          : '💳 Оплата';
+        paymentLines.push(`${label}: ${this.fmt(amount)} UZS`);
       }
 
-      let shopName = '';
-      if (sale.branchCode) {
-        const shop = await this.prisma.shop.findFirst({
-          where: { companyId: sale.companyId, branchCode: sale.branchCode },
-          select: { name: true },
-        });
-        shopName = shop?.name ?? sale.branchCode;
-      }
+      // Items
+      const itemLines = items.map((item, i) => {
+        const lineTotal = item.lineTotal ?? item.salePrice * item.quantity;
+        const originalTotal = item.salePrice * item.quantity;
+        const discount = item.discountAmount ?? 0;
+        const discountPct =
+          discount > 0 && originalTotal > 0
+            ? ((discount / originalTotal) * 100).toFixed(2)
+            : null;
 
-      const amount = (sale.payableTotal || sale.total || 0).toLocaleString('ru-RU');
+        let line = `${i + 1}. ${item.name}`;
+        if (item.barcode) line += ` / ${item.barcode}`;
+        if (item.sku) line += ` / Арт: ${item.sku}`;
+        line += ` / ${item.quantity} шт x ${this.fmt(item.salePrice)} UZS`;
+        line += ` / (Сумма: ${this.fmt(lineTotal)} UZS)`;
+        if (discountPct) line += `, (скидка ${discountPct} %)`;
+        return line;
+      });
+
       const lines: string[] = [
-        `🛒 <b>Новая продажа #${sale.number}</b>`,
-        `💰 Сумма: <b>${amount} сум</b>`,
+        `Продажа #${sale.number}`,
+        `${dateStr} ${timeStr}`,
+        '',
+        shopName ? `🛒 Магазин: ${shopName}` : '',
+        '',
+        '💸 Детали:',
+        sellerName ? `Продавец: ${sellerName}` : '',
+        `Сумма транзакции: ${this.fmt(amount)} UZS`,
+        ...paymentLines,
+        `Кол-во товаров: ${items.length}`,
       ];
-      if (shopName) lines.push(`🏪 Филиал: ${shopName}`);
-      if (sellerName) lines.push(`👤 Продавец: ${sellerName}`);
-      if (sale.paidAt) {
-        lines.push(
-          `🕐 Время: ${sale.paidAt.toLocaleString('ru-RU', { timeZone: 'Asia/Tashkent' })}`,
-        );
+
+      if (itemLines.length) {
+        lines.push('', '📦 Товары:');
+        lines.push(...itemLines);
       }
 
-      const text = lines.join('\n');
+      const text = lines.filter((l) => l !== null && l !== undefined).join('\n');
+
       await Promise.all(
         subscribers.map((sub) => this.sendMessage(sub.chatId, text)),
       );
     } catch (err) {
       this.logger.error('notifySale error', err);
     }
+  }
+
+  private fmt(value: number): string {
+    return Math.round(value)
+      .toLocaleString('ru-RU')
+      .replace(/\s/g, ' ');
   }
 
   async getSubscribers(authorization: string) {
