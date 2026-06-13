@@ -59,7 +59,7 @@ export class TelegramService {
 
     const isAdminOrManager =
       user.crmRole?.isAdmin === true ||
-      user.userType === 'platform_admin' ||
+      user.userType === 'platform' ||
       user.platformRole === 'admin';
 
     if (!isAdminOrManager) {
