@@ -14,24 +14,25 @@ import { TelegramService } from './telegram.service';
 export class TelegramController {
   constructor(private readonly telegramService: TelegramService) {}
 
-  // Public — called by Telegram servers
+  // Public — called by Telegram servers (no /api prefix)
   @Post('telegram/webhook')
   async webhook(@Body() body: Record<string, any>) {
     await this.telegramService.handleUpdate(body);
     return { ok: true };
   }
 
-  @Post('api/telegram/generate-link')
+  // All routes below are under /api prefix (added by frontend baseURL)
+  @Post('telegram/generate-link')
   generateLink(@Headers('authorization') authorization: string) {
     return this.telegramService.generateLinkToken(authorization);
   }
 
-  @Get('api/telegram/subscribers')
+  @Get('telegram/subscribers')
   getSubscribers(@Headers('authorization') authorization: string) {
     return this.telegramService.getSubscribers(authorization);
   }
 
-  @Patch('api/telegram/subscribers/:id')
+  @Patch('telegram/subscribers/:id')
   updateSubscriber(
     @Param('id') id: string,
     @Body() body: { notifyOnSale?: boolean; branchCode?: string | null },
@@ -40,7 +41,7 @@ export class TelegramController {
     return this.telegramService.updateSubscriber(id, body, authorization);
   }
 
-  @Delete('api/telegram/subscribers/:id')
+  @Delete('telegram/subscribers/:id')
   deleteSubscriber(
     @Param('id') id: string,
     @Headers('authorization') authorization: string,
