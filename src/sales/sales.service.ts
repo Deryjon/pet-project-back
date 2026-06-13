@@ -708,19 +708,42 @@ export class SalesService {
 
     await this.writeOffSaleItemsFromStock(sale);
 
-    const requestedPaymentMethod =
-      this.optionalString(
-        Array.isArray(body.payments) &&
-          body.payments[0] &&
-          typeof body.payments[0] === 'object'
-          ? (body.payments[0] as Record<string, unknown>)
-              .company_payment_type_id
-          : undefined,
-      ) ?? this.optionalString(body.payment_method);
+    const paymentsInput = Array.isArray(body.payments)
+      ? (body.payments as Record<string, unknown>[]).filter(
+          (p) => p && typeof p === 'object',
+        )
+      : [];
+
+    const primaryMethodRaw =
+      paymentsInput[0]?.company_payment_type_id ??
+      paymentsInput[0]?.payment_method ??
+      body.payment_method;
+    const requestedPaymentMethod = this.optionalString(primaryMethodRaw);
+
     const paymentMethod = await this.resolvePaymentMethod(
       requestedPaymentMethod,
       context?.companyId,
     );
+
+    const extraPayments =
+      paymentsInput.length > 1
+        ? await Promise.all(
+            paymentsInput.map(async (p) => {
+              const methodId = this.optionalString(
+                p.company_payment_type_id ?? p.payment_method,
+              );
+              const resolved = await this.resolvePaymentMethod(
+                methodId,
+                context?.companyId,
+              );
+              return {
+                payment_method: resolved,
+                amount: Math.max(0, Number(p.amount ?? 0)),
+              };
+            }),
+          )
+        : null;
+
     const resolvedClient = await this.resolveSaleClientPayload(
       body,
       sale.companyId ?? context?.companyId ?? null,
@@ -737,6 +760,7 @@ export class SalesService {
           status: 'paid',
           isDraft: false,
           paymentMethod,
+          extraPayments: extraPayments ?? undefined,
           clientId: resolvedClient.clientId,
           clientName: resolvedClient.clientName,
           parkNote: null,

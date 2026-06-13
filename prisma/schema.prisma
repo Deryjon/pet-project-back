@@ -984,6 +984,7 @@ model Sale {
   payableTotal    Float      @default(0)
   total           Float      @default(0)
   paymentMethod   String?
+  extraPayments   Json?
   clientId        String?
   clientName      String?
   parkNote        String?
