@@ -935,6 +935,13 @@ export class SalesService {
     return this.toDraftResponse(sale);
   }
 
+  async getDraftItems(id: number, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
+    const sale = await this.findSaleOrThrow(id);
+    this.assertSaleAccess(sale, context);
+    return this.toDraftResponse(sale).items;
+  }
+
   async addItem(
     id: number,
     body: Record<string, unknown>,

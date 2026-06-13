@@ -155,6 +155,14 @@ export class SalesController {
     return this.salesService.findDraft(id, authorization);
   }
 
+  @Get('new-sale/:id/items')
+  getDraftItems(
+    @Param('id', ParseIntPipe) id: number,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.getDraftItems(id, authorization);
+  }
+
   @Post('new-sale/:id/items')
   addItem(
     @Param('id', ParseIntPipe) id: number,
