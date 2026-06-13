@@ -720,17 +720,14 @@ export class ProductsService {
               ],
             }
           : {}),
-        stocks: {
-          some: {
-            branchCode,
-          },
-        },
+        OR: [
+          { stocks: { some: { branchCode } } },
+          { stocks: { none: {} } },
+        ],
       },
       include: {
         stocks: {
-          where: {
-            branchCode,
-          },
+          where: { branchCode },
         },
       },
       orderBy: {
@@ -741,6 +738,7 @@ export class ProductsService {
 
     return products.map((product) => {
       const stock = product.stocks[0];
+      const isService = this.isServiceProductType(product.productType ?? '');
 
       return {
         id: String(product.id),
@@ -749,7 +747,8 @@ export class ProductsService {
         sku: product.sku,
         barcode: product.barcode,
         sellPrice: stock?.salePrice ?? product.salePrice ?? 0,
-        stock: stock?.quantity ?? 0,
+        stock: isService ? null : (stock?.quantity ?? 0),
+        product_type: product.productType ?? 'goods',
       };
     });
   }
@@ -5218,6 +5217,7 @@ export class ProductsService {
       is_archived: Boolean(product.archivedAt),
       purchase_price: product.purchasePrice ?? 0,
       sale_price: product.salePrice ?? 0,
+      is_service: this.isServiceProductType(product.productType ?? ''),
     };
   }
 
