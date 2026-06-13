@@ -1,25 +1,109 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from './telegram.service';
 
+// ── Formatters ───────────────────────────────────────────────────────────────
+
 function pct(current: number, previous: number): string {
-  if (previous === 0) return current === 0 ? '(0%)' : '(+∞%)';
+  if (previous === 0) return current === 0 ? '(0%)' : '';
   const diff = ((current - previous) / previous) * 100;
   const sign = diff >= 0 ? '+' : '';
   return `(${sign}${Math.round(diff)}%)`;
 }
 
 function fmt(value: number): string {
-  return Math.round(value).toLocaleString('ru-RU').replace(/ /g, ' ');
+  return Math.round(value)
+    .toLocaleString('ru-RU')
+    .replace(/ /g, ' ');
 }
 
-function fmtDec(value: number, decimals = 2): string {
-  return value.toLocaleString('ru-RU', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: decimals,
-  });
+function fmtDec(value: number): string {
+  return value
+    .toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+    .replace(/ /g, ' ');
 }
+
+// ── Date helpers (Tashkent UTC+5) ────────────────────────────────────────────
+
+const TZ_OFFSET_MS = 5 * 60 * 60 * 1000;
+
+function tashkentToday(): Date {
+  return new Date(Date.now() + TZ_OFFSET_MS);
+}
+
+function utcDayBounds(tashkentDate: Date): { start: Date; end: Date } {
+  const y = tashkentDate.getUTCFullYear();
+  const m = tashkentDate.getUTCMonth();
+  const d = tashkentDate.getUTCDate();
+  return {
+    start: new Date(Date.UTC(y, m, d) - TZ_OFFSET_MS),
+    end: new Date(Date.UTC(y, m, d + 1) - TZ_OFFSET_MS),
+  };
+}
+
+function shiftDays(date: Date, days: number): Date {
+  const d = new Date(date);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d;
+}
+
+// ── Types ────────────────────────────────────────────────────────────────────
+
+type SaleWithItems = {
+  saleType: string;
+  branchCode: string | null;
+  payableTotal: number;
+  total: number;
+  userId: number | null;
+  clientId: string | null;
+  items: { quantity: number; profitAtSale: number }[];
+};
+
+type Agg = {
+  revenue: number;
+  netRevenue: number;
+  netProfit: number;
+  soldQty: number;
+  returnQty: number;
+  saleCount: number;
+  avgCheck: number;
+  avgItemsPerCheck: number;
+  avgItemPrice: number;
+  uniqueClients: number;
+};
+
+function aggregate(sales: SaleWithItems[], branchCode?: string): Agg {
+  const filtered = branchCode
+    ? sales.filter((s) => s.branchCode === branchCode)
+    : sales;
+
+  const regular = filtered.filter((s) => s.saleType !== 'return');
+  const returns = filtered.filter((s) => s.saleType === 'return');
+
+  const revenue = regular.reduce((s, x) => s + (x.payableTotal || x.total || 0), 0);
+  const returnAmt = returns.reduce((s, x) => s + (x.payableTotal || x.total || 0), 0);
+  const netRevenue = revenue - returnAmt;
+
+  const profit = regular.reduce((s, x) => s + x.items.reduce((a, i) => a + (i.profitAtSale ?? 0), 0), 0);
+  const returnProfit = returns.reduce((s, x) => s + x.items.reduce((a, i) => a + (i.profitAtSale ?? 0), 0), 0);
+  const netProfit = profit - returnProfit;
+
+  const soldQty = regular.reduce((s, x) => s + x.items.reduce((q, i) => q + i.quantity, 0), 0);
+  const returnQty = returns.reduce((s, x) => s + x.items.reduce((q, i) => q + i.quantity, 0), 0);
+
+  const saleCount = regular.length;
+  const totalItems = regular.reduce((s, x) => s + x.items.length, 0);
+  const avgCheck = saleCount > 0 ? revenue / saleCount : 0;
+  const avgItemsPerCheck = saleCount > 0 ? totalItems / saleCount : 0;
+  const avgItemPrice = totalItems > 0 ? revenue / totalItems : 0;
+
+  const uniqueClients = new Set(filtered.map((s) => s.clientId).filter(Boolean)).size;
+
+  return { revenue, netRevenue, netProfit, soldQty, returnQty, saleCount, avgCheck, avgItemsPerCheck, avgItemPrice, uniqueClients };
+}
+
+// ── Service ──────────────────────────────────────────────────────────────────
 
 @Injectable()
 export class TelegramReportService {
@@ -30,307 +114,248 @@ export class TelegramReportService {
     private readonly telegramService: TelegramService,
   ) {}
 
-  // 9:00 AM Tashkent = 04:00 UTC
+  // 9:00 Tashkent = 04:00 UTC — daily
   @Cron('0 4 * * *', { timeZone: 'UTC' })
   async sendDailyReports() {
-    this.logger.log('Sending daily reports...');
-    try {
-      const companies = await this.prisma.telegramSubscriber.findMany({
-        where: { notifyOnSale: true },
-        select: { companyId: true },
-        distinct: ['companyId'],
-      });
+    const today = tashkentToday();
+    const yesterday = shiftDays(today, -1);
+    const dayBefore = shiftDays(today, -2);
 
-      for (const { companyId } of companies) {
-        await this.sendReportForCompany(companyId).catch((err) =>
-          this.logger.error(`Report failed for company ${companyId}`, err),
-        );
-      }
-    } catch (err) {
-      this.logger.error('Daily report cron error', err);
+    const period = utcDayBounds(yesterday);
+    const prev = utcDayBounds(dayBefore);
+
+    const dateLabel = yesterday.toISOString().slice(0, 10);
+    const header = `📊 <b>Ежедневный отчёт за ${dateLabel}</b>`;
+
+    await this.runForAllCompanies(header, period, prev);
+  }
+
+  // Every Monday 9:00 Tashkent = 04:00 UTC
+  @Cron('0 4 * * 1', { timeZone: 'UTC' })
+  async sendWeeklyReports() {
+    const today = tashkentToday();
+
+    // Last week: Mon–Sun
+    const lastMonday = shiftDays(today, -7);
+    const lastSunday = shiftDays(today, -1);
+    const prevMonday = shiftDays(today, -14);
+    const prevSunday = shiftDays(today, -8);
+
+    const period = {
+      start: utcDayBounds(lastMonday).start,
+      end: utcDayBounds(lastSunday).end,
+    };
+    const prev = {
+      start: utcDayBounds(prevMonday).start,
+      end: utcDayBounds(prevSunday).end,
+    };
+
+    const fmt = (d: Date) =>
+      d.toLocaleDateString('ru-RU', { timeZone: 'Asia/Tashkent', day: '2-digit', month: '2-digit', year: 'numeric' });
+
+    const header =
+      `📅 <b>Еженедельный отчёт</b>\n${fmt(lastMonday)} — ${fmt(lastSunday)}`;
+
+    await this.runForAllCompanies(header, period, prev);
+  }
+
+  // 1st day of month 9:00 Tashkent = 04:00 UTC
+  @Cron('0 4 1 * *', { timeZone: 'UTC' })
+  async sendMonthlyReports() {
+    const today = tashkentToday();
+
+    const lastMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 1) - TZ_OFFSET_MS);
+    const thisMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1) - TZ_OFFSET_MS);
+    const prevMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 2, 1) - TZ_OFFSET_MS);
+
+    const period = { start: lastMonth, end: thisMonth };
+    const prev = { start: prevMonth, end: lastMonth };
+
+    const monthName = new Date(lastMonth.getTime() + TZ_OFFSET_MS).toLocaleString('ru-RU', {
+      month: 'long',
+      year: 'numeric',
+      timeZone: 'UTC',
+    });
+    const header = `🗓 <b>Ежемесячный отчёт\n${monthName.charAt(0).toUpperCase() + monthName.slice(1)}</b>`;
+
+    await this.runForAllCompanies(header, period, prev);
+  }
+
+  // ── Core ────────────────────────────────────────────────────────────────────
+
+  private async runForAllCompanies(
+    header: string,
+    period: { start: Date; end: Date },
+    prev: { start: Date; end: Date },
+  ) {
+    const companies = await this.prisma.telegramSubscriber.findMany({
+      where: { notifyOnSale: true },
+      select: { companyId: true },
+      distinct: ['companyId'],
+    });
+
+    for (const { companyId } of companies) {
+      await this.sendReport(companyId, header, period, prev).catch((err) =>
+        this.logger.error(`Report failed for company ${companyId}`, err),
+      );
     }
   }
 
-  private async sendReportForCompany(companyId: string) {
-    const now = new Date();
-    // Yesterday in Tashkent (UTC+5)
-    const tzOffset = 5 * 60 * 60 * 1000;
-    const tashkentNow = new Date(now.getTime() + tzOffset);
-    const tashkentYesterday = new Date(tashkentNow);
-    tashkentYesterday.setDate(tashkentYesterday.getDate() - 1);
-
-    const reportDateLabel = tashkentYesterday.toISOString().slice(0, 10);
-
-    const yesterday = {
-      start: new Date(Date.UTC(tashkentYesterday.getUTCFullYear(), tashkentYesterday.getUTCMonth(), tashkentYesterday.getUTCDate()) - tzOffset),
-      end: new Date(Date.UTC(tashkentYesterday.getUTCFullYear(), tashkentYesterday.getUTCMonth(), tashkentYesterday.getUTCDate() + 1) - tzOffset),
-    };
-    const dayBefore = {
-      start: new Date(yesterday.start.getTime() - 24 * 3600 * 1000),
-      end: new Date(yesterday.end.getTime() - 24 * 3600 * 1000),
-    };
-
-    const [shops, salesYday, salesDBefore, debts, debtRepayments] = await Promise.all([
+  private async sendReport(
+    companyId: string,
+    header: string,
+    period: { start: Date; end: Date },
+    prev: { start: Date; end: Date },
+  ) {
+    const [shops, salesCur, salesPrev, debts, debtRepayments] = await Promise.all([
       this.prisma.shop.findMany({
         where: { companyId, isActive: true },
-        select: { id: true, name: true, branchCode: true },
+        select: { name: true, branchCode: true },
       }),
-      this.prisma.sale.findMany({
-        where: {
-          companyId,
-          status: 'paid',
-          paidAt: { gte: yesterday.start, lt: yesterday.end },
-        },
-        include: { items: true },
-      }),
-      this.prisma.sale.findMany({
-        where: {
-          companyId,
-          status: 'paid',
-          paidAt: { gte: dayBefore.start, lt: dayBefore.end },
-        },
-        include: { items: true },
-      }),
+      this.fetchSales(companyId, period.start, period.end),
+      this.fetchSales(companyId, prev.start, prev.end),
       this.prisma.clientDebt.findMany({
         where: { companyId },
-        select: {
-          amountUzs: true,
-          remainingAmountUzs: true,
-          repaidAmountUzs: true,
-          status: true,
-          clientId: true,
-        },
+        select: { amountUzs: true, remainingAmountUzs: true, repaidAmountUzs: true, status: true, clientId: true },
       }),
       this.prisma.clientDebtRepayment.findMany({
-        where: {
-          companyId,
-          createdAt: { gte: yesterday.start, lt: yesterday.end },
-        },
+        where: { companyId, createdAt: { gte: period.start, lt: period.end } },
         select: { amountUzs: true },
       }),
     ]);
 
-    const branchCodeToName = new Map(shops.map((s) => [s.branchCode, s.name]));
+    const totCur = aggregate(salesCur);
+    const totPrev = aggregate(salesPrev);
 
-    // ── Aggregation helpers ──────────────────────────────────────────────────
-    type SaleRow = (typeof salesYday)[number];
-
-    const agg = (sales: SaleRow[], branchCode?: string) => {
-      const filtered = branchCode
-        ? sales.filter((s) => s.branchCode === branchCode)
-        : sales;
-      const regularSales = filtered.filter((s) => s.saleType !== 'return');
-      const returnSales = filtered.filter((s) => s.saleType === 'return');
-
-      const revenue = regularSales.reduce((s, x) => s + (x.payableTotal || x.total || 0), 0);
-      const returnAmount = returnSales.reduce((s, x) => s + (x.payableTotal || x.total || 0), 0);
-      const netRevenue = revenue - returnAmount;
-
-      const profit = regularSales.reduce((sum, sale) => {
-        return sum + sale.items.reduce((s, item) => {
-          return s + (item.profitAtSale ?? 0);
-        }, 0);
-      }, 0);
-      const returnProfit = returnSales.reduce((sum, sale) => {
-        return sum + sale.items.reduce((s, item) => s + (item.profitAtSale ?? 0), 0);
-      }, 0);
-      const netProfit = profit - returnProfit;
-
-      const soldQty = regularSales.reduce((s, sale) => s + sale.items.reduce((q, i) => q + i.quantity, 0), 0);
-      const returnQty = returnSales.reduce((s, sale) => s + sale.items.reduce((q, i) => q + i.quantity, 0), 0);
-
-      const saleCount = regularSales.length;
-      const avgCheck = saleCount > 0 ? revenue / saleCount : 0;
-      const totalItems = regularSales.reduce((s, x) => s + x.items.length, 0);
-      const avgItemsPerCheck = saleCount > 0 ? totalItems / saleCount : 0;
-      const avgItemPrice = totalItems > 0 ? revenue / totalItems : 0;
-
-      // Unique clients
-      const allClients = new Set(filtered.map((s) => s.clientId).filter(Boolean));
-      const clientsWithPrev = new Set<string>();
-      // simplified: just count unique
-      const uniqueClients = allClients.size;
-
-      // Sellers
-      const sellerMap = new Map<string, { name: string; revenue: number; count: number }>();
-      for (const sale of regularSales) {
-        const key = String(sale.userId ?? 'unknown');
-        const existing = sellerMap.get(key) ?? { name: key, revenue: 0, count: 0 };
-        existing.revenue += sale.payableTotal || sale.total || 0;
-        existing.count += 1;
-        sellerMap.set(key, existing);
-      }
-
-      return { revenue, netRevenue, netProfit, soldQty, returnQty, saleCount, avgCheck, avgItemsPerCheck, avgItemPrice, uniqueClients, sellerMap };
-    };
-
-    // Fetch seller names
+    // Seller names
     const allUserIds = new Set<number>();
-    for (const sale of [...salesYday, ...salesDBefore]) {
-      if (sale.userId) allUserIds.add(sale.userId);
+    for (const s of [...salesCur, ...salesPrev]) {
+      if (s.userId) allUserIds.add(s.userId);
     }
     const users = await this.prisma.user.findMany({
       where: { id: { in: [...allUserIds] } },
       select: { id: true, firstName: true, lastName: true },
     });
-    const userNameMap = new Map(users.map((u) => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
+    const userNames = new Map(users.map((u) => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
 
-    // ── Build report lines ───────────────────────────────────────────────────
-    const totalYday = agg(salesYday as any);
-    const totalDBefore = agg(salesDBefore as any);
+    const lines: string[] = [header, ''];
 
-    const lines: string[] = [
-      `📊 <b>Ежедневный отчёт за ${reportDateLabel}</b>`,
-      '',
-      '🛒 <b>Продажи</b>',
-      '',
-      '<b>Выручка:</b>',
-      `Всего: ${fmt(totalYday.revenue)} UZS ${pct(totalYday.revenue, totalDBefore.revenue)}`,
-    ];
+    // ── Sales ─────────────────────────────────────────────────────────────────
+    lines.push('🛒 <b>Продажи</b>', '');
 
-    for (const shop of shops) {
-      const y = agg(salesYday as any, shop.branchCode);
-      const d = agg(salesDBefore as any, shop.branchCode);
-      if (y.revenue > 0 || d.revenue > 0) {
-        lines.push(`${shop.name}: ${fmt(y.revenue)} UZS ${pct(y.revenue, d.revenue)}`);
+    const shopSection = (
+      label: string,
+      getCur: (a: Agg) => number,
+      getPrev: (a: Agg) => number,
+      unit = 'UZS',
+    ) => {
+      lines.push(`<b>${label}:</b>`);
+      lines.push(`Всего: ${fmtDec(getCur(totCur))} ${unit} ${pct(getCur(totCur), getPrev(totPrev))}`);
+      for (const shop of shops) {
+        const c = aggregate(salesCur, shop.branchCode);
+        const p = aggregate(salesPrev, shop.branchCode);
+        if (getCur(c) > 0 || getPrev(p) > 0) {
+          lines.push(`${shop.name}: ${fmtDec(getCur(c))} ${unit} ${pct(getCur(c), getPrev(p))}`);
+        }
       }
-    }
+      lines.push('');
+    };
 
-    lines.push('', '<b>Чистая выручка:</b>');
-    lines.push(`Всего: ${fmt(totalYday.netRevenue)} UZS ${pct(totalYday.netRevenue, totalDBefore.netRevenue)}`);
-    for (const shop of shops) {
-      const y = agg(salesYday as any, shop.branchCode);
-      const d = agg(salesDBefore as any, shop.branchCode);
-      if (y.netRevenue > 0 || d.netRevenue > 0) {
-        lines.push(`${shop.name}: ${fmt(y.netRevenue)} UZS ${pct(y.netRevenue, d.netRevenue)}`);
-      }
-    }
+    shopSection('Выручка', (a) => a.revenue, (a) => a.revenue);
+    shopSection('Чистая выручка', (a) => a.netRevenue, (a) => a.netRevenue);
+    shopSection('Чистая прибыль', (a) => a.netProfit, (a) => a.netProfit);
+    shopSection('Кол-во проданных товаров', (a) => a.soldQty, (a) => a.soldQty, 'ед.');
+    shopSection('Кол-во возвращённых товаров', (a) => a.returnQty, (a) => a.returnQty, 'ед.');
 
-    lines.push('', '<b>Чистая прибыль:</b>');
-    lines.push(`Всего: ${fmt(totalYday.netProfit)} UZS ${pct(totalYday.netProfit, totalDBefore.netProfit)}`);
-    for (const shop of shops) {
-      const y = agg(salesYday as any, shop.branchCode);
-      const d = agg(salesDBefore as any, shop.branchCode);
-      if (y.netProfit > 0 || d.netProfit > 0) {
-        lines.push(`${shop.name}: ${fmt(y.netProfit)} UZS ${pct(y.netProfit, d.netProfit)}`);
-      }
-    }
-
-    lines.push('', '<b>Кол-во проданных товаров:</b>');
-    lines.push(`Всего: ${fmt(totalYday.soldQty)} ед. ${pct(totalYday.soldQty, totalDBefore.soldQty)}`);
-    for (const shop of shops) {
-      const y = agg(salesYday as any, shop.branchCode);
-      const d = agg(salesDBefore as any, shop.branchCode);
-      if (y.soldQty > 0 || d.soldQty > 0) {
-        lines.push(`${shop.name}: ${fmt(y.soldQty)} ед. ${pct(y.soldQty, d.soldQty)}`);
-      }
-    }
-
-    lines.push('', '<b>Кол-во возвращённых товаров:</b>');
-    lines.push(`Всего: ${fmt(totalYday.returnQty)} ед. ${pct(totalYday.returnQty, totalDBefore.returnQty)}`);
-    for (const shop of shops) {
-      const y = agg(salesYday as any, shop.branchCode);
-      const d = agg(salesDBefore as any, shop.branchCode);
-      lines.push(`${shop.name}: ${fmt(y.returnQty)} ед. ${pct(y.returnQty, d.returnQty)}`);
-    }
-
-    // Clients
-    lines.push('', '👥 <b>Клиенты</b>', '');
-    lines.push(`Всего: ${totalYday.uniqueClients} ${pct(totalYday.uniqueClients, totalDBefore.uniqueClients)}`);
-    // new/returning simplified
+    // ── Clients ───────────────────────────────────────────────────────────────
+    lines.push('👥 <b>Клиенты</b>', '');
+    lines.push(`Всего: ${totCur.uniqueClients} ${pct(totCur.uniqueClients, totPrev.uniqueClients)}`);
     lines.push(`Новые клиенты: 0 (0%)`);
     lines.push(`Возвращающиеся клиенты: 0 (0%)`);
+    lines.push('');
 
-    // KPIs
-    lines.push('', '📈 <b>Основные показатели</b>', '');
-    lines.push('<b>Средний чек:</b>');
-    lines.push(`Всего: ${fmtDec(totalYday.avgCheck)} UZS ${pct(totalYday.avgCheck, totalDBefore.avgCheck)}`);
-    for (const shop of shops) {
-      const y = agg(salesYday as any, shop.branchCode);
-      const d = agg(salesDBefore as any, shop.branchCode);
-      if (y.saleCount > 0 || d.saleCount > 0) {
-        lines.push(`${shop.name}: ${fmtDec(y.avgCheck)} UZS ${pct(y.avgCheck, d.avgCheck)}`);
-      }
+    // ── KPIs ──────────────────────────────────────────────────────────────────
+    lines.push('📈 <b>Основные показатели бренда</b>', '');
+    shopSection('Средний чек', (a) => a.avgCheck, (a) => a.avgCheck);
+    shopSection('Среднее кол-во товаров в чеке', (a) => a.avgItemsPerCheck, (a) => a.avgItemsPerCheck, 'ед.');
+    shopSection('Средняя стоимость товара в чеке', (a) => a.avgItemPrice, (a) => a.avgItemPrice);
+
+    // ── Sellers ───────────────────────────────────────────────────────────────
+    lines.push('👤 <b>Продавцы</b>', '');
+
+    const sellerRevCur = new Map<number, number>();
+    const sellerCntCur = new Map<number, number>();
+    const sellerRevPrev = new Map<number, number>();
+
+    for (const s of salesCur.filter((x) => x.saleType !== 'return')) {
+      if (!s.userId) continue;
+      sellerRevCur.set(s.userId, (sellerRevCur.get(s.userId) ?? 0) + (s.payableTotal || s.total || 0));
+      sellerCntCur.set(s.userId, (sellerCntCur.get(s.userId) ?? 0) + 1);
+    }
+    for (const s of salesPrev.filter((x) => x.saleType !== 'return')) {
+      if (!s.userId) continue;
+      sellerRevPrev.set(s.userId, (sellerRevPrev.get(s.userId) ?? 0) + (s.payableTotal || s.total || 0));
     }
 
-    lines.push('', '<b>Среднее кол-во товаров в чеке:</b>');
-    lines.push(`Всего: ${fmtDec(totalYday.avgItemsPerCheck)} ед. ${pct(totalYday.avgItemsPerCheck, totalDBefore.avgItemsPerCheck)}`);
-    for (const shop of shops) {
-      const y = agg(salesYday as any, shop.branchCode);
-      const d = agg(salesDBefore as any, shop.branchCode);
-      if (y.saleCount > 0 || d.saleCount > 0) {
-        lines.push(`${shop.name}: ${fmtDec(y.avgItemsPerCheck)} ед. ${pct(y.avgItemsPerCheck, d.avgItemsPerCheck)}`);
-      }
-    }
-
-    lines.push('', '<b>Средняя стоимость товара в чеке:</b>');
-    lines.push(`Всего: ${fmtDec(totalYday.avgItemPrice)} UZS ${pct(totalYday.avgItemPrice, totalDBefore.avgItemPrice)}`);
-    for (const shop of shops) {
-      const y = agg(salesYday as any, shop.branchCode);
-      const d = agg(salesDBefore as any, shop.branchCode);
-      if (y.saleCount > 0 || d.saleCount > 0) {
-        lines.push(`${shop.name}: ${fmtDec(y.avgItemPrice)} UZS ${pct(y.avgItemPrice, d.avgItemPrice)}`);
-      }
-    }
-
-    // Sellers
-    lines.push('', '👤 <b>Продавцы</b>', '');
     lines.push('<b>Чистая выручка по продавцам:</b>');
-    lines.push(`Всего: ${fmt(totalYday.netRevenue)} UZS ${pct(totalYday.netRevenue, totalDBefore.netRevenue)}`);
-
-    const sellerRevenueYday = new Map<number, number>();
-    const sellerCountYday = new Map<number, number>();
-    for (const sale of (salesYday as any[]).filter((s) => s.saleType !== 'return')) {
-      if (!sale.userId) continue;
-      sellerRevenueYday.set(sale.userId, (sellerRevenueYday.get(sale.userId) ?? 0) + (sale.payableTotal || sale.total || 0));
-      sellerCountYday.set(sale.userId, (sellerCountYday.get(sale.userId) ?? 0) + 1);
-    }
-    for (const [userId, rev] of sellerRevenueYday) {
-      const name = userNameMap.get(userId) ?? `User ${userId}`;
-      lines.push(`${name}: ${fmt(rev)} UZS`);
+    lines.push(`Всего: ${fmt(totCur.netRevenue)} UZS ${pct(totCur.netRevenue, totPrev.netRevenue)}`);
+    for (const [uid, rev] of sellerRevCur) {
+      const name = userNames.get(uid) ?? `User ${uid}`;
+      const prevRev = sellerRevPrev.get(uid) ?? 0;
+      lines.push(`${name}: ${fmt(rev)} UZS ${pct(rev, prevRev)}`);
     }
 
-    lines.push('', '<b>Средний чек по продавцам:</b>');
-    lines.push(`Всего: ${fmtDec(totalYday.avgCheck)} UZS ${pct(totalYday.avgCheck, totalDBefore.avgCheck)}`);
-    for (const [userId, rev] of sellerRevenueYday) {
-      const count = sellerCountYday.get(userId) ?? 1;
-      const name = userNameMap.get(userId) ?? `User ${userId}`;
-      lines.push(`${name}: ${fmtDec(rev / count)} UZS`);
+    lines.push('');
+    lines.push('<b>Средний чек по продавцам:</b>');
+    lines.push(`Всего: ${fmtDec(totCur.avgCheck)} UZS ${pct(totCur.avgCheck, totPrev.avgCheck)}`);
+    for (const [uid, rev] of sellerRevCur) {
+      const cnt = sellerCntCur.get(uid) ?? 1;
+      const name = userNames.get(uid) ?? `User ${uid}`;
+      lines.push(`${name}: ${fmtDec(rev / cnt)} UZS`);
     }
+    lines.push('');
 
-    // Debts
-    const totalIssued = debts.length;
-    const totalDebtors = new Set(debts.map((d) => d.clientId)).size;
-    const totalRepaidAmount = debtRepayments.reduce((s, r) => s + Number(r.amountUzs), 0);
-    const remainingTotal = debts.reduce((s, d) => s + Number(d.remainingAmountUzs), 0);
+    // ── Debts ─────────────────────────────────────────────────────────────────
+    const totalRepaid = debtRepayments.reduce((s, r) => s + Number(r.amountUzs), 0);
+    const remaining = debts.reduce((s, d) => s + Number(d.remainingAmountUzs), 0);
+    const debtors = new Set(debts.map((d) => d.clientId)).size;
     const fullyPaid = debts.filter((d) => d.status === 'paid').length;
-    const partiallyPaid = debts.filter((d) => d.status === 'partial').length;
+    const partial = debts.filter((d) => d.status === 'partial').length;
     const unpaid = debts.filter((d) => d.status === 'unpaid').length;
 
     lines.push(
-      '',
-      '💳 <b>Долги</b>',
-      '',
-      `Выдано долгов: ${totalIssued}`,
-      `Погашено на сумму: ${fmt(totalRepaidAmount)}`,
-      `Остаток долгов: ${fmt(remainingTotal)}`,
-      `Всего должников: ${totalDebtors}`,
-      `Частично погашенных: ${partiallyPaid}`,
+      '💳 <b>Долги</b>', '',
+      `Выдано долгов: ${debts.length}`,
+      `Погашено на сумму: ${fmt(totalRepaid)}`,
+      `Остаток долгов: ${fmt(remaining)}`,
+      `Всего должников: ${debtors}`,
+      `Частично погашенных: ${partial}`,
       `Полностью погасили: ${fullyPaid}`,
       `Не погасили: ${unpaid}`,
     );
 
     const text = lines.join('\n');
 
-    // Send to all subscribers of this company
     const subscribers = await this.prisma.telegramSubscriber.findMany({
       where: { companyId, notifyOnSale: true },
     });
 
-    await Promise.all(
-      subscribers.map((sub) => this.telegramService.sendMessage(sub.chatId, text)),
-    );
+    await Promise.all(subscribers.map((s) => this.telegramService.sendMessage(s.chatId, text)));
+    this.logger.log(`Report sent to ${subscribers.length} subscribers for company ${companyId}`);
+  }
 
-    this.logger.log(`Daily report sent to ${subscribers.length} subscribers for company ${companyId}`);
+  private async fetchSales(companyId: string, start: Date, end: Date) {
+    return this.prisma.sale.findMany({
+      where: { companyId, status: 'paid', paidAt: { gte: start, lt: end } },
+      select: {
+        saleType: true,
+        branchCode: true,
+        payableTotal: true,
+        total: true,
+        userId: true,
+        clientId: true,
+        items: { select: { quantity: true, profitAtSale: true } },
+      },
+    }) as Promise<SaleWithItems[]>;
   }
 }
