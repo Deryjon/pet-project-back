@@ -3642,12 +3642,17 @@ export class ProductsService {
     const context = await this.getRequestContext(authorization);
     const writeContext = this.requireCatalogWriteContext(context);
 
-    const { count } = await this.prisma.product.deleteMany({
-      where: {
-        companyId: writeContext.companyId,
-        archivedAt: { not: null },
-      },
+    const products = await this.prisma.product.findMany({
+      where: { companyId: writeContext.companyId, archivedAt: { not: null } },
+      select: { id: true },
     });
+
+    if (!products.length) return { deleted_count: 0 };
+
+    const count = await this.deleteProductsByInternalIds(
+      products.map((p) => p.id),
+      writeContext.companyId,
+    );
 
     return { deleted_count: count };
   }
@@ -3669,25 +3674,49 @@ export class ProductsService {
     }
 
     const products = await this.prisma.product.findMany({
-      where: {
-        companyId: writeContext.companyId,
-        publicId: { in: publicIds },
-      },
-      select: { id: true, publicId: true },
+      where: { companyId: writeContext.companyId, publicId: { in: publicIds } },
+      select: { id: true },
     });
 
-    if (!products.length) {
-      return { deleted_count: 0 };
-    }
+    if (!products.length) return { deleted_count: 0 };
 
-    const { count } = await this.prisma.product.deleteMany({
-      where: {
-        id: { in: products.map((p) => p.id) },
-        companyId: writeContext.companyId,
-      },
-    });
+    const count = await this.deleteProductsByInternalIds(
+      products.map((p) => p.id),
+      writeContext.companyId,
+    );
 
     return { deleted_count: count };
+  }
+
+  private async deleteProductsByInternalIds(
+    ids: number[],
+    companyId: string,
+  ): Promise<number> {
+    return this.prisma.$transaction(async (tx) => {
+      // SaleItem.productId is nullable — preserve sale history, just unlink product
+      await tx.saleItem.updateMany({
+        where: { productId: { in: ids } },
+        data: { productId: null },
+      });
+
+      // OrderItem.productId and StockMovement.productId are NOT nullable — must delete
+      await tx.orderItem.deleteMany({ where: { productId: { in: ids } } });
+      await tx.stockMovement.deleteMany({ where: { productId: { in: ids } } });
+
+      // ProductSupplier, ProductStock, ProductSupplyPriceHistory, TransferItem
+      // all have onDelete: Cascade in schema and will be removed automatically,
+      // but Prisma $transaction doesn't rely on DB cascade — delete them explicitly
+      await tx.productSupplier.deleteMany({ where: { productId: { in: ids } } });
+      await tx.productStock.deleteMany({ where: { productId: { in: ids } } });
+      await tx.productSupplyPriceHistory.deleteMany({ where: { productId: { in: ids } } });
+      await tx.transferItem.deleteMany({ where: { productId: { in: ids } } });
+
+      const { count } = await tx.product.deleteMany({
+        where: { id: { in: ids }, companyId },
+      });
+
+      return count;
+    });
   }
 
   async generateSku(body: Record<string, unknown>, authorization?: string) {
