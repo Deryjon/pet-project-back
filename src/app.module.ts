@@ -15,6 +15,7 @@ import { ProductsModule } from './products/products.module';
 import { RolesModule } from './roles/roles.module';
 import { ReportsModule } from './reports/reports.module';
 import { SalesModule } from './sales/sales.module';
+import { TelegramModule } from './telegram/telegram.module';
 import { UsersModule } from './users/users.module';
 import { HealthController } from './health.controller';
 
@@ -48,6 +49,7 @@ import { HealthController } from './health.controller';
     RolesModule,
     ReportsModule,
     SalesModule,
+    TelegramModule,
     UsersModule,
   ],
   controllers: [HealthController],

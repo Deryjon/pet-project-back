@@ -201,6 +201,7 @@ model User {
   createdTransfers   Transfer[]          @relation("TransferCreatedBy")
   acceptedTransfers  Transfer[]          @relation("TransferAcceptedBy")
   authSessions       AuthSession[]
+  telegramSubscriber TelegramSubscriber?
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
@@ -1085,4 +1086,30 @@ model RolePermission {
   updatedAt    DateTime @updatedAt
 
   @@unique([roleId, permissionId])
+}
+
+model TelegramSubscriber {
+  id             String   @id @default(uuid())
+  chatId         String   @unique
+  userId         Int      @unique
+  companyId      String
+  notifyOnSale   Boolean  @default(true)
+  branchCode     String?
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  linkedAt       DateTime @default(now())
+
+  @@index([companyId])
+  @@index([companyId, notifyOnSale])
+}
+
+model TelegramLinkToken {
+  id        String    @id @default(uuid())
+  token     String    @unique
+  userId    Int
+  companyId String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([token])
 }

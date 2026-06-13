@@ -2,12 +2,14 @@ import {
   BadRequestException,
   InternalServerErrorException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ClientDebtStatus, Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { TelegramService } from '../telegram/telegram.service';
 import { UsersService } from '../users/users.service';
 
 const COMPANY_ID = process.env.COMPANY_ID ?? '';
@@ -31,10 +33,13 @@ const SHOP_BY_BRANCH_CODE: Record<
 
 @Injectable()
 export class SalesService {
+  private readonly logger = new Logger(SalesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly companySettingsService: CompanySettingsService,
     private readonly usersService: UsersService,
+    private readonly telegramService: TelegramService,
   ) {}
 
   private async getRequestContext(authorization?: string) {
@@ -753,6 +758,7 @@ export class SalesService {
       },
     );
 
+    let paidSale: any = null;
     await this.prisma.$transaction(async (tx) => {
       const updatedSale = await tx.sale.update({
         where: { id: sale.id },
@@ -767,6 +773,7 @@ export class SalesService {
           paidAt: new Date(),
         } as any,
       });
+      paidSale = updatedSale;
       await this.createDebtForFinalizedSale(tx, updatedSale, body, context);
       await this.refreshClientSalesAggregates(
         tx,
@@ -774,6 +781,12 @@ export class SalesService {
         (updatedSale as any).clientId ?? null,
       );
     });
+
+    if (paidSale) {
+      this.telegramService.notifySale(paidSale).catch((err) =>
+        this.logger.error('Telegram notifySale failed', err),
+      );
+    }
 
     return {
       order_type: 'SALE',
@@ -1319,6 +1332,10 @@ export class SalesService {
         },
       });
     });
+
+    this.telegramService.notifySale(updatedSale as any).catch((err) =>
+      this.logger.error('Telegram notifySale failed', err),
+    );
 
     return this.toSaleListItem(updatedSale as any, context);
   }
