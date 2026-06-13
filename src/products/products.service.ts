@@ -5869,13 +5869,22 @@ export class ProductsService {
     const resolvedShopIds = this.toBranchCodes(shopIds);
     if (resolvedShopIds.length) {
       and.push({
-        stocks: {
-          some: {
-            branchCode: {
-              in: resolvedShopIds,
+        OR: [
+          {
+            stocks: {
+              some: {
+                branchCode: {
+                  in: resolvedShopIds,
+                },
+              },
             },
           },
-        },
+          {
+            stocks: {
+              none: {},
+            },
+          },
+        ],
       });
     }
 
