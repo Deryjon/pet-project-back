@@ -5216,6 +5216,8 @@ export class ProductsService {
       category_name: product.category?.name ?? null,
       photo: this.normalizeProductPhotoValue(product.photo),
       is_archived: Boolean(product.archivedAt),
+      purchase_price: product.purchasePrice ?? 0,
+      sale_price: product.salePrice ?? 0,
     };
   }
 
