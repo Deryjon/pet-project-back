@@ -91,7 +91,10 @@ export class ProductsController {
   }
 
   @Get('v2/imports')
-
+  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+  @Header('Pragma', 'no-cache')
+  @Header('Expires', '0')
+  @Header('Surrogate-Control', 'no-store')
   listImports(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -107,7 +110,10 @@ export class ProductsController {
   }
 
   @Get('v2/imports/:id')
-
+  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+  @Header('Pragma', 'no-cache')
+  @Header('Expires', '0')
+  @Header('Surrogate-Control', 'no-store')
   getImportById(@Param('id') id: string) {
     return this.productsService.getImportById(id);
   }
