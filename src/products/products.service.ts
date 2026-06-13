@@ -3652,6 +3652,44 @@ export class ProductsService {
     return { deleted_count: count };
   }
 
+  async bulkDeleteProducts(
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const writeContext = this.requireCatalogWriteContext(context);
+
+    const rawIds = Array.isArray(body.ids) ? body.ids : body.product_ids;
+    const publicIds = Array.isArray(rawIds)
+      ? rawIds.map((id) => String(id)).filter(Boolean)
+      : [];
+
+    if (!publicIds.length) {
+      throw new BadRequestException('ids array is required');
+    }
+
+    const products = await this.prisma.product.findMany({
+      where: {
+        companyId: writeContext.companyId,
+        publicId: { in: publicIds },
+      },
+      select: { id: true, publicId: true },
+    });
+
+    if (!products.length) {
+      return { deleted_count: 0 };
+    }
+
+    const { count } = await this.prisma.product.deleteMany({
+      where: {
+        id: { in: products.map((p) => p.id) },
+        companyId: writeContext.companyId,
+      },
+    });
+
+    return { deleted_count: count };
+  }
+
   async generateSku(body: Record<string, unknown>, authorization?: string) {
     const context = await this.getRequestContext(authorization);
     const companyId = this.resolveProductCompanyId(body, context);

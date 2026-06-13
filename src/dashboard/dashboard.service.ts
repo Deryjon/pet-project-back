@@ -90,7 +90,8 @@ export class DashboardService {
       shops
         .filter((shop) => shop.branchCode)
         .map((shop) => [shop.branchCode, shop]),
-    ); 
+    );
+    const shopByName = new Map(shops.map((shop) => [shop.name, shop])); 
     const currencyCode =
       query.currency?.trim() ||
       this.companySettingsService.getDefaultCurrencyIsoCode(companyId);
@@ -237,6 +238,7 @@ export class DashboardService {
 
       return {
         shops: [...visibleShopNames].map((shopName) => ({
+          shop_id: shopByName.get(shopName)?.id ?? '',
           shop_name: shopName,
           total_price: shopTotals.get(shopName) ?? 0,
         })),

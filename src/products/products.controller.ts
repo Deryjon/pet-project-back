@@ -461,6 +461,14 @@ export class ProductsController {
     return this.productsService.clearAllArchivedProducts(authorization);
   }
 
+  @Delete('v2/products/bulk/delete')
+  bulkDeleteProducts(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.bulkDeleteProducts(body, authorization);
+  }
+
   @Post('v2/product/generate-sku')
   generateSku(
     @Body() body: Record<string, unknown>,
