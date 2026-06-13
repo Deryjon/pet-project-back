@@ -19,9 +19,9 @@ function randomToken(length = 8): string {
 @Injectable()
 export class TelegramService {
   private readonly logger = new Logger(TelegramService.name);
-  private readonly token = process.env.TELEGRAM_BOT_TOKEN ?? '';
-  private readonly botUsername = process.env.TELEGRAM_BOT_USERNAME ?? '';
-  private readonly apiBase = `https://api.telegram.org/bot${this.token}`;
+  private get token() { return process.env.TELEGRAM_BOT_TOKEN ?? ''; }
+  private get botUsername() { return process.env.TELEGRAM_BOT_USERNAME ?? ''; }
+  private get apiBase() { return `https://api.telegram.org/bot${this.token}`; }
 
   constructor(
     private readonly prisma: PrismaService,
