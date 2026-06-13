@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Header,
   Headers,
@@ -451,6 +452,13 @@ export class ProductsController {
     @Headers('authorization') authorization?: string,
   ) {
     return this.productsService.bulkArchiveProducts(body, authorization);
+  }
+
+  @Delete('v2/products/archived')
+  clearAllArchivedProducts(
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.clearAllArchivedProducts(authorization);
   }
 
   @Post('v2/product/generate-sku')

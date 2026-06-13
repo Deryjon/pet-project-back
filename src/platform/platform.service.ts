@@ -1380,6 +1380,66 @@ export class PlatformService {
     };
   }
 
+  async findCompanyProducts(
+    companyId: string,
+    query: { page?: number; limit?: number; search?: string } = {},
+  ) {
+    await this.findCompany(companyId);
+
+    const safePage = Math.max(1, query.page ?? 1);
+    const safeLimit = Math.min(Math.max(1, query.limit ?? 20), 100);
+    const search = query.search?.trim();
+
+    const where: Record<string, unknown> = { companyId };
+    if (search) {
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { sku: { contains: search, mode: 'insensitive' } },
+        { barcode: { contains: search } },
+      ];
+    }
+
+    const [total, products] = await this.db.$transaction([
+      this.db.product.count({ where }),
+      this.db.product.findMany({
+        where,
+        select: {
+          id: true,
+          publicId: true,
+          name: true,
+          sku: true,
+          barcode: true,
+          salePrice: true,
+          purchasePrice: true,
+          archivedAt: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: (safePage - 1) * safeLimit,
+        take: safeLimit,
+      }),
+    ]);
+
+    return {
+      total,
+      page: safePage,
+      limit: safeLimit,
+      company_id: companyId,
+      products: products.map((p) => ({
+        id: p.publicId ?? String(p.id),
+        name: p.name,
+        sku: p.sku ?? '',
+        barcode: p.barcode ?? '',
+        sale_price: p.salePrice ?? 0,
+        purchase_price: p.purchasePrice ?? 0,
+        is_archived: Boolean(p.archivedAt),
+        created_at: p.createdAt,
+        updated_at: p.updatedAt,
+      })),
+    };
+  }
+
   async deleteAllCompanyProducts(companyId: string, adminId: number) {
     await this.findCompany(companyId);
 

@@ -117,20 +117,44 @@ export class SalesService {
     };
   }
 
-  async findAll(authorization?: string) {
+  async findAll(
+    params: { startDate?: string; page?: number; limit?: number } = {},
+    authorization?: string,
+  ) {
     const context = await this.getRequestContext(authorization);
-    const sales = await this.prisma.sale.findMany({
-      where: {
-        AND: [this.buildSaleScope(context) ?? {}, { isDraft: false }],
-      },
-      include: {
-        user: true,
-        items: true,
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+    const safePage = Math.max(1, params.page ?? 1);
+    const safeLimit = Math.min(Math.max(1, params.limit ?? 10), 100);
+
+    const dateFilter: Record<string, unknown>[] = [];
+    const startDate = this.parseDateOnly(params.startDate);
+    if (startDate) {
+      const endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + 1);
+      dateFilter.push({ createdAt: { gte: startDate, lt: endDate } });
+    }
+
+    const where = {
+      AND: [
+        this.buildSaleScope(context) ?? {},
+        { isDraft: false },
+        ...dateFilter,
+      ],
+    };
+
+    const [total, sales] = await this.prisma.$transaction([
+      this.prisma.sale.count({ where }),
+      this.prisma.sale.findMany({
+        where,
+        include: {
+          user: true,
+          items: true,
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: (safePage - 1) * safeLimit,
+        take: safeLimit,
+      }),
+    ]);
+
     const shopLookup = await this.buildShopLookupByBranchCodes(
       sales
         .map((sale) => sale.branchCode)
@@ -141,9 +165,14 @@ export class SalesService {
       context?.companyId,
     );
 
-    return sales.map((sale) =>
-      this.toSaleListItem(sale, context, shopLookup, paymentTypeLookup),
-    );
+    return {
+      data: sales.map((sale) =>
+        this.toSaleListItem(sale, context, shopLookup, paymentTypeLookup),
+      ),
+      total,
+      page: safePage,
+      limit: safeLimit,
+    };
   }
 
   async createDraft(authorization?: string) {

@@ -3639,6 +3639,20 @@ export class ProductsService {
     };
   }
 
+  async clearAllArchivedProducts(authorization?: string) {
+    const context = await this.getRequestContext(authorization);
+    const writeContext = this.requireCatalogWriteContext(context);
+
+    const { count } = await this.prisma.product.deleteMany({
+      where: {
+        companyId: writeContext.companyId,
+        archivedAt: { not: null },
+      },
+    });
+
+    return { deleted_count: count };
+  }
+
   async generateSku(body: Record<string, unknown>, authorization?: string) {
     const context = await this.getRequestContext(authorization);
     const companyId = this.resolveProductCompanyId(body, context);
@@ -7168,6 +7182,9 @@ export class ProductsService {
             row.measurementUnit
               ? row.measurementUnit
               : undefined,
+          archivedAt: null,
+          archivedByUserId: null,
+          archivedByName: null,
           metadata: this.buildImportMetadata(
             companyId,
             this.shouldUseFileValue(onMatchPolicy.description)

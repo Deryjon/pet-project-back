@@ -21,8 +21,16 @@ export class SalesController {
   constructor(private readonly salesService: SalesService) {}
 
   @Get('sales')
-  findAll(@Headers('authorization') authorization?: string) {
-    return this.salesService.findAll(authorization);
+  findAll(
+    @Query('start_date') startDate?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.findAll(
+      { startDate, page: Number(page) || 1, limit: Number(limit) || 10 },
+      authorization,
+    );
   }
 
   @Post('new-sale')

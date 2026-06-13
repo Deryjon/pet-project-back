@@ -1531,6 +1531,14 @@ export class UsersService {
       throw new ForbiddenException('You cannot view users');
     }
 
+    const shopIds = query.shop_ids
+      ?.split(',')
+      .map((s) => s.trim())
+      .filter(Boolean) ?? [];
+    if (shopIds.length > 0) {
+      where.currentShopId = { in: shopIds };
+    }
+
     const search = query.search?.trim();
     if (search) {
       where.OR = [

@@ -9,6 +9,7 @@ import {
   ParseIntPipe,
   Post,
   Put,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -298,6 +299,20 @@ export class PlatformController {
     @Param('shopId') shopId: string,
   ) {
     return this.platformService.removeShop(companyId, shopId);
+  }
+
+  @Get('platform/companies/:companyId/products')
+  findCompanyProducts(
+    @Param('companyId') companyId: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.platformService.findCompanyProducts(companyId, {
+      page: Number(page) || 1,
+      limit: Number(limit) || 20,
+      search,
+    });
   }
 
   @Delete('platform/companies/:companyId/products')
