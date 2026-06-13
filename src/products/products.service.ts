@@ -3651,7 +3651,7 @@ export class ProductsService {
 
     const count = await this.deleteProductsByInternalIds(
       products.map((p) => p.id),
-      writeContext.companyId,
+      writeContext.companyId ?? '',
     );
 
     return { deleted_count: count };
@@ -3682,7 +3682,7 @@ export class ProductsService {
 
     const count = await this.deleteProductsByInternalIds(
       products.map((p) => p.id),
-      writeContext.companyId,
+      writeContext.companyId ?? '',
     );
 
     return { deleted_count: count };
