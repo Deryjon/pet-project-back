@@ -375,23 +375,30 @@ export class PlatformService {
 
     await this.db.$transaction(async (tx: any) => {
       if (userIds.length) {
+        // Unlink sales (userId is nullable)
         await tx.sale.updateMany({
-          where: {
-            userId: {
-              in: userIds,
-            },
-          },
-          data: {
-            userId: null,
-          },
+          where: { userId: { in: userIds } },
+          data: { userId: null },
         });
 
+        // Order.userId is NOT nullable — delete orders before deleting users
+        // (company cascade would delete them anyway, but user FK blocks it first)
+        const orderIds = (
+          await tx.order.findMany({
+            where: { userId: { in: userIds } },
+            select: { id: true },
+          })
+        ).map((o: { id: string }) => o.id);
+
+        if (orderIds.length) {
+          await tx.orderItem.deleteMany({ where: { orderId: { in: orderIds } } });
+          await tx.orderPayment.deleteMany({ where: { orderId: { in: orderIds } } });
+          await tx.stockMovement.deleteMany({ where: { orderId: { in: orderIds } } });
+          await tx.order.deleteMany({ where: { id: { in: orderIds } } });
+        }
+
         await tx.user.deleteMany({
-          where: {
-            id: {
-              in: userIds,
-            },
-          },
+          where: { id: { in: userIds } },
         });
       }
 
