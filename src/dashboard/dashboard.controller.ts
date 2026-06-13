@@ -23,6 +23,7 @@ export class DashboardController {
     @Query('currency') currency?: string,
     @Query('product_group_field') productGroupField?: string,
     @Query('product_field') productField?: string,
+    @Query('branch_code') branchCode?: string,
     @Headers('authorization') authorization?: string,
   ) {
     return this.dashboardService.getDashboardReport(
@@ -33,6 +34,7 @@ export class DashboardController {
         currency,
         productGroupField,
         productField,
+        branchCode: branchCode?.trim() || undefined,
       },
       authorization,
     );

@@ -30,6 +30,7 @@ export class DashboardService {
       productGroupField?: string;
       productField?: string;
       reportPeriod?: string;
+      branchCode?: string;
     },
     authorization?: string,
   ) {
@@ -41,8 +42,18 @@ export class DashboardService {
     const detalization = (query.detalization ?? 'hour').trim().toLowerCase();
     const companyId = context?.companyId ?? undefined;
     const allowedBranchCodes = context?.allowedBranchCodes as string[] | undefined;
-    const shops = await this.loadVisibleShops(companyId, allowedBranchCodes);
+    const filterBranchCode = query.branchCode || undefined;
+    const allShops = await this.loadVisibleShops(companyId, allowedBranchCodes);
+    const shops = filterBranchCode
+      ? allShops.filter((s) => s.branchCode === filterBranchCode)
+      : allShops;
     const endDate = this.buildEndDate(startDate, detalization);
+
+    const effectiveBranchCodes = filterBranchCode
+      ? [filterBranchCode]
+      : allowedBranchCodes?.length
+        ? allowedBranchCodes
+        : undefined;
 
     const sales = await this.prisma.sale.findMany({
       where: {
@@ -54,10 +65,10 @@ export class DashboardService {
               },
             }
           : {}),
-        ...(allowedBranchCodes?.length
+        ...(effectiveBranchCodes?.length
           ? {
               branchCode: {
-                in: allowedBranchCodes,
+                in: effectiveBranchCodes,
               },
             }
           : {}),
