@@ -208,6 +208,14 @@ export class TelegramService {
 
       const paymentTypeMap = new Map(paymentTypes.map((p) => [p.id, p]));
 
+      const findPaymentType = (methodId: string | null | undefined) => {
+        if (!methodId) return null;
+        const pt = paymentTypeMap.get(methodId);
+        if (pt) return pt;
+        if (methodId === 'cash') return paymentTypes.find((p) => p.isCash) ?? null;
+        return null;
+      };
+
       const sellerName = seller
         ? `${seller.firstName} ${seller.lastName}`.trim()
         : '';
@@ -237,16 +245,14 @@ export class TelegramService {
       const paymentLines: string[] = [];
       if (extraPayments && extraPayments.length > 0) {
         for (const p of extraPayments) {
-          const pt = paymentTypeMap.get(p.payment_method);
+          const pt = findPaymentType(p.payment_method);
           const label = pt
             ? `${pt.isCash ? '💵' : '💳'} ${pt.name}`
-            : `💳 ${p.payment_method}`;
+            : '💳 Оплата';
           paymentLines.push(`${label}: ${this.fmt(p.amount)} UZS`);
         }
       } else {
-        const pt = sale.paymentMethod
-          ? paymentTypeMap.get(sale.paymentMethod)
-          : null;
+        const pt = findPaymentType(sale.paymentMethod);
         const label = pt
           ? `${pt.isCash ? '💵' : '💳'} ${pt.name}`
           : '💳 Оплата';
