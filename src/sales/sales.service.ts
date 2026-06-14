@@ -1281,10 +1281,23 @@ export class SalesService {
         context,
       )) ?? sale.branchCode;
 
+    const requestedSellerId = this.toInt(body.user_id) ?? this.toInt(body.seller_id);
+    let resolvedSellerId: number | null = sale.userId ?? null;
+    if (requestedSellerId) {
+      const seller = await this.prisma.user.findFirst({
+        where: {
+          id: requestedSellerId,
+          ...(sale.companyId ? { companyId: sale.companyId } : {}),
+        },
+        select: { id: true },
+      });
+      if (seller) resolvedSellerId = seller.id;
+    }
+
     await this.finalizeSaleItemSnapshots(
       id,
       branchCode,
-      sale.userId ?? context?.userId ?? null,
+      resolvedSellerId ?? context?.userId ?? null,
       sale.companyId ?? context?.companyId ?? null,
     );
 
@@ -1311,6 +1324,7 @@ export class SalesService {
           status: 'paid',
           isDraft: false,
           paymentMethod,
+          ...(resolvedSellerId !== null ? { userId: resolvedSellerId } : {}),
           clientId: resolvedClient.clientId,
           clientName: resolvedClient.clientName,
           parkNote: null,

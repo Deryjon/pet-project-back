@@ -1535,17 +1535,32 @@ export class UsersService {
       ?.split(',')
       .map((s) => s.trim())
       .filter(Boolean) ?? [];
-    if (shopIds.length > 0) {
-      where.currentShopId = { in: shopIds };
-    }
 
     const search = query.search?.trim();
+
+    const andConditions: Record<string, unknown>[] = [];
+
+    if (shopIds.length > 0) {
+      andConditions.push({
+        OR: [
+          { currentShopId: { in: shopIds } },
+          { shopAccesses: { some: { shopId: { in: shopIds } } } },
+        ],
+      });
+    }
+
     if (search) {
-      where.OR = [
-        { firstName: { contains: search, mode: 'insensitive' } },
-        { lastName: { contains: search, mode: 'insensitive' } },
-        { phoneNumber: { contains: search } },
-      ];
+      andConditions.push({
+        OR: [
+          { firstName: { contains: search, mode: 'insensitive' } },
+          { lastName: { contains: search, mode: 'insensitive' } },
+          { phoneNumber: { contains: search } },
+        ],
+      });
+    }
+
+    if (andConditions.length > 0) {
+      where.AND = andConditions;
     }
 
     return where;
