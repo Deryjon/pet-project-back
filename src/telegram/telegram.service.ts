@@ -200,9 +200,9 @@ export class TelegramService {
             discountAmount: true,
           },
         }),
-        this.prisma.paymentType.findMany({
+        this.prisma.companyPaymentType.findMany({
           where: { companyId: sale.companyId },
-          select: { id: true, name: true, isCash: true },
+          select: { id: true, name: true, isCashPaymentType: true },
         }),
       ]);
 
@@ -212,8 +212,8 @@ export class TelegramService {
         if (!methodId) return null;
         const pt = paymentTypeMap.get(methodId);
         if (pt) return pt;
-        if (methodId.toLowerCase() === 'cash') return paymentTypes.find((p) => p.isCash) ?? null;
         const lower = methodId.toLowerCase();
+        if (lower === 'cash') return paymentTypes.find((p) => p.isCashPaymentType) ?? null;
         return paymentTypes.find((p) => p.name.toLowerCase() === lower) ?? null;
       };
 
@@ -248,14 +248,14 @@ export class TelegramService {
         for (const p of extraPayments) {
           const pt = findPaymentType(p.payment_method);
           const label = pt
-            ? `${pt.isCash ? '💵' : '💳'} ${pt.name}`
+            ? `${pt.isCashPaymentType ? '💵' : '💳'} ${pt.name}`
             : '💳 Оплата';
           paymentLines.push(`${label}: ${this.fmt(p.amount)} UZS`);
         }
       } else {
         const pt = findPaymentType(sale.paymentMethod);
         const label = pt
-          ? `${pt.isCash ? '💵' : '💳'} ${pt.name}`
+          ? `${pt.isCashPaymentType ? '💵' : '💳'} ${pt.name}`
           : '💳 Оплата';
         paymentLines.push(`${label}: ${this.fmt(amount)} UZS`);
       }
