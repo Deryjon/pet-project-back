@@ -3390,21 +3390,24 @@ export class ProductsService {
       );
     }
 
+    const existingMeasurementUnitId = this.optionalString(
+      (existingProduct.metadata as Record<string, unknown> | null)
+        ?.measurement_unit_id,
+    );
     if (
       (this.isGoodsProductType(productType) ||
         this.isServiceProductType(productType)) &&
       !measurementUnitId &&
-      this.optionalString(
-        (existingProduct.metadata as Record<string, unknown> | null)
-          ?.measurement_unit_id,
-      ) === undefined
+      existingMeasurementUnitId === undefined &&
+      body.measurement_unit_id !== undefined
     ) {
       throw new BadRequestException('measurement_unit_id is required');
     }
 
-    const measurementUnit = measurementUnitId
+    const resolvedMeasurementUnitId = measurementUnitId ?? existingMeasurementUnitId;
+    const measurementUnit = resolvedMeasurementUnitId
       ? await this.resolveMeasurementUnitSnapshot(
-          measurementUnitId,
+          resolvedMeasurementUnitId,
           existingProduct.companyId ?? writeContext.companyId,
         )
       : null;
