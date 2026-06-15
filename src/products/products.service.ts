@@ -3920,6 +3920,9 @@ export class ProductsService {
   ) {
     const context = await this.getRequestContext(authorization);
     const companyId = this.resolveProductCompanyId(body, context);
+    const excludeBarcodes = Array.isArray(body.exclude)
+      ? (body.exclude as string[]).filter((b) => typeof b === 'string')
+      : [];
     const latestBarcodeRecords = await this.prisma.product.findMany({
       where: {
         companyId,
@@ -3959,7 +3962,7 @@ export class ProductsService {
         select: { id: true },
       });
 
-      if (!existing) {
+      if (!existing && !excludeBarcodes.includes(barcode)) {
         return {
           barcode,
         };
