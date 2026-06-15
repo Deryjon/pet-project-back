@@ -3345,6 +3345,45 @@ export class ProductsService {
     );
   }
 
+  async patchProductIdentifiers(
+    id: string,
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const writeContext = this.requireCatalogWriteContext(context);
+
+    const existingProduct = await this.prisma.product.findFirst({
+      where: this.applyProductScope(
+        this.buildProductIdentifierWhere(id),
+        writeContext,
+      ),
+      select: { id: true, publicId: true, sku: true, barcode: true },
+    });
+
+    if (!existingProduct) {
+      throw new NotFoundException('Product not found');
+    }
+
+    const updateData: Record<string, unknown> = {};
+    const sku = this.optionalString(body.sku);
+    const barcode = this.optionalString(body.barcode);
+    if (sku !== undefined) updateData.sku = sku;
+    if (barcode !== undefined) updateData.barcode = barcode;
+
+    const updated = await this.prisma.product.update({
+      where: { id: existingProduct.id },
+      data: updateData,
+      select: { id: true, publicId: true, sku: true, barcode: true },
+    });
+
+    return {
+      id: updated.publicId ?? String(updated.id),
+      sku: updated.sku,
+      barcode: updated.barcode,
+    };
+  }
+
   async updateCatalogProduct(
     id: string,
     body: Record<string, unknown>,

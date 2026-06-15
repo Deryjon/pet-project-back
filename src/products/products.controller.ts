@@ -446,6 +446,15 @@ export class ProductsController {
     return this.productsService.updateCatalogProduct(id, body, authorization);
   }
 
+  @Patch('v2/product/:id/identifiers')
+  patchProductIdentifiers(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.patchProductIdentifiers(id, body, authorization);
+  }
+
   @Put('v2/products/bulk/archive')
   bulkArchiveProducts(
     @Body() body: Record<string, unknown>,
