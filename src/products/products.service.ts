@@ -3358,12 +3358,9 @@ export class ProductsService {
         writeContext,
       );
     }
-    const productId = this.parseProductId(id);
     const existingProduct = await this.prisma.product.findFirst({
       where: this.applyProductScope(
-        {
-          id: productId,
-        },
+        this.buildProductIdentifierWhere(id),
         writeContext,
       ),
       include: {
@@ -3432,7 +3429,7 @@ export class ProductsService {
     const description = this.optionalString(body.description);
 
     const updatedProduct = await this.prisma.product.update({
-      where: { id: productId },
+      where: { id: existingProduct.id },
       data: {
         name: this.optionalString(body.name) ?? existingProduct.name,
         sku: this.optionalString(body.sku) ?? existingProduct.sku,
