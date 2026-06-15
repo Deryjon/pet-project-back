@@ -3365,15 +3365,15 @@ export class ProductsService {
       throw new NotFoundException('Product not found');
     }
 
-    const updateData: Record<string, unknown> = {};
     const sku = this.optionalString(body.sku);
     const barcode = this.optionalString(body.barcode);
-    if (sku !== undefined) updateData.sku = sku;
-    if (barcode !== undefined) updateData.barcode = barcode;
 
     const updated = await this.prisma.product.update({
       where: { id: existingProduct.id },
-      data: updateData,
+      data: {
+        ...(sku !== undefined ? { sku } : {}),
+        ...(barcode !== undefined ? { barcode } : {}),
+      },
       select: { id: true, publicId: true, sku: true, barcode: true },
     });
 
