@@ -1522,6 +1522,7 @@ export class CompanySettingsService {
       rotation: Number(cheque.rotation) || 0,
       logo,
       compact: cheque.compact ?? false,
+      extra_settings: cheque.extra_settings ?? null,
     };
   }
 
@@ -1770,6 +1771,13 @@ export class CompanySettingsService {
 
     if (body.compact !== undefined) {
       cheque.compact = this.optionalBoolean(body.compact) ?? false;
+    }
+
+    if (body.extra_settings !== undefined) {
+      cheque.extra_settings =
+        body.extra_settings && typeof body.extra_settings === 'object' && !Array.isArray(body.extra_settings)
+          ? (body.extra_settings as Record<string, unknown>)
+          : null;
     }
   }
 
@@ -2672,6 +2680,7 @@ export class CompanySettingsService {
       rotation: row.rotation,
       logo: row.logo,
       compact: row.compact,
+      extra_settings: row.extraSettings ?? null,
     };
   }
 
@@ -2712,6 +2721,7 @@ export class CompanySettingsService {
       rotation: Number(cheque.rotation) || 0,
       logo: this.stringOrDefault(cheque.logo, ''),
       compact: Boolean(cheque.compact),
+      extraSettings: cheque.extra_settings ?? null,
     };
   }
 

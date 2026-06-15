@@ -595,6 +595,7 @@ model ChequeSetting {
   rotation              Float    @default(0)
   logo                  String   @default("")
   compact               Boolean  @default(false)
+  extraSettings         Json?
   company               Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
