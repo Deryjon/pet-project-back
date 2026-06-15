@@ -212,8 +212,9 @@ export class TelegramService {
         if (!methodId) return null;
         const pt = paymentTypeMap.get(methodId);
         if (pt) return pt;
-        if (methodId === 'cash') return paymentTypes.find((p) => p.isCash) ?? null;
-        return null;
+        if (methodId.toLowerCase() === 'cash') return paymentTypes.find((p) => p.isCash) ?? null;
+        const lower = methodId.toLowerCase();
+        return paymentTypes.find((p) => p.name.toLowerCase() === lower) ?? null;
       };
 
       const sellerName = seller
