@@ -202,8 +202,15 @@ export class CompanySettingsController {
 
   @Post('price-tag')
   @Post('v1/price-tag')
-  async createPriceTag(@Body() body: Record<string, unknown>) {
-    return this.companySettingsService.createPriceTag(body);
+  async createPriceTag(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const context = authorization
+      ? await this.usersService.getRequestContext(authorization)
+      : null;
+    const companyId = context?.companyId ?? (body.company_id as string | undefined);
+    return this.companySettingsService.createPriceTag(body, companyId);
   }
 
   @Put('price-tag/:id')
@@ -211,8 +218,13 @@ export class CompanySettingsController {
   async updatePriceTag(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
   ) {
-    return this.companySettingsService.updatePriceTag(id, body);
+    const context = authorization
+      ? await this.usersService.getRequestContext(authorization)
+      : null;
+    const companyId = context?.companyId ?? (body.company_id as string | undefined);
+    return this.companySettingsService.updatePriceTag(id, body, companyId);
   }
 
   @Delete('price-tag/:id')

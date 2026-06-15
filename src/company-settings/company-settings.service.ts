@@ -1175,9 +1175,9 @@ export class CompanySettingsService {
     };
   }
 
-  async createPriceTag(body: Record<string, unknown>) {
+  async createPriceTag(body: Record<string, unknown>, resolvedCompanyId?: string) {
     const companyId =
-      this.optionalString(body.company_id) ?? DEFAULT_COMPANY_ID;
+      resolvedCompanyId ?? this.optionalString(body.company_id) ?? DEFAULT_COMPANY_ID;
     await this.ensureCompanySettingsSeeded(companyId);
     const created = await this.db.priceTagSetting.create({
       data: {
@@ -1206,7 +1206,7 @@ export class CompanySettingsService {
     };
   }
 
-  async updatePriceTag(id: string, body: Record<string, unknown>) {
+  async updatePriceTag(id: string, body: Record<string, unknown>, resolvedCompanyId?: string) {
     const priceTag = await this.db.priceTagSetting.findUnique({ where: { id } });
     if (!priceTag) {
       throw new NotFoundException('Price tag not found');
