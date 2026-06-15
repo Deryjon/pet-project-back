@@ -4620,6 +4620,154 @@ export class ProductsService {
     return this.getTransferById(id, authorization);
   }
 
+  async acceptTransferVerified(
+    id: string,
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    if (!context) throw new UnauthorizedException('Authentication is required');
+
+    const transfer = await this.findTransferOrThrow(id, context);
+    if (transfer.status !== 'SENT') {
+      throw new BadRequestException('Only sent transfers can be accepted');
+    }
+
+    // Parse per-item arrived quantities from body
+    const arrivedMap = new Map<string, number>();
+    if (Array.isArray(body.items)) {
+      for (const entry of body.items as any[]) {
+        if (entry?.item_id && entry?.arrived_quantity !== undefined) {
+          arrivedMap.set(String(entry.item_id), Math.max(0, Number(entry.arrived_quantity) || 0));
+        }
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const db = tx as any;
+
+      for (const item of transfer.items) {
+        // Use provided arrived quantity, fallback to sent quantity
+        const arrivedQty = arrivedMap.has(item.id)
+          ? arrivedMap.get(item.id)!
+          : Number(item.quantity ?? 0);
+
+        const arrivalStock = await tx.productStock.findFirst({
+          where: { productId: item.productId, branchCode: transfer.arrivalShop.branchCode },
+        });
+        const beforeQuantity = arrivalStock?.quantity ?? 0;
+        const afterQuantity = beforeQuantity + arrivedQty;
+        const departureStock = item.product.stocks?.find(
+          (s: any) => s.branchCode === transfer.departureShop.branchCode,
+        );
+        const supplyPrice = arrivalStock?.purchasePrice ?? departureStock?.purchasePrice ?? item.product.purchasePrice ?? 0;
+        const retailPrice = arrivalStock?.salePrice ?? departureStock?.salePrice ?? item.product.salePrice ?? 0;
+
+        if (arrivalStock) {
+          await tx.productStock.update({
+            where: { id: arrivalStock.id },
+            data: { quantity: afterQuantity, purchasePrice: supplyPrice, salePrice: retailPrice },
+          });
+        } else {
+          await tx.productStock.create({
+            data: {
+              productId: item.productId,
+              branchCode: transfer.arrivalShop.branchCode,
+              quantity: arrivedQty,
+              purchasePrice: supplyPrice,
+              salePrice: retailPrice,
+            },
+          });
+        }
+
+        await db.transferItem.update({
+          where: { id: item.id },
+          data: { arrivedQuantity: arrivedQty },
+        });
+
+        if (arrivedQty > 0) {
+          await this.syncProductTotalQuantity(tx, item.productId);
+          await this.createStockMovementRecord(tx, {
+            companyId: transfer.companyId,
+            shopId: transfer.arrivalShopId,
+            productId: item.productId,
+            type: 'TRANSFER',
+            quantity: arrivedQty,
+            beforeQuantity,
+            afterQuantity,
+            createdById: context.userId,
+            externalId: String(transfer.externalId ?? ''),
+            fromShopId: transfer.departureShopId,
+            toShopId: transfer.arrivalShopId,
+            supplyPrice,
+            retailPrice,
+            newRetailPrice: retailPrice,
+            fromRetailPrice: retailPrice,
+            fromSupplyPrice: supplyPrice,
+          });
+        }
+      }
+
+      await db.transfer.update({
+        where: { id: transfer.id },
+        data: { status: 'ACCEPTED', acceptedAt: new Date(), acceptedById: context.userId },
+      });
+    });
+
+    return this.getTransferById(id, authorization);
+  }
+
+  async cancelTransfer(id: string, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
+    if (!context) throw new UnauthorizedException('Authentication is required');
+
+    const transfer = await this.findTransferOrThrow(id, context);
+    if (!['DRAFT', 'SENT'].includes(transfer.status)) {
+      throw new BadRequestException('Only draft or sent transfers can be cancelled');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const db = tx as any;
+
+      // If already sent — restore departure shop stock
+      if (transfer.status === 'SENT') {
+        for (const item of transfer.items) {
+          const quantity = Number(item.quantity ?? 0);
+          const departureStock = await tx.productStock.findFirst({
+            where: { productId: item.productId, branchCode: transfer.departureShop.branchCode },
+          });
+          const beforeQuantity = departureStock?.quantity ?? 0;
+          const afterQuantity = beforeQuantity + quantity;
+
+          if (departureStock) {
+            await tx.productStock.update({
+              where: { id: departureStock.id },
+              data: { quantity: afterQuantity },
+            });
+          } else {
+            await tx.productStock.create({
+              data: {
+                productId: item.productId,
+                branchCode: transfer.departureShop.branchCode,
+                quantity,
+                purchasePrice: item.product.purchasePrice ?? 0,
+                salePrice: item.product.salePrice ?? 0,
+              },
+            });
+          }
+          await this.syncProductTotalQuantity(tx, item.productId);
+        }
+      }
+
+      await db.transfer.update({
+        where: { id: transfer.id },
+        data: { status: 'CANCELLED' },
+      });
+    });
+
+    return this.getTransferById(id, authorization);
+  }
+
   private buildTransferScope(context: any) {
     if (context?.userType === 'company') {
       return {

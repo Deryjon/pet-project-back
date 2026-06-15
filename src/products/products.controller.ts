@@ -693,6 +693,25 @@ export class ProductsController {
     return this.productsService.acceptTransfer(id, authorization);
   }
 
+  @Post('v2/transfer/:id/accept-verified')
+  @HttpCode(200)
+  acceptTransferVerified(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.acceptTransferVerified(id, body, authorization);
+  }
+
+  @Post('v2/transfer/:id/cancel')
+  @HttpCode(200)
+  cancelTransfer(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.cancelTransfer(id, authorization);
+  }
+
   private toStringArray(value: unknown) {
     if (Array.isArray(value)) {
       return value.filter((item): item is string => typeof item === 'string');
