@@ -181,19 +181,40 @@ export class DashboardService {
 
       shopTotals.set(shopName, (shopTotals.get(shopName) ?? 0) + saleTotal);
 
-      if (sale.paymentMethod) {
+      const extraPaymentsRaw = (sale as any).extraPayments;
+      const extraList: Array<{ payment_method: string; amount: number }> =
+        Array.isArray(extraPaymentsRaw) && extraPaymentsRaw.length > 1
+          ? (extraPaymentsRaw as any[]).filter(
+              (p) =>
+                p &&
+                typeof p === 'object' &&
+                typeof p.payment_method === 'string' &&
+                Number(p.amount) > 0,
+            )
+          : [];
+
+      const paymentEntries =
+        extraList.length > 1
+          ? extraList.map((ep) => ({
+              methodId: ep.payment_method,
+              amount: saleTotal < 0 ? -Number(ep.amount) : Number(ep.amount),
+            }))
+          : sale.paymentMethod
+            ? [{ methodId: sale.paymentMethod, amount: saleTotal }]
+            : [];
+
+      for (const entry of paymentEntries) {
         const paymentTypeName =
-          paymentTypeLookup.get(sale.paymentMethod) ?? sale.paymentMethod;
-        const existingPayment = paymentTotals.get(sale.paymentMethod) ?? {
-          payment_type_id: sale.paymentMethod,
+          paymentTypeLookup.get(entry.methodId) ?? entry.methodId;
+        const existingPayment = paymentTotals.get(entry.methodId) ?? {
+          payment_type_id: entry.methodId,
           payment_type_name: paymentTypeName,
           total_price: 0,
           count: 0,
         };
-
-        existingPayment.total_price += saleTotal;
+        existingPayment.total_price += entry.amount;
         existingPayment.count += 1;
-        paymentTotals.set(sale.paymentMethod, existingPayment);
+        paymentTotals.set(entry.methodId, existingPayment);
       }
 
       const sellerName = sale.user
