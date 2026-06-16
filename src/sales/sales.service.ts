@@ -3328,39 +3328,83 @@ export class SalesService {
         created_at: this.formatDateTime(sale.createdAt, context?.companyId),
         created_at_utc: '',
         order_items: orderItems,
-        order_payments:
-          !sale.isDraft && sale.paymentMethod
-            ? [
-                {
-                  id: randomUUID(),
-                  company_payment_type_id: sale.paymentMethod,
-                  payment_sub_type_id: '',
-                  payment_sub_type_name: '',
-                  company_payment_type: {
-                    id: sale.paymentMethod,
-                    name: payment?.name ?? sale.paymentMethod,
-                    payment_type_id: payment?.payment_type_id ?? '',
-                  },
-                  paid_amount: paidAmount,
-                  returned_amount: 0,
-                  gift_card_id: 0,
-                  is_certificate: false,
-                  is_voucher: false,
-                  is_ingenico: false,
-                  card_type: '',
-                  card_rrn: '',
-                  card_number: '',
-                  document_number: '',
-                  operation_id: '',
-                  stan: '',
-                  approval_code: '',
-                  ref_number: '',
-                  hash_low: null,
-                  hash_high: null,
-                  trx_status: '',
+        order_payments: (() => {
+          if (sale.isDraft || !sale.paymentMethod) return [];
+          const extraPaymentsRaw = (sale as any).extraPayments;
+          const extraList: Array<{ payment_method: string; amount: number }> =
+            Array.isArray(extraPaymentsRaw) && extraPaymentsRaw.length > 1
+              ? (extraPaymentsRaw as any[]).filter(
+                  (p) =>
+                    p &&
+                    typeof p === 'object' &&
+                    typeof p.payment_method === 'string' &&
+                    Number(p.amount) > 0,
+                )
+              : [];
+          if (extraList.length > 1) {
+            return extraList.map((ep) => {
+              const epPayment = paymentTypeLookup.get(ep.payment_method);
+              return {
+                id: randomUUID(),
+                company_payment_type_id: ep.payment_method,
+                payment_sub_type_id: '',
+                payment_sub_type_name: '',
+                company_payment_type: {
+                  id: ep.payment_method,
+                  name: epPayment?.name ?? ep.payment_method,
+                  payment_type_id: epPayment?.payment_type_id ?? '',
                 },
-              ]
-            : [],
+                paid_amount: ep.amount,
+                returned_amount: 0,
+                gift_card_id: 0,
+                is_certificate: false,
+                is_voucher: false,
+                is_ingenico: false,
+                card_type: '',
+                card_rrn: '',
+                card_number: '',
+                document_number: '',
+                operation_id: '',
+                stan: '',
+                approval_code: '',
+                ref_number: '',
+                hash_low: null,
+                hash_high: null,
+                trx_status: '',
+              };
+            });
+          }
+          return [
+            {
+              id: randomUUID(),
+              company_payment_type_id: sale.paymentMethod,
+              payment_sub_type_id: '',
+              payment_sub_type_name: '',
+              company_payment_type: {
+                id: sale.paymentMethod,
+                name: payment?.name ?? sale.paymentMethod,
+                payment_type_id: payment?.payment_type_id ?? '',
+              },
+              paid_amount: paidAmount,
+              returned_amount: 0,
+              gift_card_id: 0,
+              is_certificate: false,
+              is_voucher: false,
+              is_ingenico: false,
+              card_type: '',
+              card_rrn: '',
+              card_number: '',
+              document_number: '',
+              operation_id: '',
+              stan: '',
+              approval_code: '',
+              ref_number: '',
+              hash_low: null,
+              hash_high: null,
+              trx_status: '',
+            },
+          ];
+        })(),
         with_cashback: 0,
         returned_cashback: 0,
         loyalty_balance_income: 0,
@@ -3381,6 +3425,23 @@ export class SalesService {
         payment_token: '',
       },
       created_at: this.formatDateTime(sale.createdAt, context?.companyId),
+      extra_payments: (() => {
+        const extraPaymentsRaw = (sale as any).extraPayments;
+        if (!Array.isArray(extraPaymentsRaw) || extraPaymentsRaw.length < 2) return null;
+        return (extraPaymentsRaw as any[])
+          .filter(
+            (p) =>
+              p && typeof p === 'object' && typeof p.payment_method === 'string' && Number(p.amount) > 0,
+          )
+          .map((ep) => {
+            const epPayment = paymentTypeLookup.get(ep.payment_method);
+            return {
+              payment_method: ep.payment_method,
+              amount: ep.amount,
+              payment_name: epPayment?.name ?? ep.payment_method,
+            };
+          });
+      })(),
       deleted_at: 0,
       created_at_utc: '',
       future_time: '',
