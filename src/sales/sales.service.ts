@@ -870,20 +870,25 @@ export class SalesService {
     let extraPayments: Array<{ payment_method: string; amount: number }> | null =
       null;
     if (paymentsInput.length > 1) {
-      extraPayments = await Promise.all(
-        paymentsInput.map(async (p) => {
-          const methodId = this.optionalString(
-            p.company_payment_type_id ?? p.payment_method,
-          );
-          const resolved = await this.resolvePaymentMethod(
-            methodId,
-            context?.companyId,
-          );
-          return {
-            payment_method: resolved,
-            amount: Math.max(0, Number(p.amount ?? 0)),
-          };
-        }),
+      extraPayments = (
+        await Promise.all(
+          paymentsInput.map(async (p) => {
+            const methodId = this.optionalString(
+              p.company_payment_type_id ?? p.payment_method,
+            );
+            const resolved = await this.resolvePaymentMethod(
+              methodId,
+              context?.companyId,
+            );
+            if (!resolved) return null;
+            return {
+              payment_method: resolved,
+              amount: Math.max(0, Number(p.amount ?? 0)),
+            };
+          }),
+        )
+      ).filter(
+        (p): p is { payment_method: string; amount: number } => p !== null,
       );
     }
 
