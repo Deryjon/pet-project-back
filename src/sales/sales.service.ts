@@ -912,7 +912,11 @@ export class SalesService {
       },
     });
 
-    return this.toSaleListItem(updatedSale, context);
+    const paymentTypeLookup = await this.buildPaymentTypeLookup(
+      context?.companyId,
+    );
+
+    return this.toSaleListItem(updatedSale, context, undefined, paymentTypeLookup);
   }
 
   async processReturn(
@@ -3000,6 +3004,7 @@ export class SalesService {
       paymentMethod: string | null;
       clientName: string | null;
       branchCode: string | null;
+      extraPayments?: unknown;
       user: { firstName: string; lastName: string } | null;
       items: {
         id: number;
@@ -3079,6 +3084,16 @@ export class SalesService {
       client_id: sale.clientId ?? null,
       customer_id: sale.clientId ?? '',
       client_name: sale.clientName,
+      extra_payments: Array.isArray(sale.extraPayments) && (sale.extraPayments as unknown[]).length > 1
+        ? (sale.extraPayments as Array<{ payment_method: string; amount: number }>).map((ep) => {
+            const epPayment = paymentTypeLookup?.get(ep.payment_method);
+            return {
+              payment_method: ep.payment_method,
+              amount: ep.amount,
+              payment_name: epPayment?.name ?? ep.payment_method,
+            };
+          })
+        : null,
       items: sale.items.map((item) => ({
         id: item.id,
         product_id: item.productId,
