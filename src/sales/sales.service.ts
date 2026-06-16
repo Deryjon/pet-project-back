@@ -462,27 +462,44 @@ export class SalesService {
         }
       }
 
-      const paymentTypeId = sale.paymentMethod ?? '';
-      if (!paymentTypeId) {
-        continue;
-      }
+      const extraPaymentsRaw = (sale as any).extraPayments;
+      const extraPaymentsList: Array<{ payment_method: string; amount: number }> =
+        Array.isArray(extraPaymentsRaw) && extraPaymentsRaw.length > 1
+          ? (extraPaymentsRaw as any[]).filter(
+              (p) =>
+                p &&
+                typeof p === 'object' &&
+                typeof p.payment_method === 'string' &&
+                Number(p.amount) > 0,
+            )
+          : [];
 
-      const paymentType = paymentTypeLookup.get(paymentTypeId);
-      const existing = paymentStats.get(paymentTypeId);
-      const sum = saleAmount;
+      const paymentEntries =
+        extraPaymentsList.length > 0
+          ? extraPaymentsList.map((p) => ({
+              paymentTypeId: p.payment_method,
+              sum: saleAmount < 0 ? -Number(p.amount) : Number(p.amount),
+            }))
+          : [{ paymentTypeId: sale.paymentMethod ?? '', sum: saleAmount }];
 
-      if (existing) {
-        existing.sum += sum;
-      } else {
-        paymentStats.set(paymentTypeId, {
-          company_payment_type_id: paymentTypeId,
-          company_payment_type: {
-            id: paymentTypeId,
-            name: paymentType?.name ?? paymentTypeId,
-            payment_type_id: paymentType?.payment_type_id ?? '',
-          },
-          sum,
-        });
+      for (const entry of paymentEntries) {
+        if (!entry.paymentTypeId) continue;
+        const paymentType = paymentTypeLookup.get(entry.paymentTypeId);
+        const existing = paymentStats.get(entry.paymentTypeId);
+
+        if (existing) {
+          existing.sum += entry.sum;
+        } else {
+          paymentStats.set(entry.paymentTypeId, {
+            company_payment_type_id: entry.paymentTypeId,
+            company_payment_type: {
+              id: entry.paymentTypeId,
+              name: paymentType?.name ?? entry.paymentTypeId,
+              payment_type_id: paymentType?.payment_type_id ?? '',
+            },
+            sum: entry.sum,
+          });
+        }
       }
     }
 
@@ -815,14 +832,16 @@ export class SalesService {
 
     this.assertSaleAccess(sale, context);
 
+    const paymentsInput = Array.isArray(body.payments)
+      ? (body.payments as Record<string, unknown>[]).filter(
+          (p) => p && typeof p === 'object',
+        )
+      : [];
+
     const requestedPaymentMethod =
       this.optionalString(
-        Array.isArray(body.payments) &&
-          body.payments[0] &&
-          typeof body.payments[0] === 'object'
-          ? (body.payments[0] as Record<string, unknown>)
-              .company_payment_type_id
-          : undefined,
+        paymentsInput[0]?.company_payment_type_id ??
+          paymentsInput[0]?.payment_method,
       ) ?? this.optionalString(body.payment_method);
     const requestedSellerId =
       this.toInt(body.user_id) ?? this.toInt(body.seller_id);
@@ -848,6 +867,26 @@ export class SalesService {
       resolvedSellerId = seller.id;
     }
 
+    let extraPayments: Array<{ payment_method: string; amount: number }> | null =
+      null;
+    if (paymentsInput.length > 1) {
+      extraPayments = await Promise.all(
+        paymentsInput.map(async (p) => {
+          const methodId = this.optionalString(
+            p.company_payment_type_id ?? p.payment_method,
+          );
+          const resolved = await this.resolvePaymentMethod(
+            methodId,
+            context?.companyId,
+          );
+          return {
+            payment_method: resolved,
+            amount: Math.max(0, Number(p.amount ?? 0)),
+          };
+        }),
+      );
+    }
+
     const updatedSale = await this.prisma.sale.update({
       where: { id: sale.id },
       data: {
@@ -859,6 +898,7 @@ export class SalesService {
               ),
             }
           : {}),
+        ...(extraPayments !== null ? { extraPayments } : {}),
         ...(resolvedSellerId ? { userId: resolvedSellerId } : {}),
       },
       include: {
@@ -1312,10 +1352,40 @@ export class SalesService {
       },
     );
 
+    const paymentsInput = Array.isArray(body.payments)
+      ? (body.payments as Record<string, unknown>[]).filter(
+          (p) => p && typeof p === 'object',
+        )
+      : [];
+
+    const primaryMethodRaw =
+      this.optionalString(
+        paymentsInput[0]?.company_payment_type_id ?? paymentsInput[0]?.payment_method,
+      ) ?? this.optionalString(body.payment_method);
+
     const paymentMethod = await this.resolvePaymentMethod(
-      this.optionalString(body.payment_method),
+      primaryMethodRaw,
       context?.companyId,
     );
+
+    const extraPayments =
+      paymentsInput.length > 1
+        ? await Promise.all(
+            paymentsInput.map(async (p) => {
+              const methodId = this.optionalString(
+                p.company_payment_type_id ?? p.payment_method,
+              );
+              const resolved = await this.resolvePaymentMethod(
+                methodId,
+                context?.companyId,
+              );
+              return {
+                payment_method: resolved,
+                amount: Math.max(0, Number(p.amount ?? 0)),
+              };
+            }),
+          )
+        : null;
 
     const updatedSale = await this.prisma.$transaction(async (tx) => {
       const persistedSale = await tx.sale.update({
@@ -1324,6 +1394,7 @@ export class SalesService {
           status: 'paid',
           isDraft: false,
           paymentMethod,
+          ...(extraPayments !== null ? { extraPayments } : {}),
           ...(resolvedSellerId !== null ? { userId: resolvedSellerId } : {}),
           clientId: resolvedClient.clientId,
           clientName: resolvedClient.clientName,
