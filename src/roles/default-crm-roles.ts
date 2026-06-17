@@ -14,31 +14,48 @@ export const DEFAULT_CRM_ROLES = [
     description: '',
     isAdmin: false,
     permissionSlugs: [
+      // Новая продажа
       'new-sale',
       'order-new',
       'order-return',
-      'seller-list',
+      'order-debt',
       'manual-discount',
+      'seller-list',
+      'delay-finish',
+      // Все продажи
       'all-sales',
       'orders',
+      'report-print',
+      // Кассовые смены
       'cash-shifts',
       'cashbox-shifts',
+      'cashbox-open-edit',
       'cash-shifts-detail',
+      // Кассовые операции
       'cashbox-operations',
+      'gl-transaction-collection',
       'gl-transaction-income',
       'gl-transaction-cost',
       'gl-transaction-view',
+      // Клиенты
       'all-clients',
       'clients',
       'client-card',
+      'client-card-edit',
+      // Долги
       'debts',
       'debt-detail',
+      // Подарочные карты
       'gift-cards',
       'pay-gift-card',
       'sell-gift-card',
       'view-gift-card',
+      // Каталог
       'catalog',
+      'catalog-operations',
       'product-list',
+      // Дашборд
+      'dashboard-orders',
     ],
   },
   {
@@ -47,23 +64,38 @@ export const DEFAULT_CRM_ROLES = [
     description: '',
     isAdmin: false,
     permissionSlugs: [
+      // Поставщики
       'suppliers',
       'supplier-list',
       'supplier-edit',
       'supplier-create',
+      // Переоценка
       'revaluation',
       'revaluation-accept',
       'revaluation-create',
       'revaluation-file',
       'product-revaluation',
+      // Списание
       'write-off',
       'write-offs',
+      'write-off-cost',
       'write-off-create',
       'write-off-finish',
+      'write-off-delete',
+      // Импорт
+      'import',
+      'import-details',
+      'import-retail-price',
+      'import-price',
+      'import-check',
+      'import-create',
+      'import-delete',
+      // Трансфер
       'transfer',
       'transfers',
       'transfer-create',
       'transfer-check',
+      // Заказы поставщику
       'all-orders',
       'order-payment',
       'order-create',
@@ -71,93 +103,184 @@ export const DEFAULT_CRM_ROLES = [
       'order-detail',
       'order-edit',
       'order/return',
+      // Каталог
       'catalog',
+      'catalog-operations',
       'product-list',
       'product-create',
       'product-edit',
       'product-price-edit',
-      'catalog-statistics',
-      'catalog-operations',
+      'product-photo',
+      'product-supply-price',
       'product-excel-export',
+      'product-bulk-archive',
+      'catalog-statistics',
+      'bulk-price-tags',
+      'bulk-products-fields',
+      'bulk-photo',
+      'small-quantity-products',
+      'price-edit',
+      // Инвентаризация
       'inventory',
       'inventory-list',
       'inventory-result',
       'inventory-finish',
       'inventory-create',
+      'inventory-block',
+      'inventory-delete',
+      'inventory-declared',
+      'inventory-partial',
+      // Справочник
       'handbook',
+      // Новая продажа
       'new-sale',
       'order-new',
       'order-return',
       'order-debt',
       'manual-discount',
       'seller-list',
+      'delay-finish',
       'return-from-another-store',
+      // Все продажи
       'all-sales',
       'orders',
       'show-all-sales',
+      'show_deleted_orders',
       'report-print',
       'orders-other-shops',
       'payment-type',
+      'order-date',
+      'order-client',
+      'order-seller',
+      'order-delete',
+      // Кассовые смены
       'cash-shifts',
       'cashbox-shifts',
       'cashbox-open-edit',
       'cash-shifts-detail',
+      // Кассовые операции
       'cashbox-operations',
       'cashbox-change',
       'gl-transaction-collection',
       'gl-transaction-income',
       'gl-transaction-cost',
       'gl-transaction-view',
+      // Долги клиентов
       'debts',
       'debt-detail',
       'debt-edit',
+      'debt-cancel',
+      // Все клиенты
       'all-clients',
       'clients',
       'client-card',
       'client-card-edit',
+      'client-delete',
+      'clients-download',
+      'balance-edit',
+      // Программа лояльности
+      'loyalty-program',
+      'loyalty-setting',
+      'loyalty-create',
+      'loyalty-edit',
+      // Группы клиентов
       'clients-group',
       'group-list',
       'group-create',
       'group-edit',
+      // Акции
       'promos',
       'promo',
+      'promo-edit',
+      'promo-create',
       'promo-action',
+      'promo-delete',
+      // SMS рассылка
+      'sms',
+      'sms-view',
+      'sms-create',
+      // Подарочные карты
       'gift-cards',
       'pay-gift-card',
       'sell-gift-card',
       'view-gift-card',
+      // Отчёты — магазин
       'reports-shop',
       'reports-shop-summary',
       'reports-shop-transactions',
       'summary-report',
+      // Отчёты — товары
       'report-products',
       'reports-products-summary',
+      'reports-products-supplier',
       'reports-products-leftover',
       'reports-products-efficiency',
+      'reports-products-import',
+      'report-abc-segmentation',
+      'report-write-off',
+      'report-stocktaking',
+      // Отчёты — клиенты
+      'report-clients',
+      'reports-clients-purchases',
+      'reports-clients-summary',
+      // Отчёты — финансы
+      'report-finance',
+      'reports-finances-movements',
+      'reports-finances-summary',
+      // Отчёты — продавцы
       'report-sellers',
       'report-seller',
       'report-seller-products',
+      // Скачать отчёт
+      'transactions-report',
+      // Финансы — состояние счетов
       'finance-state',
       'state-view',
+      // Финансы — категории
+      'categories',
+      'category-detail',
+      // Финансы — транзакции
       'transactions',
       'transactions-view',
+      'transactions-check',
       'transactions-create',
+      // Настройки — профиль
+      'settings-profiles',
+      'settings-profile',
+      'settings-session',
+      // Настройки — магазины
       'settings-shop',
       'shop-list',
       'shop-edit',
+      // Настройки — кассы
       'settings-cashbox',
       'cashbox-list',
       'cashbox-edit',
+      // Настройки — чеки
       'settings-cheque',
       'cheque-list',
       'cheque-edit',
+      // Настройки — валюты и оплаты
       'settings-payment',
       'currency-list',
       'payment-types',
+      'payment-type-edit',
+      'payment-type-create',
+      'payment-type-delete',
+      // Управление — сотрудники
       'employees',
       'employee-list',
+      'employee-create',
+      'employee-edit',
+      'employee-block',
+      'employee-delete',
+      // Управление — роли (просмотр)
+      'roles',
+      'role-list',
+      // Дашборд
       'dashboard-orders',
       'target',
+      // EPOS
       'orders-epos',
     ],
   },
@@ -167,19 +290,45 @@ export const DEFAULT_CRM_ROLES = [
     description: '',
     isAdmin: false,
     permissionSlugs: [
+      // Новая продажа
       'new-sale',
       'order-new',
+      'order-return',
+      'order-debt',
+      'manual-discount',
       'seller-list',
+      'delay-finish',
+      // Все продажи (только свои)
       'all-sales',
       'orders',
+      // Кассовые смены
+      'cash-shifts',
+      'cashbox-shifts',
+      'cash-shifts-detail',
+      // Кассовые операции
+      'cashbox-operations',
+      'gl-transaction-income',
+      'gl-transaction-cost',
+      'gl-transaction-view',
+      // Долги
+      'debts',
+      'debt-detail',
+      // Клиенты
       'all-clients',
       'clients',
       'client-card',
+      'client-card-edit',
+      // Каталог
       'catalog',
+      'catalog-operations',
       'product-list',
+      // Подарочные карты
       'gift-cards',
+      'pay-gift-card',
       'sell-gift-card',
       'view-gift-card',
+      // Дашборд
+      'dashboard-orders',
     ],
   },
   {

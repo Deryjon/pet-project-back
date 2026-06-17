@@ -10,10 +10,10 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PERMISSIONS_KEY } from '../permissions.decorator';
 
 const LEGACY_PERMISSION_ALIASES: Record<string, string[]> = {
-  'orders.read': ['orders'],
-  'orders.create': ['orders'],
-  'orders.cancel': ['orders'],
-  'orders.complete': ['orders'],
+  'orders.read': ['new-sale', 'all-sales'],
+  'orders.create': ['new-sale', 'order-new'],
+  'orders.cancel': ['new-sale', 'all-sales'],
+  'orders.complete': ['new-sale', 'order-new'],
   'payments.create': ['payment-types'],
   'cashboxes.manage': ['cashbox-list', 'cashbox-create'],
 };
@@ -48,6 +48,7 @@ export class PermissionsGuard implements CanActivate {
       where: {
         id: roleId,
         companyId: user.companyId,
+        deletedAt: 0,
       },
       select: {
         isAdmin: true,

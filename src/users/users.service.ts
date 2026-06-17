@@ -2670,6 +2670,14 @@ export class UsersService {
     }
 
     if (Boolean(user.crmRole?.isAdmin)) {
+      // If admin has specific shop assignments, respect them (e.g. branch manager with admin role).
+      // Only fall back to all company shops when no assignments exist.
+      if (user.shopAccesses.length) {
+        return user.shopAccesses
+          .map((access) => access.shop)
+          .filter((shop) => shop && shop.isActive);
+      }
+
       const allCompanyShops = await this.db.shop.findMany({
         where: {
           companyId: user.companyId,
@@ -2680,7 +2688,7 @@ export class UsersService {
         },
       });
 
-      if (!user.shopAccesses.length && allCompanyShops.length === 1) {
+      if (allCompanyShops.length === 1) {
         await this.db.userShopAccess.createMany({
           data: [
             {
