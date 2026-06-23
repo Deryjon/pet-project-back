@@ -197,6 +197,8 @@ export class TelegramService {
             quantity: true,
             salePrice: true,
             lineTotal: true,
+            retailPriceAtSale: true,
+            finalPrice: true,
             discountAmount: true,
           },
         }),
@@ -262,20 +264,22 @@ export class TelegramService {
 
       // Items
       const itemLines = items.map((item, i) => {
-        const lineTotal = item.lineTotal ?? item.salePrice * item.quantity;
-        const originalTotal = item.salePrice * item.quantity;
-        const discount = item.discountAmount ?? 0;
+        const originalTotal = item.retailPriceAtSale || item.lineTotal || item.salePrice * item.quantity;
+        const finalTotal = item.finalPrice || originalTotal;
         const discountPct =
-          discount > 0 && originalTotal > 0
-            ? ((discount / originalTotal) * 100).toFixed(2)
+          originalTotal > 0 && finalTotal < originalTotal
+            ? (((originalTotal - finalTotal) / originalTotal) * 100).toFixed(2)
             : null;
 
         let line = `${i + 1}. ${item.name}`;
         if (item.barcode) line += ` / ${item.barcode}`;
         if (item.sku) line += ` / Арт: ${item.sku}`;
         line += ` / ${item.quantity} шт x ${this.fmt(item.salePrice)} UZS`;
-        line += ` / (Сумма: ${this.fmt(lineTotal)} UZS)`;
-        if (discountPct) line += `, (скидка ${discountPct} %)`;
+        line += ` / (Сумма: ${this.fmt(finalTotal)} UZS)`;
+        if (discountPct) {
+          const isLast = i === items.length - 1;
+          line += `, (скидка ${discountPct} %)${isLast ? '' : ','}`;
+        }
         return line;
       });
 
@@ -294,7 +298,10 @@ export class TelegramService {
 
       if (itemLines.length) {
         lines.push('', '📦 Товары:');
-        lines.push(...itemLines);
+        for (let j = 0; j < itemLines.length; j++) {
+          lines.push(itemLines[j]);
+          if (j < itemLines.length - 1) lines.push('');
+        }
       }
 
       const text = lines.filter((l) => l !== null && l !== undefined).join('\n');
