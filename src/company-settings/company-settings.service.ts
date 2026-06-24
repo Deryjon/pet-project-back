@@ -2540,10 +2540,19 @@ export class CompanySettingsService {
       where: { companyId },
     });
     if (chequeCount === 0) {
-      const cheques = this.parseJsonArray<ChequeProfile>(
+      let cheques = this.parseJsonArray<ChequeProfile>(
         process.env.CHEQUES_JSON,
         DEFAULT_CHEQUES,
       ).filter((item) => this.stringOrDefault(item.company_id, '') === companyId);
+      if (cheques.length === 0) {
+        cheques = [{
+          id: randomUUID(),
+          company_id: companyId,
+          name: 'Стандартный чек',
+          is_default: true,
+          is_active: true,
+        }];
+      }
       await this.db.chequeSetting.createMany({
         data: cheques.map((item) => this.toChequeRowData(item)) as any,
         skipDuplicates: true,
