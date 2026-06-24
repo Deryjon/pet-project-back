@@ -235,6 +235,16 @@ export class PlatformController {
     return this.platformService.updateSettings(body);
   }
 
+  @Get('platform/settings/notifications')
+  getNotificationSettings() {
+    return this.platformService.getNotificationSettings();
+  }
+
+  @Patch('platform/settings/notifications')
+  updateNotificationSettings(@Body() body: Record<string, unknown>) {
+    return this.platformService.updateNotificationSettings(body);
+  }
+
   @Get('platform/roles')
   findPlatformRoles(@Headers('authorization') authorization?: string) {
     return this.usersService.findPlatformRoles(authorization);
@@ -249,6 +259,27 @@ export class PlatformController {
       } as unknown as Record<string, unknown>,
       req.user as never,
     );
+  }
+
+  @Get('platform/audit-logs')
+  getAuditLogs(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
+    @Query('user') userFilter?: string,
+    @Query('entity') entityFilter?: string,
+    @Query('date_from') dateFrom?: string,
+    @Query('date_to') dateTo?: string,
+  ) {
+    return this.platformService.getAuditLogs({
+      page: Number(page) || 1,
+      limit: Number(limit) || 20,
+      search,
+      userFilter,
+      entityFilter,
+      dateFrom,
+      dateTo,
+    });
   }
 
   @Get('platform/companies/:companyId/shops')

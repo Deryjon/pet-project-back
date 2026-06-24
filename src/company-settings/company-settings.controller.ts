@@ -367,6 +367,15 @@ export class CompanySettingsController {
     return this.companySettingsService.getLoyaltyProgram(companyId);
   }
 
+  @Put('v1/loyalty-program')
+  updateLoyaltyProgram(
+    @Body() body: Record<string, unknown>,
+    @Headers('x-company-id') companyId?: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.companySettingsService.updateLoyaltyProgram(body, companyId);
+  }
+
   @Get('v2/company-currencies')
   async getV2CompanyCurrencies(@Query('company_id') companyId?: string) {
     return this.companySettingsService.getCompanyCurrencies(companyId);

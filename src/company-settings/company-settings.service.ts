@@ -1019,6 +1019,33 @@ export class CompanySettingsService {
     };
   }
 
+  async updateLoyaltyProgram(body: Record<string, unknown>, companyId?: string) {
+    const targetCompanyId = await this.resolveCompanyId(companyId);
+    if (!targetCompanyId) throw new BadRequestException('Company ID required');
+
+    const data = {
+      isActive: body.is_active === true || body.is_active === 'true',
+      name: String(body.name ?? '').trim(),
+      type: String(body.type ?? '').trim(),
+      cashbackPercent: Number(body.cashback_percent) || 0,
+      bonusPercent: Number(body.bonus_percent) || 0,
+      levels: Array.isArray(body.levels) ? body.levels : [],
+      hasCustomerBalance:
+        body.has_customer_balance === true ||
+        body.has_customer_balance === 'true',
+      hasCustomerDebt:
+        body.has_customer_debt === true || body.has_customer_debt === 'true',
+    };
+
+    await this.db.loyaltyProgramSetting.upsert({
+      where: { companyId: targetCompanyId },
+      update: data,
+      create: { companyId: targetCompanyId, ...data },
+    });
+
+    return this.getLoyaltyProgram(companyId);
+  }
+
   async getMeasurementUnitById(id: string, companyId?: string) {
     const measurementUnitId = this.requireString(id, 'id');
     const targetCompanyId =

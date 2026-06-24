@@ -1054,6 +1054,102 @@ export class PlatformService {
     return settings.data;
   }
 
+  async getNotificationSettings() {
+    const settings = await this.db.platformSetting.findUnique({
+      where: { id: 'default' },
+    });
+    const notifications = (settings?.data as any)?.notifications;
+    return {
+      enabled: notifications?.enabled ?? true,
+      saleNotifications: notifications?.saleNotifications ?? true,
+      stockAlerts: notifications?.stockAlerts ?? false,
+      lowStockThreshold: notifications?.lowStockThreshold ?? false,
+      dailyReport: notifications?.dailyReport ?? false,
+    };
+  }
+
+  async updateNotificationSettings(body: Record<string, unknown>) {
+    const current = await this.db.platformSetting.findUnique({
+      where: { id: 'default' },
+    });
+    const currentData = (current?.data as Record<string, unknown>) ?? {};
+    const data = { ...currentData, notifications: body };
+    await this.db.platformSetting.upsert({
+      where: { id: 'default' },
+      update: { data: data as any },
+      create: { id: 'default', data: data as any },
+    });
+    return body;
+  }
+
+  async getAuditLogs(params: {
+    page: number;
+    limit: number;
+    search?: string;
+    userFilter?: string;
+    entityFilter?: string;
+    dateFrom?: string;
+    dateTo?: string;
+  }) {
+    const take = Math.min(Math.max(1, params.limit), 100);
+    const skip = (Math.max(1, params.page) - 1) * take;
+    const where: any = {};
+
+    if (params.search) {
+      where.OR = [
+        { action: { contains: params.search, mode: 'insensitive' } },
+        { entity: { contains: params.search, mode: 'insensitive' } },
+        { entityId: { contains: params.search, mode: 'insensitive' } },
+      ];
+    }
+    if (params.userFilter)
+      where.userId = Number(params.userFilter) || undefined;
+    if (params.entityFilter) where.entity = params.entityFilter;
+    if (params.dateFrom || params.dateTo) {
+      where.createdAt = {};
+      if (params.dateFrom)
+        where.createdAt.gte = new Date(params.dateFrom);
+      if (params.dateTo) {
+        const end = new Date(params.dateTo);
+        end.setDate(end.getDate() + 1);
+        where.createdAt.lt = end;
+      }
+    }
+
+    const [items, total] = await Promise.all([
+      this.db.auditLog.findMany({
+        where,
+        include: {
+          user: {
+            select: { id: true, firstName: true, lastName: true },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      this.db.auditLog.count({ where }),
+    ]);
+
+    return {
+      items: items.map((log) => ({
+        id: log.id,
+        user: log.user
+          ? `${log.user.firstName} ${log.user.lastName}`.trim()
+          : `User ${log.userId}`,
+        userId: log.userId,
+        action: log.action,
+        entity: log.entity,
+        entityId: log.entityId,
+        meta: log.meta,
+        date: log.createdAt.toISOString(),
+      })),
+      total,
+      page: params.page,
+      limit: take,
+    };
+  }
+
   private async findShopByIdentifier(companyId: string, identifier: string) {
     const normalizedIdentifier = this.requireString(identifier, 'shopId');
 
