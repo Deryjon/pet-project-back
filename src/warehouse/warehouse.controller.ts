@@ -1,7 +1,10 @@
 import {
   Controller,
   Get,
+  Post,
   Query,
+  Param,
+  Body,
   Headers,
   UseGuards,
 } from '@nestjs/common';
@@ -43,5 +46,46 @@ export class WarehouseController {
     @Headers('authorization') auth?: string,
   ) {
     return this.warehouseService.listMovements('PURCHASE', query, auth);
+  }
+
+  @Get('v1/inventory-sessions')
+  listInventorySessions(
+    @Query() query: Record<string, string>,
+    @Headers('authorization') auth?: string,
+  ) {
+    return this.warehouseService.listInventorySessions(query, auth);
+  }
+
+  @Get('v1/inventory-sessions/:id')
+  getInventorySession(
+    @Param('id') id: string,
+    @Headers('authorization') auth?: string,
+  ) {
+    return this.warehouseService.getInventorySession(id, auth);
+  }
+
+  @Post('v1/inventory-sessions')
+  createInventorySession(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') auth?: string,
+  ) {
+    return this.warehouseService.createInventorySession(body, auth);
+  }
+
+  @Post('v1/inventory-sessions/:id/items')
+  addInventoryItem(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') auth?: string,
+  ) {
+    return this.warehouseService.addInventoryItem(id, body, auth);
+  }
+
+  @Post('v1/inventory-sessions/:id/apply')
+  applyInventory(
+    @Param('id') id: string,
+    @Headers('authorization') auth?: string,
+  ) {
+    return this.warehouseService.applyInventory(id, auth);
   }
 }

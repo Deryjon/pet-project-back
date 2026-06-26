@@ -111,6 +111,7 @@ model Company {
   transfers          Transfer[]
   clientDebtRepayments ClientDebtRepayment[]
   clientCards        ClientCard[]
+  inventorySessions  InventorySession[]
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
@@ -156,6 +157,7 @@ model Shop {
   supplyPriceHistory ProductSupplyPriceHistory[]
   departureTransfers Transfer[]        @relation("TransferDepartureShop")
   arrivalTransfers   Transfer[]        @relation("TransferArrivalShop")
+  inventorySessions  InventorySession[]
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
@@ -200,6 +202,8 @@ model User {
   clientDebtRepayments ClientDebtRepayment[]
   createdTransfers   Transfer[]          @relation("TransferCreatedBy")
   acceptedTransfers  Transfer[]          @relation("TransferAcceptedBy")
+  createdInventories InventorySession[]  @relation("InventoryCreatedBy")
+  closedInventories  InventorySession[]  @relation("InventoryClosedBy")
   authSessions       AuthSession[]
   telegramSubscriber TelegramSubscriber?
   createdAt          DateTime            @default(now())
@@ -407,6 +411,7 @@ model Product {
   stockMovements   StockMovement[]
   supplyPriceHistory ProductSupplyPriceHistory[]
   transferItems    TransferItem[]
+  inventoryItems   InventoryItem[]
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -928,6 +933,44 @@ model ProductStock {
   product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+}
+
+model InventorySession {
+  id            String              @id @default(uuid())
+  companyId     String
+  shopId        String
+  name          String
+  status        String              @default("draft")
+  comment       String              @default("")
+  createdById   Int
+  closedById    Int?
+  closedAt      DateTime?
+  company       Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  shop          Shop                @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdBy     User                @relation("InventoryCreatedBy", fields: [createdById], references: [id])
+  closedBy      User?               @relation("InventoryClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+  items         InventoryItem[]
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@index([companyId, status])
+  @@index([shopId])
+}
+
+model InventoryItem {
+  id                String            @id @default(uuid())
+  inventorySessionId String
+  productId         Int
+  expectedQuantity  Float             @default(0)
+  actualQuantity    Float             @default(0)
+  difference        Float             @default(0)
+  session           InventorySession  @relation(fields: [inventorySessionId], references: [id], onDelete: Cascade)
+  product           Product           @relation(fields: [productId], references: [id])
+  createdAt         DateTime          @default(now())
+
+  @@unique([inventorySessionId, productId])
+  @@index([inventorySessionId])
+  @@index([productId])
 }
 
 model Transfer {
