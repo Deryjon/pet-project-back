@@ -18,6 +18,7 @@ export class DashboardController {
   @Get('v1/dashboard-report')
   getDashboardReport(
     @Query('start_date') startDate?: string,
+    @Query('end_date') endDate?: string,
     @Query('detalization') detalization?: string,
     @Query('seller_field') sellerField?: string,
     @Query('currency') currency?: string,
@@ -29,6 +30,7 @@ export class DashboardController {
     return this.dashboardService.getDashboardReport(
       {
         startDate,
+        endDate,
         detalization,
         sellerField,
         currency,

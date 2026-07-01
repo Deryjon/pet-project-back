@@ -24,6 +24,7 @@ export class DashboardService {
   async getDashboardReport(
     query: {
       startDate?: string;
+      endDate?: string;
       detalization?: string;
       sellerField?: string;
       currency?: string;
@@ -47,7 +48,7 @@ export class DashboardService {
     const shops = filterBranchCode
       ? allShops.filter((s) => s.branchCode === filterBranchCode)
       : allShops;
-    const endDate = this.buildEndDate(startDate, detalization);
+    const endDate = this.buildEndDate(startDate, detalization, reportPeriod, query.endDate);
 
     const effectiveBranchCodes = filterBranchCode
       ? [filterBranchCode]
@@ -354,7 +355,17 @@ export class DashboardService {
     return date;
   }
 
-  private buildEndDate(startDate: Date, detalization: string, reportPeriod?: string) {
+  private buildEndDate(startDate: Date, detalization: string, reportPeriod?: string, endDateOverride?: string) {
+    // If the frontend explicitly sent an end_date, use it (shift +1 day so the query
+    // uses exclusive `lt` and includes all sales on the end day itself).
+    if (endDateOverride?.trim()) {
+      const parsed = new Date(`${endDateOverride.trim()}T00:00:00`);
+      if (!Number.isNaN(parsed.getTime())) {
+        parsed.setDate(parsed.getDate() + 1);
+        return parsed;
+      }
+    }
+
     const endDate = new Date(startDate);
 
     // If reportPeriod is specified, it takes precedence for the overall duration
@@ -374,17 +385,17 @@ export class DashboardService {
     // Default durations based on detalization if no reportPeriod
     switch (detalization) {
       case 'month':
-        endDate.setFullYear(startDate.getFullYear() + 1); // Default to a year for monthly view
+        endDate.setFullYear(startDate.getFullYear() + 1);
         break;
       case 'week':
-        endDate.setMonth(startDate.getMonth() + 3); // Default to 3 months for weekly view
+        endDate.setMonth(startDate.getMonth() + 3);
         break;
       case 'day':
-        endDate.setDate(startDate.getDate() + 30); // Default to 30 days
+        endDate.setDate(startDate.getDate() + 30);
         break;
       case 'hour':
       default:
-        endDate.setDate(startDate.getDate() + 1); // Default to 1 day for hourly view
+        endDate.setDate(startDate.getDate() + 1);
         break;
     }
     return endDate;
