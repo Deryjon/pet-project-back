@@ -48,7 +48,7 @@ export class SellerReportsService {
           discount_percent: grossSales !== 0 ? (discountSum / grossSales) * 100 : 0,
           returns: Number(row.returns_count ?? 0),
           average_extra_charge:
-            grossProfit !== 0 && netSales !== 0 ? (grossProfit / netSales) * 100 : 0,
+            netSales !== 0 ? (grossProfit / netSales) * 100 : 0,
           kpi_score: this.salaryService.calculateKpiScore({ netSales }),
           fixed_salary: Number(settings.fixedSalary ?? 0),
           salary_percent: Number(settings.salaryPercent ?? 0),

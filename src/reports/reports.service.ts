@@ -2703,8 +2703,11 @@ export class ReportsService {
           stock_left: 0,
         };
         if (item.productId) {
+          const sizeBefore = existing.products_count.size;
           existing.products_count.add(item.productId);
-          existing.stock_left += this.resolveStockLeft(item.product);
+          if (existing.products_count.size > sizeBefore) {
+            existing.stock_left += this.resolveStockLeft(item.product);
+          }
         }
         existing.sold_quantity += item.quantity * sign;
         existing.gross_sales += this.getItemRetailPrice(item) * sign;

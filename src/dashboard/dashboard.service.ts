@@ -184,7 +184,7 @@ export class DashboardService {
 
       const extraPaymentsRaw = (sale as any).extraPayments;
       const extraList: Array<{ payment_method: string; amount: number }> =
-        Array.isArray(extraPaymentsRaw) && extraPaymentsRaw.length > 1
+        Array.isArray(extraPaymentsRaw) && extraPaymentsRaw.length > 0
           ? (extraPaymentsRaw as any[]).filter(
               (p) =>
                 p &&
@@ -195,7 +195,7 @@ export class DashboardService {
           : [];
 
       const paymentEntries =
-        extraList.length > 1
+        extraList.length > 0
           ? extraList.map((ep) => ({
               methodId: ep.payment_method,
               amount: saleTotal < 0 ? -Number(ep.amount) : Number(ep.amount),

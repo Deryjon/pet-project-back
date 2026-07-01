@@ -464,7 +464,7 @@ export class SalesService {
 
       const extraPaymentsRaw = (sale as any).extraPayments;
       const extraPaymentsList: Array<{ payment_method: string; amount: number }> =
-        Array.isArray(extraPaymentsRaw) && extraPaymentsRaw.length > 1
+        Array.isArray(extraPaymentsRaw) && extraPaymentsRaw.length > 0
           ? (extraPaymentsRaw as any[]).filter(
               (p) =>
                 p &&
