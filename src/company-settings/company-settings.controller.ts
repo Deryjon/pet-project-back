@@ -234,71 +234,81 @@ export class CompanySettingsController {
   }
 
   @Post('cheque')
-  async createCheque(@Body() body: Record<string, unknown>) {
-    return this.companySettingsService.createCheque(body);
-  }
-
   @Post('v1/cheque')
-  async createV1Cheque(@Body() body: Record<string, unknown>) {
-    return this.companySettingsService.createCheque(body);
+  async createCheque(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const context = authorization
+      ? await this.usersService.getRequestContext(authorization)
+      : null;
+    const companyId = context?.companyId ?? (body.company_id as string | undefined);
+    return this.companySettingsService.createCheque(body, companyId);
   }
 
   @Put('cheque/:id')
-  async updateCheque(@Param('id') id: string, @Body() body: Record<string, unknown>) {
-    return this.companySettingsService.updateCheque(id, body);
-  }
-
   @Put('v1/cheque/:id')
-  async updateV1Cheque(
+  async updateCheque(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
   ) {
-    return this.companySettingsService.updateCheque(id, body);
+    const context = authorization
+      ? await this.usersService.getRequestContext(authorization)
+      : null;
+    return this.companySettingsService.updateCheque(
+      id,
+      body,
+      context?.companyId ?? undefined,
+    );
   }
 
   @Delete('cheque/:id')
-  async deleteCheque(@Param('id') id: string) {
-    return this.companySettingsService.deleteCheque(id);
-  }
-
   @Delete('v1/cheque/:id')
-  async deleteV1Cheque(@Param('id') id: string) {
-    return this.companySettingsService.deleteCheque(id);
+  async deleteCheque(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const context = authorization
+      ? await this.usersService.getRequestContext(authorization)
+      : null;
+    return this.companySettingsService.deleteCheque(
+      id,
+      context?.companyId ?? undefined,
+    );
   }
 
   @Get('cheque/:id')
-  async getChequeById(@Param('id') id: string) {
-    return this.companySettingsService.getChequeById(id);
-  }
-
   @Get('v1/cheque/:id')
-  async getV1ChequeById(@Param('id') id: string) {
-    return this.companySettingsService.getChequeById(id);
+  async getChequeById(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const context = authorization
+      ? await this.usersService.getRequestContext(authorization)
+      : null;
+    return this.companySettingsService.getChequeById(
+      id,
+      context?.companyId ?? undefined,
+    );
   }
 
   @Get('cheque')
+  @Get('v1/cheque')
   async getCheque(
     @Query('name') name?: string,
     @Query('limit') limit?: string,
     @Query('page') page?: string,
+    @Headers('authorization') authorization?: string,
   ) {
+    const context = authorization
+      ? await this.usersService.getRequestContext(authorization)
+      : null;
     return this.companySettingsService.getCheque({
       name,
       limit: Number(limit),
       page: Number(page),
-    });
-  }
-
-  @Get('v1/cheque')
-  async getV1Cheque(
-    @Query('name') name?: string,
-    @Query('limit') limit?: string,
-    @Query('page') page?: string,
-  ) {
-    return this.companySettingsService.getCheque({
-      name,
-      limit: Number(limit),
-      page: Number(page),
+      companyId: context?.companyId ?? undefined,
     });
   }
 

@@ -1304,8 +1304,13 @@ export class CompanySettingsService {
     };
   }
 
-  async getCheque(query?: { name?: string; limit?: number; page?: number }) {
-    const companyId = await this.resolveCompanyId();
+  async getCheque(query?: {
+    name?: string;
+    limit?: number;
+    page?: number;
+    companyId?: string;
+  }) {
+    const companyId = await this.resolveCompanyId(query?.companyId);
     if (companyId) {
       await this.ensureCompanySettingsSeeded(companyId);
     }
@@ -1336,22 +1341,22 @@ export class CompanySettingsService {
     };
   }
 
-  async getChequeById(id: string) {
+  async getChequeById(id: string, companyId?: string) {
     const chequeId = this.requireString(id, 'id');
     const row = await this.db.chequeSetting.findUnique({
       where: { id: chequeId },
     });
 
-    if (!row) {
+    if (!row || (companyId && row.companyId !== companyId)) {
       throw new NotFoundException('Cheque not found');
     }
 
     return this.toChequeResponse(this.toChequeProfile(row), 0);
   }
 
-  async createCheque(body: Record<string, unknown>) {
+  async createCheque(body: Record<string, unknown>, resolvedCompanyId?: string) {
     const companyId =
-      this.optionalString(body.company_id) ?? DEFAULT_COMPANY_ID;
+      resolvedCompanyId ?? this.optionalString(body.company_id) ?? DEFAULT_COMPANY_ID;
     await this.ensureCompanySettingsSeeded(companyId);
     const existingCount = await this.db.chequeSetting.count({
       where: { companyId },
@@ -1409,6 +1414,12 @@ export class CompanySettingsService {
       rotation: this.toNumber(body.rotation) ?? 0,
       logo: this.optionalString(body.logo) ?? '',
       compact: this.optionalBoolean(body.compact) ?? false,
+      extra_settings:
+        body.extra_settings &&
+        typeof body.extra_settings === 'object' &&
+        !Array.isArray(body.extra_settings)
+          ? (body.extra_settings as Record<string, unknown>)
+          : null,
     };
 
     if (created.is_default) {
@@ -1424,13 +1435,17 @@ export class CompanySettingsService {
     return this.toChequeResponse(this.toChequeProfile(row), 0);
   }
 
-  async updateCheque(id: string, body: Record<string, unknown>) {
+  async updateCheque(
+    id: string,
+    body: Record<string, unknown>,
+    companyId?: string,
+  ) {
     const chequeId = this.requireString(id, 'id');
     const existing = await this.db.chequeSetting.findUnique({
       where: { id: chequeId },
     });
 
-    if (!existing) {
+    if (!existing || (companyId && existing.companyId !== companyId)) {
       throw new NotFoundException('Cheque not found');
     }
 
@@ -1455,13 +1470,13 @@ export class CompanySettingsService {
     return this.toChequeResponse(this.toChequeProfile(updated), 0);
   }
 
-  async deleteCheque(id: string) {
+  async deleteCheque(id: string, companyId?: string) {
     const chequeId = this.requireString(id, 'id');
     const existing = await this.db.chequeSetting.findUnique({
       where: { id: chequeId },
     });
 
-    if (!existing) {
+    if (!existing || (companyId && existing.companyId !== companyId)) {
       throw new NotFoundException('Cheque not found');
     }
 
