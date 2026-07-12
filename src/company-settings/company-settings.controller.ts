@@ -8,9 +8,14 @@ import {
   Post,
   Put,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { CompanySettingsService } from './company-settings.service';
 import { UsersService } from '../users/users.service';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { Permissions } from '../auth/permissions.decorator';
 
 @Controller()
 export class CompanySettingsController {
@@ -181,6 +186,7 @@ export class CompanySettingsController {
   }
 
   @Get(['price-tag', 'v1/price-tag'])
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard)
   async getPriceTags(
     @Query('company_id') companyId?: string,
     @Headers('authorization') authorization?: string,
@@ -195,6 +201,7 @@ export class CompanySettingsController {
   }
 
   @Post(['price-tag', 'v1/price-tag'])
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard)
   async createPriceTag(
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
@@ -207,6 +214,7 @@ export class CompanySettingsController {
   }
 
   @Put(['price-tag/:id', 'v1/price-tag/:id'])
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard)
   async updatePriceTag(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -220,11 +228,20 @@ export class CompanySettingsController {
   }
 
   @Delete(['price-tag/:id', 'v1/price-tag/:id'])
-  async deletePriceTag(@Param('id') id: string) {
-    return this.companySettingsService.deletePriceTag(id);
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard)
+  async deletePriceTag(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const context = authorization
+      ? await this.usersService.getRequestContext(authorization)
+      : null;
+    return this.companySettingsService.deletePriceTag(id, context?.companyId ?? undefined);
   }
 
   @Post(['cheque', 'v1/cheque'])
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('cheque-edit')
   async createCheque(
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
@@ -237,6 +254,8 @@ export class CompanySettingsController {
   }
 
   @Put(['cheque/:id', 'v1/cheque/:id'])
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('cheque-edit')
   async updateCheque(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -253,6 +272,8 @@ export class CompanySettingsController {
   }
 
   @Delete(['cheque/:id', 'v1/cheque/:id'])
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('cheque-edit')
   async deleteCheque(
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
@@ -267,6 +288,7 @@ export class CompanySettingsController {
   }
 
   @Get(['cheque/:id', 'v1/cheque/:id'])
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard)
   async getChequeById(
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
@@ -281,6 +303,7 @@ export class CompanySettingsController {
   }
 
   @Get(['cheque', 'v1/cheque'])
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard)
   async getCheque(
     @Query('name') name?: string,
     @Query('limit') limit?: string,

@@ -1235,7 +1235,7 @@ export class CompanySettingsService {
 
   async updatePriceTag(id: string, body: Record<string, unknown>, resolvedCompanyId?: string) {
     const priceTag = await this.db.priceTagSetting.findUnique({ where: { id } });
-    if (!priceTag) {
+    if (!priceTag || (resolvedCompanyId && priceTag.companyId !== resolvedCompanyId)) {
       throw new NotFoundException('Price tag not found');
     }
     const updated = await this.db.priceTagSetting.update({
@@ -1282,9 +1282,9 @@ export class CompanySettingsService {
     };
   }
 
-  async deletePriceTag(id: string) {
+  async deletePriceTag(id: string, companyId?: string) {
     const existing = await this.db.priceTagSetting.findUnique({ where: { id } });
-    if (!existing) {
+    if (!existing || (companyId && existing.companyId !== companyId)) {
       throw new NotFoundException('Price tag not found');
     }
     const deleted = await this.db.priceTagSetting.delete({ where: { id } });
