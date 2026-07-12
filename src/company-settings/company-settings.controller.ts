@@ -19,20 +19,17 @@ export class CompanySettingsController {
     private readonly usersService: UsersService,
   ) {}
 
-  @Get('default-currency')
-  @Get('v1/default-currency')
+  @Get(['default-currency', 'v1/default-currency'])
   async getDefaultCurrency(@Query('company_id') companyId?: string) {
     return this.companySettingsService.getDefaultCurrency(companyId);
   }
 
-  @Get('country')
-  @Get('v1/country')
+  @Get(['country', 'v1/country'])
   async getCountries(@Query('limit') limit?: string) {
     return this.companySettingsService.getCountries(Number(limit));
   }
 
-  @Get('time-zone')
-  @Get('v1/time-zone')
+  @Get(['time-zone', 'v1/time-zone'])
   async getTimeZones(
     @Query('limit') limit?: string,
     @Query('country_id') countryId?: string,
@@ -45,14 +42,12 @@ export class CompanySettingsController {
     return this.companySettingsService.getCompanyTariff();
   }
 
-  @Get('company')
-  @Get('v1/company')
+  @Get(['company', 'v1/company'])
   async getCompany() {
     return this.companySettingsService.getCompany();
   }
 
-  @Put('company')
-  @Put('v1/company')
+  @Put(['company', 'v1/company'])
   async updateCompany(
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
@@ -185,8 +180,7 @@ export class CompanySettingsController {
     });
   }
 
-  @Get('price-tag')
-  @Get('v1/price-tag')
+  @Get(['price-tag', 'v1/price-tag'])
   async getPriceTags(
     @Query('company_id') companyId?: string,
     @Headers('authorization') authorization?: string,
@@ -200,8 +194,7 @@ export class CompanySettingsController {
     );
   }
 
-  @Post('price-tag')
-  @Post('v1/price-tag')
+  @Post(['price-tag', 'v1/price-tag'])
   async createPriceTag(
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
@@ -213,8 +206,7 @@ export class CompanySettingsController {
     return this.companySettingsService.createPriceTag(body, companyId);
   }
 
-  @Put('price-tag/:id')
-  @Put('v1/price-tag/:id')
+  @Put(['price-tag/:id', 'v1/price-tag/:id'])
   async updatePriceTag(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -227,14 +219,12 @@ export class CompanySettingsController {
     return this.companySettingsService.updatePriceTag(id, body, companyId);
   }
 
-  @Delete('price-tag/:id')
-  @Delete('v1/price-tag/:id')
+  @Delete(['price-tag/:id', 'v1/price-tag/:id'])
   async deletePriceTag(@Param('id') id: string) {
     return this.companySettingsService.deletePriceTag(id);
   }
 
-  @Post('cheque')
-  @Post('v1/cheque')
+  @Post(['cheque', 'v1/cheque'])
   async createCheque(
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
@@ -246,8 +236,7 @@ export class CompanySettingsController {
     return this.companySettingsService.createCheque(body, companyId);
   }
 
-  @Put('cheque/:id')
-  @Put('v1/cheque/:id')
+  @Put(['cheque/:id', 'v1/cheque/:id'])
   async updateCheque(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -263,8 +252,7 @@ export class CompanySettingsController {
     );
   }
 
-  @Delete('cheque/:id')
-  @Delete('v1/cheque/:id')
+  @Delete(['cheque/:id', 'v1/cheque/:id'])
   async deleteCheque(
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
@@ -278,8 +266,7 @@ export class CompanySettingsController {
     );
   }
 
-  @Get('cheque/:id')
-  @Get('v1/cheque/:id')
+  @Get(['cheque/:id', 'v1/cheque/:id'])
   async getChequeById(
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
@@ -293,8 +280,7 @@ export class CompanySettingsController {
     );
   }
 
-  @Get('cheque')
-  @Get('v1/cheque')
+  @Get(['cheque', 'v1/cheque'])
   async getCheque(
     @Query('name') name?: string,
     @Query('limit') limit?: string,
@@ -312,8 +298,7 @@ export class CompanySettingsController {
     });
   }
 
-  @Get('company-payment-type')
-  @Get('v1/company-payment-type')
+  @Get(['company-payment-type', 'v1/company-payment-type'])
   async getV1CompanyPaymentTypes(
     @Query('limit') limit?: string,
     @Query('company_id') companyId?: string,

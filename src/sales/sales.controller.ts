@@ -38,20 +38,17 @@ export class SalesController {
     return this.salesService.createDraft(authorization);
   }
 
-  @Get('parked-sales')
-  @Get('v2/parked-sales')
+  @Get(['parked-sales', 'v2/parked-sales'])
   findParkedSales(@Headers('authorization') authorization?: string) {
     return this.salesService.findParkedSales(authorization);
   }
 
-  @Get('draft-sales')
-  @Get('v2/draft-sales')
+  @Get(['draft-sales', 'v2/draft-sales'])
   findDraftSales(@Headers('authorization') authorization?: string) {
     return this.salesService.findDraftSales(authorization);
   }
 
-  @Post('order')
-  @Post('v2/order')
+  @Post(['order', 'v2/order'])
   createOrder(
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
@@ -59,8 +56,7 @@ export class SalesController {
     return this.salesService.createOrder(body, authorization);
   }
 
-  @Get('order/:id')
-  @Get('v2/order/:id')
+  @Get(['order/:id', 'v2/order/:id'])
   findOrder(
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
@@ -68,8 +64,7 @@ export class SalesController {
     return this.salesService.findOrder(id, authorization);
   }
 
-  @Get('order-draft-debt/:id')
-  @Get('v1/order-draft-debt/:id')
+  @Get(['order-draft-debt/:id', 'v1/order-draft-debt/:id'])
   findOrderDraftDebt(
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
@@ -77,8 +72,7 @@ export class SalesController {
     return this.salesService.findOrderDraftDebt(id, authorization);
   }
 
-  @Get('order-search')
-  @Get('v3/order-search')
+  @Get(['order-search', 'v3/order-search'])
   searchOrders(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -86,8 +80,7 @@ export class SalesController {
     return this.salesService.searchOrders(query, authorization);
   }
 
-  @Get('order-search-stats')
-  @Get('v3/order-search-stats')
+  @Get(['order-search-stats', 'v3/order-search-stats'])
   searchOrderStats(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -95,8 +88,7 @@ export class SalesController {
     return this.salesService.searchOrderStats(query, authorization);
   }
 
-  @Get('new-sale/products')
-  @Get('v2/new-sale/products')
+  @Get(['new-sale/products', 'v2/new-sale/products'])
   findProductsForNewSale(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -115,8 +107,7 @@ export class SalesController {
     );
   }
 
-  @Post('order-payment/:id')
-  @Post('v2/order-payment/:id')
+  @Post(['order-payment/:id', 'v2/order-payment/:id'])
   payOrder(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -125,8 +116,7 @@ export class SalesController {
     return this.salesService.payOrder(id, body, authorization);
   }
 
-  @Post('order/:id/return')
-  @Post('v2/order/:id/return')
+  @Post(['order/:id/return', 'v2/order/:id/return'])
   processReturn(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -135,8 +125,7 @@ export class SalesController {
     return this.salesService.processReturn(id, body, authorization);
   }
 
-  @Post('order/:id/exchange')
-  @Post('v2/order/:id/exchange')
+  @Post(['order/:id/exchange', 'v2/order/:id/exchange'])
   processExchange(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -145,8 +134,7 @@ export class SalesController {
     return this.salesService.processExchange(id, body, authorization);
   }
 
-  @Patch('order/:id/payment-method')
-  @Patch('v2/order/:id/payment-method')
+  @Patch(['order/:id/payment-method', 'v2/order/:id/payment-method'])
   updatePaymentMethod(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -180,9 +168,11 @@ export class SalesController {
     return this.salesService.addItem(id, body, authorization);
   }
 
-  @Delete('new-sale/:id/items/:itemId')
-  @Delete('v1/new-sale/:id/items/:itemId')
-  @Delete('v2/new-sale/:id/items/:itemId')
+  @Delete([
+    'new-sale/:id/items/:itemId',
+    'v1/new-sale/:id/items/:itemId',
+    'v2/new-sale/:id/items/:itemId',
+  ])
   removeItem(
     @Param('id', ParseIntPipe) id: number,
     @Param('itemId', ParseIntPipe) itemId: number,
@@ -191,9 +181,11 @@ export class SalesController {
     return this.salesService.removeItem(id, itemId, authorization);
   }
 
-  @Patch('new-sale/:id/items/:itemId')
-  @Patch('v1/new-sale/:id/items/:itemId')
-  @Patch('v2/new-sale/:id/items/:itemId')
+  @Patch([
+    'new-sale/:id/items/:itemId',
+    'v1/new-sale/:id/items/:itemId',
+    'v2/new-sale/:id/items/:itemId',
+  ])
   updateItem(
     @Param('id', ParseIntPipe) id: number,
     @Param('itemId', ParseIntPipe) itemId: number,
@@ -212,12 +204,14 @@ export class SalesController {
     return this.salesService.updateDiscount(id, body, authorization);
   }
 
-  @Patch('new-sale/:id/customer')
-  @Patch('v1/new-sale/:id/customer')
-  @Patch('v2/new-sale/:id/customer')
-  @Patch('new-sale/:id/client')
-  @Patch('v1/new-sale/:id/client')
-  @Patch('v2/new-sale/:id/client')
+  @Patch([
+    'new-sale/:id/customer',
+    'v1/new-sale/:id/customer',
+    'v2/new-sale/:id/customer',
+    'new-sale/:id/client',
+    'v1/new-sale/:id/client',
+    'v2/new-sale/:id/client',
+  ])
   attachClient(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
@@ -235,12 +229,14 @@ export class SalesController {
     return this.salesService.pay(id, body, authorization);
   }
 
-  @Post('new-sale/:id/park')
-  @Post('v1/new-sale/:id/park')
-  @Post('v2/new-sale/:id/park')
-  @Post('new-sale/:id/leave')
-  @Post('v1/new-sale/:id/leave')
-  @Post('v2/new-sale/:id/leave')
+  @Post([
+    'new-sale/:id/park',
+    'v1/new-sale/:id/park',
+    'v2/new-sale/:id/park',
+    'new-sale/:id/leave',
+    'v1/new-sale/:id/leave',
+    'v2/new-sale/:id/leave',
+  ])
   parkDraft(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
@@ -249,9 +245,7 @@ export class SalesController {
     return this.salesService.parkDraft(id, body, authorization);
   }
 
-  @Post('leave-sale/:id')
-  @Post('v1/leave-sale/:id')
-  @Post('v2/leave-sale/:id')
+  @Post(['leave-sale/:id', 'v1/leave-sale/:id', 'v2/leave-sale/:id'])
   leaveDraft(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
@@ -260,8 +254,7 @@ export class SalesController {
     return this.salesService.parkDraft(id, body, authorization);
   }
 
-  @Post('parked-sales/:id/resume')
-  @Post('v2/parked-sales/:id/resume')
+  @Post(['parked-sales/:id/resume', 'v2/parked-sales/:id/resume'])
   resumeParkedSale(
     @Param('id', ParseIntPipe) id: number,
     @Headers('authorization') authorization?: string,
@@ -277,8 +270,7 @@ export class SalesController {
     return this.salesService.removeDraft(id, authorization);
   }
 
-  @Delete('order/:id')
-  @Delete('v2/order/:id')
+  @Delete(['order/:id', 'v2/order/:id'])
   removeOrder(
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,

@@ -57,7 +57,6 @@ export class PlatformController {
   }
 
   @Put('platform/companies/:companyId')
-  @Patch('platform/companies/:companyId')
   updateCompany(
     @Param('companyId') companyId: string,
     @Body() body: UpdateCompanyDto,
@@ -66,6 +65,14 @@ export class PlatformController {
       companyId,
       body as unknown as Record<string, unknown>,
     );
+  }
+
+  @Patch('platform/companies/:companyId')
+  patchCompany(
+    @Param('companyId') companyId: string,
+    @Body() body: UpdateCompanyDto,
+  ) {
+    return this.updateCompany(companyId, body);
   }
 
   @Patch('platform/companies/:companyId/status')
@@ -188,7 +195,6 @@ export class PlatformController {
   }
 
   @Put('platform/users/:id')
-  @Patch('platform/users/:id')
   updatePlatformUser(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: UpdateUserDto,
@@ -199,6 +205,15 @@ export class PlatformController {
       body as unknown as Record<string, unknown>,
       req.user as never,
     );
+  }
+
+  @Patch('platform/users/:id')
+  patchPlatformUser(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: UpdateUserDto,
+    @Req() req: Request,
+  ) {
+    return this.updatePlatformUser(id, body, req);
   }
 
   @Post('platform/users/:id/block')
@@ -395,7 +410,6 @@ export class PlatformController {
   }
 
   @Put('platform/companies/:companyId/users/:id')
-  @Patch('platform/companies/:companyId/users/:id')
   async updateCompanyUser(
     @Param('companyId') companyId: string,
     @Param('id', ParseIntPipe) id: number,
@@ -417,6 +431,16 @@ export class PlatformController {
       } as unknown as Record<string, unknown>,
       req.user as never,
     );
+  }
+
+  @Patch('platform/companies/:companyId/users/:id')
+  async patchCompanyUser(
+    @Param('companyId') companyId: string,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: UpdateUserDto,
+    @Req() req: Request,
+  ) {
+    return this.updateCompanyUser(companyId, id, body, req);
   }
 
   @Post('platform/companies/:companyId/users/:id/block')
