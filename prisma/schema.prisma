@@ -97,6 +97,8 @@ model Company {
   measurementUnits   MeasurementUnitSetting[]
   priceTags          PriceTagSetting[]
   cheques            ChequeSetting[]
+  receipts           Receipt[]
+  receiptSettings    ReceiptSettings[]
   orders             Order[]
   stockMovements     StockMovement[]
   auditLogs          AuditLog[]
@@ -158,6 +160,8 @@ model Shop {
   departureTransfers Transfer[]        @relation("TransferDepartureShop")
   arrivalTransfers   Transfer[]        @relation("TransferArrivalShop")
   inventorySessions  InventorySession[]
+  receipts       Receipt[]
+  receiptSettings ReceiptSettings?
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
@@ -573,6 +577,9 @@ model PriceTagSetting {
   @@index([companyId])
 }
 
+// DEPRECATED: superseded by ReceiptSettings. Keep until prisma/migrate-receipt-settings.ts
+// has been run against production data, then remove this model + Company.cheques below
+// and apply a follow-up migration to drop the table.
 model ChequeSetting {
   id                    String   @id
   companyId             String
@@ -604,6 +611,82 @@ model ChequeSetting {
   company               Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
+
+  @@index([companyId])
+}
+
+model Receipt {
+  id             String    @id @default(uuid())
+  saleId         Int       @unique
+  companyId      String
+  shopId         String?
+  branchCode     String?
+  number         String
+  status         String    @default("CREATED") // CREATED | PRINTED | SENT
+  managerName    String?
+  managerPhone   String?
+  clientName     String?
+  clientPhone    String?
+  cashbackEarned Float     @default(0)
+  qrPayload      String?
+  printedAt      DateTime?
+  sentAt         DateTime?
+  sale           Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  company        Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  shop           Shop?     @relation(fields: [shopId], references: [id], onDelete: SetNull)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([companyId])
+  @@index([shopId])
+  @@index([branchCode])
+}
+
+model ReceiptSettings {
+  id                 String   @id @default(uuid())
+  companyId          String
+  shopId             String   @unique
+  // ТЗ visibility toggles
+  showClientInfo     Boolean  @default(true)
+  showManagerName    Boolean  @default(true)
+  showManagerPhone   Boolean  @default(false)
+  showCashback       Boolean  @default(true)
+  showDebtLine       Boolean  @default(true)
+  showQrCode         Boolean  @default(false)
+  showItemIndex      Boolean  @default(true)
+  // ТЗ layout
+  paperWidth         Int      @default(80)
+  fontSize           Int      @default(13)
+  dividerStyle       String   @default("single") // single | double | none
+  dividerGap         Int      @default(8)
+  sectionGap         Int      @default(12)
+  itemDividers       Boolean  @default(false)
+  footerMessage      String   @default("")
+  footerNote         String   @default("")
+  // legacy ChequeSetting/extraSettings merge — no feature regression
+  hasLogo            Boolean  @default(false)
+  logoUrl            String   @default("")
+  hasBarCode         Boolean  @default(false)
+  branchName         String   @default("")
+  hasBranchName      Boolean  @default(false)
+  address            String   @default("")
+  hasAddress         Boolean  @default(false)
+  phone              String   @default("")
+  hasPhone           Boolean  @default(false)
+  workingHours       String   @default("")
+  hasWorkingHours    Boolean  @default(false)
+  website            String   @default("")
+  hasWebsite         Boolean  @default(false)
+  taxId              String   @default("")
+  hasTaxId           Boolean  @default(false)
+  qrCodeUrl          String   @default("")
+  hasCustomerDebt    Boolean  @default(false)
+  hasCustomerBalance Boolean  @default(false)
+  elementStyles      Json?    // [{id,label,fontSize,fontWeight,visible,order,marginBottom}]
+  company            Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  shop               Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   @@index([companyId])
 }
@@ -1044,6 +1127,7 @@ model Sale {
   childSales      Sale[]     @relation("SaleAdjustments")
   clientDebts     ClientDebt[]
   items           SaleItem[]
+  receipt         Receipt?
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
   paidAt          DateTime?

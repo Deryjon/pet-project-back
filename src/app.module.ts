@@ -12,6 +12,7 @@ import { PaymentsModule } from './modules/payments/payments.module';
 import { PlatformModule } from './platform/platform.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProductsModule } from './products/products.module';
+import { ReceiptsModule } from './receipts/receipts.module';
 import { RolesModule } from './roles/roles.module';
 import { ReportsModule } from './reports/reports.module';
 import { SalesModule } from './sales/sales.module';
@@ -47,6 +48,7 @@ import { HealthController } from './health.controller';
     PaymentsModule,
     OrdersModule,
     ProductsModule,
+    ReceiptsModule,
     RolesModule,
     ReportsModule,
     SalesModule,
