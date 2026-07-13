@@ -3575,6 +3575,19 @@ export class ProductsService {
         stocks: true,
       },
     });
+
+    if (
+      supportsStock &&
+      (body.shipments !== undefined || body.shop_measurement_values !== undefined)
+    ) {
+      await this.logManualStockAdjustments(
+        existingProduct.stocks,
+        shipmentsWithBranchCodes,
+        updatedProduct.id,
+        writeContext,
+      );
+    }
+
     const shopLookup = await this.buildShopLookupByBranchCodes(
       shipmentsWithBranchCodes.map((shipment) => shipment.branchCode),
       writeContext.companyId,
@@ -3955,6 +3968,109 @@ export class ProductsService {
         ),
       })),
       accepted_order: Number(acceptedOrderAggregate._sum.quantity ?? 0),
+    };
+  }
+
+  async listStockMovements(
+    query: {
+      limit: number;
+      page: number;
+      fromCreatedAt?: string;
+      toCreatedAt?: string;
+      movementType?: string;
+      shopId?: string;
+      productId?: string;
+    },
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
+    const safeLimit = Math.max(1, Math.trunc(query.limit || 20));
+    const safePage = Math.max(1, Math.trunc(query.page || 1));
+
+    const resolvedProduct = query.productId
+      ? await this.prisma.product.findFirst({
+          where: this.applyProductScope(
+            this.buildProductIdentifierWhere(query.productId),
+            context,
+          ),
+          select: { id: true },
+        })
+      : null;
+
+    const movementWhere = await this.buildProductMovementWhere(
+      resolvedProduct?.id,
+      query,
+      context,
+    );
+
+    const [count, stockMovements] = await this.prisma.$transaction([
+      this.prisma.stockMovement.count({ where: movementWhere }),
+      this.prisma.stockMovement.findMany({
+        where: movementWhere,
+        include: {
+          shop: { select: { id: true, name: true, branchCode: true } },
+          product: { select: { id: true, publicId: true, name: true } },
+          createdBy: { select: { id: true, firstName: true, lastName: true } },
+          order: { select: { orderType: true, status: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: (safePage - 1) * safeLimit,
+        take: safeLimit,
+      }),
+    ]);
+
+    return {
+      count,
+      items: stockMovements.map((movement) =>
+        this.toStockMovementListItem(movement),
+      ),
+    };
+  }
+
+  private toStockMovementListItem(movement: {
+    id: string;
+    type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER' | 'ADJUSTMENT';
+    displayTypeCode: string;
+    displayTypeLabel: string;
+    quantity: Prisma.Decimal | number;
+    beforeQuantity: Prisma.Decimal | number;
+    afterQuantity: Prisma.Decimal | number;
+    createdAt: Date;
+    shop?: { id: string; name: string; branchCode: string } | null;
+    product?: { id: number; publicId: string; name: string } | null;
+    createdBy?: {
+      id: number;
+      firstName: string | null;
+      lastName: string | null;
+    } | null;
+    order?: { orderType: string; status: string } | null;
+  }) {
+    return {
+      id: movement.id,
+      created_at: this.formatDateTime(movement.createdAt, undefined),
+      type_code:
+        movement.displayTypeCode ||
+        this.mapProductMovementTypeToCode(
+          movement.type,
+          movement.order?.orderType,
+          movement.order?.status,
+        ),
+      type_label:
+        movement.displayTypeLabel ||
+        this.mapProductMovementTypeToLegacyType(
+          movement.type,
+          movement.order?.orderType,
+          movement.order?.status,
+        ),
+      product_id: movement.product?.publicId ?? String(movement.product?.id ?? ''),
+      product_name: movement.product?.name ?? '',
+      shop_name: movement.shop?.name ?? '',
+      before_quantity: Number(movement.beforeQuantity ?? 0),
+      after_quantity: Number(movement.afterQuantity ?? 0),
+      quantity: Number(movement.quantity ?? 0),
+      user_name: movement.createdBy
+        ? `${movement.createdBy.firstName ?? ''} ${movement.createdBy.lastName ?? ''}`.trim()
+        : '',
     };
   }
 
@@ -7833,7 +7949,7 @@ export class ProductsService {
   }
 
   private async buildProductMovementWhere(
-    productId: number,
+    productId: number | undefined,
     query: {
       fromCreatedAt?: string;
       toCreatedAt?: string;
@@ -7842,7 +7958,9 @@ export class ProductsService {
     },
     context: any,
   ): Promise<Prisma.StockMovementWhereInput> {
-    const and: Prisma.StockMovementWhereInput[] = [{ productId }];
+    const and: Prisma.StockMovementWhereInput[] = productId
+      ? [{ productId }]
+      : [];
     const createdAt = this.buildCreatedAtFilter(
       query.fromCreatedAt,
       query.toCreatedAt,
@@ -7896,6 +8014,7 @@ export class ProductsService {
       'WRITE_OFF',
       'PURCHASE',
       'TRANSFER',
+      'ADJUSTMENT',
     ]);
 
     return supportedTypes.has(normalized)
@@ -7904,7 +8023,8 @@ export class ProductsService {
           | 'RETURN'
           | 'WRITE_OFF'
           | 'PURCHASE'
-          | 'TRANSFER')
+          | 'TRANSFER'
+          | 'ADJUSTMENT')
       : undefined;
   }
 
@@ -7964,7 +8084,7 @@ export class ProductsService {
       shopId: string;
       productId: number;
       orderId?: string;
-      type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER';
+      type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER' | 'ADJUSTMENT';
       quantity: number;
       beforeQuantity: number;
       afterQuantity: number;
@@ -8015,10 +8135,73 @@ export class ProductsService {
     });
   }
 
+  private async logManualStockAdjustments(
+    previousStocks: Array<{ branchCode: string; quantity: number }>,
+    nextStocks: Array<{ branchCode: string; quantity: number }>,
+    productId: number,
+    writeContext: { companyId?: string | null; userId: number },
+  ) {
+    const companyId = writeContext.companyId;
+    if (!companyId) {
+      return;
+    }
+
+    const beforeByBranch = new Map(
+      previousStocks.map((stock) => [stock.branchCode, stock.quantity]),
+    );
+    const afterByBranch = new Map(
+      nextStocks.map((stock) => [stock.branchCode, stock.quantity]),
+    );
+    const changedBranchCodes = [
+      ...new Set([...beforeByBranch.keys(), ...afterByBranch.keys()]),
+    ].filter(
+      (branchCode) =>
+        (beforeByBranch.get(branchCode) ?? 0) !==
+        (afterByBranch.get(branchCode) ?? 0),
+    );
+
+    if (!changedBranchCodes.length) {
+      return;
+    }
+
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      changedBranchCodes,
+      companyId,
+    );
+
+    for (const branchCode of changedBranchCodes) {
+      const before = beforeByBranch.get(branchCode) ?? 0;
+      const after = afterByBranch.get(branchCode) ?? 0;
+      const shop = this.resolveShopByBranchCode(branchCode, shopLookup);
+      if (!shop.id) {
+        continue;
+      }
+
+      await this.createStockMovementRecord(this.prisma, {
+        companyId,
+        shopId: shop.id,
+        productId,
+        type: 'ADJUSTMENT',
+        quantity: after - before,
+        beforeQuantity: before,
+        afterQuantity: after,
+        createdById: writeContext.userId,
+        externalId: '',
+        fromShopId: '',
+        toShopId: '',
+        supplyPrice: 0,
+        retailPrice: 0,
+        newRetailPrice: 0,
+        fromRetailPrice: 0,
+        fromSupplyPrice: 0,
+      });
+    }
+  }
+
   private toLegacyProductMovementItem(
     movement: {
       id: string;
-      type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER';
+      type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER' | 'ADJUSTMENT';
       displayTypeCode: string;
       displayTypeLabel: string;
       externalId: string;
@@ -8090,7 +8273,7 @@ export class ProductsService {
   }
 
   private mapProductMovementTypeToCode(
-    type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER',
+    type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER' | 'ADJUSTMENT',
     orderType?: string,
     orderStatus?: string,
   ) {
@@ -8103,6 +8286,8 @@ export class ProductsService {
         return 'write_off';
       case 'TRANSFER':
         return 'transfer';
+      case 'ADJUSTMENT':
+        return 'adjustment';
       case 'SALE':
         if (orderType === 'RETURN' || orderStatus === 'RETURNED') {
           return 'return';
@@ -8118,7 +8303,7 @@ export class ProductsService {
   }
 
   private mapProductMovementTypeToLegacyType(
-    type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER',
+    type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER' | 'ADJUSTMENT',
     orderType?: string,
     orderStatus?: string,
   ) {
@@ -8131,6 +8316,8 @@ export class ProductsService {
         return 'Списание';
       case 'TRANSFER':
         return 'Трансфер';
+      case 'ADJUSTMENT':
+        return 'Ручное изменение';
       case 'SALE':
         if (orderType === 'RETURN' || orderStatus === 'RETURNED') {
           return 'Возврат';
@@ -8147,7 +8334,7 @@ export class ProductsService {
 
   private buildProductMovementStats(
     movements: Array<{
-      type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER';
+      type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER' | 'ADJUSTMENT';
       quantity: Prisma.Decimal | number;
     }>,
   ) {

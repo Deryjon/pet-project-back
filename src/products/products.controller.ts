@@ -519,6 +519,31 @@ export class ProductsController {
     );
   }
 
+  @Get('v2/stock-movements')
+  listStockMovements(
+    @Query('limit') limit?: string,
+    @Query('page') page?: string,
+    @Query('from_created_at') fromCreatedAt?: string,
+    @Query('to_created_at') toCreatedAt?: string,
+    @Query('movement_type') movementType?: string,
+    @Query('shop_id') shopId?: string,
+    @Query('product_id') productId?: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.listStockMovements(
+      {
+        limit: Number(limit) || 20,
+        page: Number(page) || 1,
+        fromCreatedAt: fromCreatedAt?.trim(),
+        toCreatedAt: toCreatedAt?.trim(),
+        movementType: movementType?.trim(),
+        shopId: shopId?.trim(),
+        productId: productId?.trim(),
+      },
+      authorization,
+    );
+  }
+
   @Post('v2/product-search-with-filters')
   @HttpCode(200)
   @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)

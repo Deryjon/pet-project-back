@@ -64,6 +64,9 @@ function normalizeApiPrefix(req: express.Request) {
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule);
+  // One reverse proxy (nginx) sits in front of the app in production — trust
+  // exactly one hop so req.ip reflects the real client from X-Forwarded-For.
+  app.getHttpAdapter().getInstance().set('trust proxy', 1);
   const corsOrigins = (
     process.env.FRONTEND_URL ??
     'http://localhost:3000,http://localhost:5173,http://localhost:4173'

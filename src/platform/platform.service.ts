@@ -1498,7 +1498,7 @@ export class PlatformService {
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },
         { sku: { contains: search, mode: 'insensitive' } },
-        { barcode: { contains: search } },
+        { barcode: { contains: search, mode: 'insensitive' } },
       ];
     }
 

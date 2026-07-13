@@ -1,6 +1,7 @@
 import {
   ForbiddenException,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -9,6 +10,7 @@ import * as bcrypt from 'bcrypt';
 import { randomUUID, createHash } from 'crypto';
 import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
 import { PrismaService } from '../prisma/prisma.service';
+import { TelegramService } from '../telegram/telegram.service';
 import { UsersService } from '../users/users.service';
 import { extractAccessToken } from './access-token.util';
 import { CompanyLoginDto } from './dto/company-login.dto';
@@ -44,11 +46,14 @@ type RefreshTokenPayload = {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly telegramService: TelegramService,
   ) {}
 
   private get db(): PrismaService {
@@ -102,7 +107,7 @@ export class AuthService {
     };
   }
 
-  async login(dto: LoginDto) {
+  async login(dto: LoginDto, ip?: string, userAgent?: string) {
     const companyId = await this.usersService.findCompanyIdByIdentifier(
       dto.company_login,
     );
@@ -143,6 +148,10 @@ export class AuthService {
         preparedUser.crmRoleId,
       ),
     );
+
+    this.telegramService
+      .notifyLogin(preparedUser, ip ?? '', userAgent ?? '')
+      .catch((err) => this.logger.error('Telegram notifyLogin failed', err));
 
     return {
       token: tokens.accessToken,

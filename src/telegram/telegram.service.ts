@@ -4,6 +4,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { UAParser } from 'ua-parser-js';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 
@@ -314,6 +315,55 @@ export class TelegramService {
     }
   }
 
+  async notifyLogin(
+    user: {
+      firstName: string;
+      lastName: string;
+      phoneNumber: string;
+      companyId: string | null;
+    },
+    ip: string,
+    userAgent: string,
+  ): Promise<void> {
+    if (!user.companyId) return;
+
+    try {
+      const subscribers = await this.prisma.telegramSubscriber.findMany({
+        where: {
+          companyId: user.companyId,
+          notifyOnLogin: true,
+        },
+      });
+
+      if (!subscribers.length) return;
+
+      const parsed = new UAParser(userAgent || '').getResult();
+      const osLabel = [parsed.os.name, parsed.os.version].filter(Boolean).join(' ') || 'Неизвестно';
+      const browserLabel =
+        [parsed.browser.name, parsed.browser.version].filter(Boolean).join(' ') || 'Неизвестно';
+
+      const now = new Date();
+      const tashkentNow = new Date(now.getTime() + 5 * 60 * 60 * 1000);
+      const dateTimeStr = tashkentNow.toISOString().slice(0, 19).replace('T', ' ');
+
+      const userName = `${user.firstName} ${user.lastName}`.trim();
+      const text = [
+        'В систему был осуществлён вход:',
+        `👤 Пользователь: ${userName}`,
+        `📱 Номер телефона: ${user.phoneNumber}`,
+        `🗓 Дата и время входа: ${dateTimeStr}`,
+        `🖥 Устройство: ${osLabel} (${browserLabel})`,
+        `🌍 IP адрес: ${ip || 'Неизвестно'}`,
+      ].join('\n');
+
+      await Promise.all(
+        subscribers.map((sub) => this.sendMessage(sub.chatId, text)),
+      );
+    } catch (err) {
+      this.logger.error('notifyLogin error', err);
+    }
+  }
+
   private fmt(value: number): string {
     return Math.round(value)
       .toLocaleString('ru-RU')
@@ -339,6 +389,7 @@ export class TelegramService {
         : '',
       notifyOnSale: s.notifyOnSale,
       notifySellerAnalytics: s.notifySellerAnalytics,
+      notifyOnLogin: s.notifyOnLogin,
       branchCode: s.branchCode,
       linkedAt: s.linkedAt,
     }));
@@ -349,6 +400,7 @@ export class TelegramService {
     body: {
       notifyOnSale?: boolean;
       notifySellerAnalytics?: boolean;
+      notifyOnLogin?: boolean;
       branchCode?: string | null;
     },
     authorization: string,
@@ -367,6 +419,9 @@ export class TelegramService {
         ...(body.notifyOnSale !== undefined && { notifyOnSale: body.notifyOnSale }),
         ...(body.notifySellerAnalytics !== undefined && {
           notifySellerAnalytics: body.notifySellerAnalytics,
+        }),
+        ...(body.notifyOnLogin !== undefined && {
+          notifyOnLogin: body.notifyOnLogin,
         }),
         ...(body.branchCode !== undefined && { branchCode: body.branchCode }),
       },

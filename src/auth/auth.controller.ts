@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Headers,
+  Ip,
   Param,
   Patch,
   Post,
@@ -42,8 +43,12 @@ export class AuthController {
   @UseGuards(ThrottlerGuard)
   @Throttle({ auth: { limit: 5, ttl: 60000 } })
   @Post('auth/login')
-  login(@Body() dto: LoginDto) {
-    return this.authService.login(dto);
+  login(
+    @Body() dto: LoginDto,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ) {
+    return this.authService.login(dto, ip, userAgent ?? '');
   }
 
   @Get('auth/me')

@@ -31,6 +31,7 @@ enum StockMovementType {
   WRITE_OFF
   PURCHASE
   TRANSFER
+  ADJUSTMENT
 }
 
 enum TransferStatus {
@@ -1232,6 +1233,7 @@ model TelegramSubscriber {
   companyId      String
   notifyOnSale   Boolean  @default(true)
   notifySellerAnalytics Boolean @default(false)
+  notifyOnLogin  Boolean  @default(false)
   branchCode     String?
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   linkedAt       DateTime @default(now())
@@ -1239,6 +1241,7 @@ model TelegramSubscriber {
   @@index([companyId])
   @@index([companyId, notifyOnSale])
   @@index([companyId, notifySellerAnalytics])
+  @@index([companyId, notifyOnLogin])
 }
 
 model TelegramLinkToken {
