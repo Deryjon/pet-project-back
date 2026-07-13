@@ -67,6 +67,12 @@ enum ClientCardType {
   bonus
 }
 
+enum ProductTier {
+  BUDGET
+  MID
+  PREMIUM
+}
+
 model Company {
   id                 String              @id @default(uuid())
   login              String              @unique
@@ -402,6 +408,8 @@ model Product {
   metadata         Json?
   categoryId       Int?
   brandId          Int?
+  productGroupId   String?
+  tier             ProductTier?
   archivedAt       DateTime?
   archivedByUserId Int?
   archivedByName   String?
@@ -422,6 +430,7 @@ model Product {
   @@unique([companyId, sku])
   @@unique([companyId, barcode])
   @@index([companyId])
+  @@index([companyId, productGroupId])
 }
 
 model Cashbox {
@@ -1222,12 +1231,14 @@ model TelegramSubscriber {
   userId         Int      @unique
   companyId      String
   notifyOnSale   Boolean  @default(true)
+  notifySellerAnalytics Boolean @default(false)
   branchCode     String?
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   linkedAt       DateTime @default(now())
 
   @@index([companyId])
   @@index([companyId, notifyOnSale])
+  @@index([companyId, notifySellerAnalytics])
 }
 
 model TelegramLinkToken {

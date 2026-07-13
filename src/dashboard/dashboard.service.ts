@@ -230,6 +230,8 @@ export class DashboardService {
       existingSeller.orders_count += 1;
       sellerTotals.set(sellerName, existingSeller);
 
+      const itemSign = (sale as any).saleType === 'return' ? -1 : 1;
+
       for (const item of sale.items) {
         const productName = item.name || `Product ${item.productId ?? ''}`.trim();
         const existingProduct = productTotals.get(productName) ?? {
@@ -238,9 +240,9 @@ export class DashboardService {
           total_price: 0,
           net_sales: 0,
         };
-        existingProduct.quantity += item.quantity;
-        existingProduct.total_price += item.lineTotal;
-        existingProduct.net_sales += item.lineTotal;
+        existingProduct.quantity += item.quantity * itemSign;
+        existingProduct.total_price += item.lineTotal * itemSign;
+        existingProduct.net_sales += item.lineTotal * itemSign;
         productTotals.set(productName, existingProduct);
       }
     }

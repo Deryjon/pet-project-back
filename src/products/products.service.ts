@@ -3184,6 +3184,8 @@ export class ProductsService {
         purchasePrice,
         markupPercent,
         salePrice,
+        productGroupId: this.optionalString(body.product_group_id),
+        tier: this.resolveProductTier(body.tier),
         quantity: totalQuantity,
         metadata: this.buildCatalogMetadata(
           body,
@@ -3500,6 +3502,9 @@ export class ProductsService {
           this.toNumber(body.profit_margin) ??
           existingProduct.markupPercent ??
           0,
+        productGroupId:
+          this.optionalString(body.product_group_id) ?? existingProduct.productGroupId,
+        tier: this.resolveProductTier(body.tier) ?? existingProduct.tier,
         quantity: supportsStock
           ? shipmentsWithBranchCodes.length
             ? shipmentsWithBranchCodes.reduce(
@@ -5585,6 +5590,8 @@ export class ProductsService {
       set_products: [],
       retail_price: product.salePrice ?? 0,
       supply_price: product.purchasePrice ?? 0,
+      product_group_id: product.productGroupId ?? '',
+      tier: product.tier ?? null,
       description,
       measurement_type: this.resolveMeasurementTypeValue(
         product.unit,
@@ -8240,6 +8247,14 @@ export class ProductsService {
       measurement_unit_short_name: normalizedMeasurementUnit ?? null,
       measurement_unit_precision: DEFAULT_MEASUREMENT_UNIT.precision,
     } satisfies Prisma.InputJsonObject;
+  }
+
+  private resolveProductTier(value: unknown): 'BUDGET' | 'MID' | 'PREMIUM' | undefined {
+    const normalized = this.optionalString(value)?.toUpperCase();
+    if (normalized === 'BUDGET' || normalized === 'MID' || normalized === 'PREMIUM') {
+      return normalized;
+    }
+    return undefined;
   }
 
   private resolveProductType(value: unknown) {

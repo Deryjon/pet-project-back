@@ -338,6 +338,7 @@ export class TelegramService {
         ? `${s.user.firstName} ${s.user.lastName}`.trim()
         : '',
       notifyOnSale: s.notifyOnSale,
+      notifySellerAnalytics: s.notifySellerAnalytics,
       branchCode: s.branchCode,
       linkedAt: s.linkedAt,
     }));
@@ -345,7 +346,11 @@ export class TelegramService {
 
   async updateSubscriber(
     id: string,
-    body: { notifyOnSale?: boolean; branchCode?: string | null },
+    body: {
+      notifyOnSale?: boolean;
+      notifySellerAnalytics?: boolean;
+      branchCode?: string | null;
+    },
     authorization: string,
   ) {
     const context = await this.usersService.getRequestContext(authorization);
@@ -360,6 +365,9 @@ export class TelegramService {
       where: { id },
       data: {
         ...(body.notifyOnSale !== undefined && { notifyOnSale: body.notifyOnSale }),
+        ...(body.notifySellerAnalytics !== undefined && {
+          notifySellerAnalytics: body.notifySellerAnalytics,
+        }),
         ...(body.branchCode !== undefined && { branchCode: body.branchCode }),
       },
     });

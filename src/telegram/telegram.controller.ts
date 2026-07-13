@@ -35,7 +35,12 @@ export class TelegramController {
   @Patch('telegram/subscribers/:id')
   updateSubscriber(
     @Param('id') id: string,
-    @Body() body: { notifyOnSale?: boolean; branchCode?: string | null },
+    @Body()
+    body: {
+      notifyOnSale?: boolean;
+      notifySellerAnalytics?: boolean;
+      branchCode?: string | null;
+    },
     @Headers('authorization') authorization: string,
   ) {
     return this.telegramService.updateSubscriber(id, body, authorization);
