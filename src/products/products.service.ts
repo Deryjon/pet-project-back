@@ -119,7 +119,8 @@ type ImportSession = {
     | 'importing'
     | 'completed'
     | 'cancelled'
-    | 'failed';
+    | 'failed'
+    | 'rolled_back';
   fields: Array<{
     id: string;
     name: string;
@@ -140,6 +141,12 @@ type ImportSession = {
     audit_rows?: ImportAuditRow[];
     committed_at?: string;
     committed_by?: {
+      user_id: number;
+      full_name: string;
+      user_type: string;
+    };
+    rolled_back_at?: string;
+    rolled_back_by?: {
       user_id: number;
       full_name: string;
       user_type: string;
@@ -166,7 +173,8 @@ type PersistedImportSessionRow = {
     | 'importing'
     | 'completed'
     | 'cancelled'
-    | 'failed';
+    | 'failed'
+    | 'rolled_back';
   fields: unknown;
   rows: unknown;
   items: unknown;
@@ -1146,6 +1154,7 @@ export class ProductsService {
       branchCode,
       onMatchPolicy,
       writeContext.userId,
+      importId,
     );
 
     const session: ImportSession = {
@@ -1519,6 +1528,7 @@ export class ProductsService {
         session.branchCode,
         session.onMatchPolicy,
         writeContext.userId,
+        session.id,
       );
       session.result = {
         ...result,
@@ -1553,6 +1563,182 @@ export class ProductsService {
     await this.persistImportSession(session);
 
     return this.toImportSessionSummary(session);
+  }
+
+  async rollbackImport(
+    id: string,
+    authorization: string | undefined,
+    options?: { dryRun?: boolean },
+  ) {
+    const session = await this.resolveImportSessionFromStore(id);
+    if (!session) {
+      throw new NotFoundException('Import session not found');
+    }
+
+    if (session.status === 'rolled_back') {
+      throw new BadRequestException('Import is already rolled back');
+    }
+    if (session.status !== 'completed') {
+      throw new BadRequestException(
+        'Only completed imports can be rolled back',
+      );
+    }
+
+    const context = await this.getRequestContext(authorization);
+    const writeContext = this.requireCatalogWriteContext(context);
+
+    const movements = await this.prisma.stockMovement.findMany({
+      where: {
+        type: 'PURCHASE',
+        externalId: session.id,
+      },
+    });
+
+    if (!movements.length) {
+      throw new BadRequestException(
+        'Для этого импорта нет данных для отката (принят до появления этой функции)',
+      );
+    }
+
+    const revertByProduct = new Map<number, number>();
+    for (const movement of movements) {
+      revertByProduct.set(
+        movement.productId,
+        (revertByProduct.get(movement.productId) ?? 0) +
+          Number(movement.quantity),
+      );
+    }
+
+    const productIds = [...revertByProduct.keys()];
+    const [products, stocks] = await Promise.all([
+      this.prisma.product.findMany({
+        where: { id: { in: productIds } },
+        select: { id: true, name: true },
+      }),
+      this.prisma.productStock.findMany({
+        where: { productId: { in: productIds }, branchCode: session.branchCode },
+      }),
+    ]);
+    const productNameById = new Map(products.map((p) => [p.id, p.name]));
+    const stockByProduct = new Map(stocks.map((s) => [s.productId, s]));
+
+    const items: Array<{
+      product_id: number;
+      product_name: string;
+      quantity_to_revert: number;
+      current_quantity: number;
+      quantity_after: number;
+    }> = [];
+    const blockedItems: typeof items = [];
+
+    for (const [productId, toRevert] of revertByProduct) {
+      const currentQuantity = stockByProduct.get(productId)?.quantity ?? 0;
+      const afterQuantity = currentQuantity - toRevert;
+      const item = {
+        product_id: productId,
+        product_name: productNameById.get(productId) ?? `Product ${productId}`,
+        quantity_to_revert: toRevert,
+        current_quantity: currentQuantity,
+        quantity_after: afterQuantity,
+      };
+
+      if (afterQuantity < 0) {
+        blockedItems.push(item);
+      } else {
+        items.push(item);
+      }
+    }
+
+    if (blockedItems.length) {
+      return {
+        can_rollback: false,
+        blocked_items: blockedItems,
+        reason:
+          'Часть остатка по этим товарам уже израсходована (продажа/списание/трансфер) — откат увёл бы остаток в минус',
+      };
+    }
+
+    if (options?.dryRun) {
+      return {
+        can_rollback: true,
+        items,
+      };
+    }
+
+    if (IMPORT_COMMIT_LOCKS.has(session.id)) {
+      throw new BadRequestException(
+        'Import commit or rollback is already in progress',
+      );
+    }
+    IMPORT_COMMIT_LOCKS.add(session.id);
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        for (const item of items) {
+          const stock = stockByProduct.get(item.product_id);
+          if (stock) {
+            await tx.productStock.update({
+              where: { id: stock.id },
+              data: { quantity: item.quantity_after },
+            });
+          }
+
+          const allStocks = await tx.productStock.findMany({
+            where: { productId: item.product_id },
+          });
+          await tx.product.update({
+            where: { id: item.product_id },
+            data: {
+              quantity: allStocks.reduce((sum, s) => sum + s.quantity, 0),
+            },
+          });
+
+          await this.createStockMovementRecord(tx, {
+            companyId: session.companyId,
+            shopId: session.shopId,
+            productId: item.product_id,
+            type: 'ADJUSTMENT',
+            quantity: -item.quantity_to_revert,
+            beforeQuantity: item.current_quantity,
+            afterQuantity: item.quantity_after,
+            createdById: writeContext.userId,
+            externalId: session.id,
+            fromShopId: '',
+            toShopId: '',
+            supplyPrice: 0,
+            retailPrice: 0,
+            newRetailPrice: 0,
+            fromRetailPrice: 0,
+            fromSupplyPrice: 0,
+          });
+        }
+      });
+
+      session.status = 'rolled_back';
+      session.updatedAt = this.formatDateTime(new Date());
+      session.result = {
+        ...(session.result ?? {
+          created_count: 0,
+          updated_count: 0,
+          error_count: 0,
+          errors: [],
+        }),
+        rolled_back_at: this.formatDateTime(new Date()),
+        rolled_back_by: {
+          user_id: writeContext.userId,
+          full_name: writeContext.fullName,
+          user_type: writeContext.userType,
+        },
+      };
+      await this.persistImportSession(session);
+    } finally {
+      IMPORT_COMMIT_LOCKS.delete(session.id);
+    }
+
+    return {
+      can_rollback: true,
+      items,
+    };
   }
 
   private resolveImportSession(id: string) {
@@ -7216,6 +7402,7 @@ export class ProductsService {
     branchCode: string,
     onMatchPolicy: ImportOnMatchPolicy,
     createdById: number,
+    sessionId: string,
   ) {
     let createdCount = 0;
     let updatedCount = 0;
@@ -7257,6 +7444,7 @@ export class ProductsService {
                 branchCode,
                 onMatchPolicy,
                 createdById,
+                sessionId,
               );
 
               return {
@@ -7272,6 +7460,7 @@ export class ProductsService {
               shopId,
               branchCode,
               createdById,
+              sessionId,
             );
             return {
               action: 'create' as const,
@@ -7336,6 +7525,7 @@ export class ProductsService {
     shopId: string,
     branchCode: string,
     createdById: number,
+    sessionId: string,
   ) {
     const identifiers = await this.resolveIdentifiersForImportCreate(
       row,
@@ -7447,7 +7637,7 @@ export class ProductsService {
         beforeQuantity: 0,
         afterQuantity: row.quantity,
         createdById,
-        externalId: '',
+        externalId: sessionId,
         fromShopId: shopId,
         toShopId: shopId,
         supplyPrice: row.supplyPrice,
@@ -7471,6 +7661,7 @@ export class ProductsService {
     branchCode: string,
     onMatchPolicy: ImportOnMatchPolicy,
     createdById: number,
+    sessionId: string,
   ): Promise<Array<{ field: string; reason: string }>> {
     const changedFields: Array<{ field: string; reason: string }> = [];
 
@@ -7675,7 +7866,7 @@ export class ProductsService {
         beforeQuantity,
         afterQuantity,
         createdById,
-        externalId: '',
+        externalId: sessionId,
         fromShopId: shopId,
         toShopId: shopId,
         supplyPrice: appliedSupplyPrice,

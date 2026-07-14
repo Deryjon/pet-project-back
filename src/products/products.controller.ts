@@ -187,6 +187,17 @@ export class ProductsController {
     return this.productsService.cancelImport(id);
   }
 
+  @Post('v2/imports/:id/rollback')
+  rollbackImport(
+    @Param('id') id: string,
+    @Query('dry_run') dryRun: string | undefined,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.rollbackImport(id, authorization, {
+      dryRun: dryRun === 'true',
+    });
+  }
+
   @Post('v2/excel/import-without-check')
   importWithoutCheck(
     @Body() body: Record<string, unknown>,
