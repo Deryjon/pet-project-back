@@ -6,8 +6,8 @@ import {
   Headers,
   Param,
   ParseIntPipe,
-  Patch,
   Post,
+  Put,
   UseGuards,
 } from '@nestjs/common';
 import { ReceiptsService } from './receipts.service';
@@ -35,47 +35,67 @@ export class ReceiptsController {
     return context.companyId;
   }
 
-  @Get(['sales/:id/receipt', 'v1/sales/:id/receipt'])
+  @Get(['receipts/by-number/:number', 'v1/receipts/by-number/:number'])
   @UseGuards(JwtAuthGuard, CompanyAccessGuard)
-  async getReceipt(
-    @Param('id', ParseIntPipe) id: number,
+  async getReceiptByNumber(
+    @Param('number') number: string,
     @Headers('authorization') authorization?: string,
   ) {
     const companyId = await this.requireCompanyId(authorization);
-    return this.receiptsService.getOrCreateForSale(id, companyId);
+    return this.receiptsService.getByNumber(number, companyId);
   }
 
-  @Post(['sales/:id/receipt/mark-printed', 'v1/sales/:id/receipt/mark-printed'])
+  @Get(['receipts/:saleId', 'v1/receipts/:saleId'])
   @UseGuards(JwtAuthGuard, CompanyAccessGuard)
-  async markPrinted(
-    @Param('id', ParseIntPipe) id: number,
+  async getReceipt(
+    @Param('saleId', ParseIntPipe) saleId: number,
     @Headers('authorization') authorization?: string,
   ) {
     const companyId = await this.requireCompanyId(authorization);
-    return this.receiptsService.markPrinted(id, companyId);
+    return this.receiptsService.getOrCreateForSale(saleId, companyId);
+  }
+
+  @Post(['receipts', 'v1/receipts'])
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard)
+  async createReceipt(
+    @Body('sale_id', ParseIntPipe) saleId: number,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const companyId = await this.requireCompanyId(authorization);
+    return this.receiptsService.getOrCreateForSale(saleId, companyId);
+  }
+
+  @Post(['receipts/:saleId/mark-printed', 'v1/receipts/:saleId/mark-printed'])
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard)
+  async markPrinted(
+    @Param('saleId', ParseIntPipe) saleId: number,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const companyId = await this.requireCompanyId(authorization);
+    return this.receiptsService.markPrinted(saleId, companyId);
   }
 
   // send-telegram deferred — future work should reuse TelegramService.sendMessage()
 
-  @Get(['branches/:id/receipt-settings', 'v1/branches/:id/receipt-settings'])
+  @Get(['receipt-settings/:branchId', 'v1/receipt-settings/:branchId'])
   @UseGuards(JwtAuthGuard, CompanyAccessGuard)
   async getReceiptSettings(
-    @Param('id') id: string,
+    @Param('branchId') branchId: string,
     @Headers('authorization') authorization?: string,
   ) {
     const companyId = await this.requireCompanyId(authorization);
-    return this.receiptsService.getReceiptSettings(id, companyId);
+    return this.receiptsService.getReceiptSettings(branchId, companyId);
   }
 
-  @Patch(['branches/:id/receipt-settings', 'v1/branches/:id/receipt-settings'])
+  @Put(['receipt-settings/:branchId', 'v1/receipt-settings/:branchId'])
   @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
   @Permissions('cheque-edit')
   async updateReceiptSettings(
-    @Param('id') id: string,
+    @Param('branchId') branchId: string,
     @Body() dto: UpdateReceiptSettingsDto,
     @Headers('authorization') authorization?: string,
   ) {
     const companyId = await this.requireCompanyId(authorization);
-    return this.receiptsService.updateReceiptSettings(id, dto, companyId);
+    return this.receiptsService.updateReceiptSettings(branchId, dto, companyId);
   }
 }

@@ -11,6 +11,7 @@ import { OrdersModule } from './modules/orders/orders.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { PlatformModule } from './platform/platform.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { PriceTagsModule } from './price-tags/price-tags.module';
 import { ProductsModule } from './products/products.module';
 import { ReceiptsModule } from './receipts/receipts.module';
 import { RolesModule } from './roles/roles.module';
@@ -47,6 +48,7 @@ import { HealthController } from './health.controller';
     CashboxesModule,
     PaymentsModule,
     OrdersModule,
+    PriceTagsModule,
     ProductsModule,
     ReceiptsModule,
     RolesModule,

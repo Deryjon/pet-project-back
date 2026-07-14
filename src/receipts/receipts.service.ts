@@ -2,6 +2,14 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateReceiptSettingsDto } from './dto/update-receipt-settings.dto';
 
+interface ReceiptItemSnapshot {
+  name: string;
+  sku: string;
+  quantity: number;
+  price: number;
+  total: number;
+}
+
 @Injectable()
 export class ReceiptsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -15,7 +23,7 @@ export class ReceiptsService {
     });
   }
 
-  async getOrCreateForSale(saleId: number, companyId: string) {
+  private async loadSaleForSnapshot(saleId: number, companyId: string) {
     const sale = await this.prisma.sale.findFirst({
       where: { id: saleId, companyId },
       include: {
@@ -30,6 +38,77 @@ export class ReceiptsService {
       throw new NotFoundException('Sale not found');
     }
 
+    return sale;
+  }
+
+  private async buildSnapshot(
+    sale: Awaited<ReturnType<ReceiptsService['loadSaleForSnapshot']>>,
+    companyId: string,
+  ) {
+    const paymentTypes = await this.prisma.companyPaymentType.findMany({
+      where: { companyId },
+    });
+    const isCash = (paymentMethodId: string | null) =>
+      paymentMethodId
+        ? (paymentTypes.find((pt) => pt.id === paymentMethodId)?.isCashPaymentType ?? false)
+        : false;
+
+    const payments: Array<{ payment_method: string; amount: number }> =
+      Array.isArray(sale.extraPayments) && (sale.extraPayments as unknown[]).length > 1
+        ? (sale.extraPayments as Array<{ payment_method: string; amount: number }>)
+        : sale.paymentMethod
+          ? [{ payment_method: sale.paymentMethod, amount: sale.payableTotal }]
+          : [];
+
+    let paidCash = 0;
+    let paidCard = 0;
+    for (const p of payments) {
+      if (isCash(p.payment_method)) {
+        paidCash += p.amount;
+      } else {
+        paidCard += p.amount;
+      }
+    }
+
+    const debt = sale.clientDebts.reduce(
+      (sum, d) => sum + Number(d.remainingAmountUzs ?? 0),
+      0,
+    );
+
+    const subtotal = sale.items.reduce((sum, item) => sum + item.lineTotal, 0);
+
+    const loyalty = await this.prisma.loyaltyProgramSetting.findUnique({
+      where: { companyId },
+    });
+    const cashbackEarned =
+      loyalty?.isActive && loyalty.cashbackPercent > 0
+        ? (sale.payableTotal * loyalty.cashbackPercent) / 100
+        : 0;
+
+    const items: ReceiptItemSnapshot[] = sale.items.map((item) => ({
+      name: item.name,
+      sku: item.sku ?? item.barcode ?? '',
+      quantity: item.quantity,
+      price: item.salePrice,
+      total: item.finalPrice || item.lineTotal,
+    }));
+
+    return {
+      items,
+      subtotal,
+      discount: sale.discountAmount,
+      totalDue: sale.payableTotal,
+      paidCash,
+      paidCard,
+      paidCashback: 0,
+      debt,
+      cashbackEarned,
+    };
+  }
+
+  async getOrCreateForSale(saleId: number, companyId: string) {
+    const sale = await this.loadSaleForSnapshot(saleId, companyId);
+
     let receipt = await this.prisma.receipt.findUnique({
       where: { saleId: sale.id },
     });
@@ -38,13 +117,7 @@ export class ReceiptsService {
       const shop = sale.branchCode
         ? await this.resolveShop(sale.branchCode, companyId)
         : null;
-      const loyalty = await this.prisma.loyaltyProgramSetting.findUnique({
-        where: { companyId },
-      });
-      const cashbackEarned =
-        loyalty?.isActive && loyalty.cashbackPercent > 0
-          ? (sale.payableTotal * loyalty.cashbackPercent) / 100
-          : 0;
+      const snapshot = await this.buildSnapshot(sale, companyId);
 
       receipt = await this.prisma.receipt.create({
         data: {
@@ -61,13 +134,52 @@ export class ReceiptsService {
             ? `${sale.client.firstName} ${sale.client.lastName ?? ''}`.trim()
             : (sale.clientName ?? null),
           clientPhone: sale.client?.phone ?? null,
-          cashbackEarned,
+          cashbackEarned: snapshot.cashbackEarned,
           qrPayload: `${process.env.FRONTEND_URL ?? ''}/order/all?receipt=${encodeURIComponent(sale.number)}`,
+          items: snapshot.items as any,
+          subtotal: snapshot.subtotal,
+          discount: snapshot.discount,
+          totalDue: snapshot.totalDue,
+          paidCash: snapshot.paidCash,
+          paidCard: snapshot.paidCard,
+          paidCashback: snapshot.paidCashback,
+          debt: snapshot.debt,
+        },
+      });
+    } else if (receipt.items === null) {
+      // legacy row created before the snapshot columns existed — backfill once,
+      // from the same sale data it would have been created from originally,
+      // then never touch it again.
+      const snapshot = await this.buildSnapshot(sale, companyId);
+      receipt = await this.prisma.receipt.update({
+        where: { saleId: sale.id },
+        data: {
+          items: snapshot.items as any,
+          subtotal: snapshot.subtotal,
+          discount: snapshot.discount,
+          totalDue: snapshot.totalDue,
+          paidCash: snapshot.paidCash,
+          paidCard: snapshot.paidCard,
+          paidCashback: snapshot.paidCashback,
+          debt: snapshot.debt,
         },
       });
     }
 
-    return this.assembleResponse(sale, receipt, companyId);
+    return this.assembleResponse(sale, receipt);
+  }
+
+  async getByNumber(number: string, companyId: string) {
+    const sale = await this.prisma.sale.findFirst({
+      where: { number, companyId },
+      select: { id: true },
+    });
+
+    if (!sale) {
+      throw new NotFoundException('Sale not found');
+    }
+
+    return this.getOrCreateForSale(sale.id, companyId);
   }
 
   async markPrinted(saleId: number, companyId: string) {
@@ -227,103 +339,53 @@ export class ReceiptsService {
     };
   }
 
-  private async assembleResponse(
-    sale: {
-      id: number;
-      number: string;
-      companyId: string | null;
-      paymentMethod: string | null;
-      extraPayments: unknown;
-      payableTotal: number;
-      total: number;
-      discountAmount: number;
-      createdAt: Date;
-      paidAt: Date | null;
-      items: Array<{
-        name: string;
-        sku: string | null;
-        barcode: string | null;
-        quantity: number;
-        salePrice: number;
-        lineTotal: number;
-        finalPrice: number;
-      }>;
-      clientDebts: Array<{ remainingAmountUzs: unknown }>;
-    },
+  private assembleResponse(
+    sale: { id: number; createdAt: Date },
     receipt: {
       id: string;
       number: string;
       status: string;
+      shopId: string | null;
+      branchCode: string | null;
       managerName: string | null;
       managerPhone: string | null;
       clientName: string | null;
       clientPhone: string | null;
+      items: unknown;
+      subtotal: number;
+      discount: number;
       cashbackEarned: number;
+      totalDue: number;
+      paidCash: number;
+      paidCard: number;
+      paidCashback: number;
+      debt: number;
       qrPayload: string | null;
       printedAt: Date | null;
       sentAt: Date | null;
-      createdAt: Date;
     },
-    companyId: string,
   ) {
-    const paymentTypes = await this.prisma.companyPaymentType.findMany({
-      where: { companyId },
-    });
-    const isCash = (paymentMethodId: string | null) =>
-      paymentMethodId
-        ? (paymentTypes.find((pt) => pt.id === paymentMethodId)?.isCashPaymentType ?? false)
-        : false;
-
-    const payments: Array<{ payment_method: string; amount: number }> =
-      Array.isArray(sale.extraPayments) &&
-      (sale.extraPayments as unknown[]).length > 1
-        ? (sale.extraPayments as Array<{ payment_method: string; amount: number }>)
-        : sale.paymentMethod
-          ? [{ payment_method: sale.paymentMethod, amount: sale.payableTotal }]
-          : [];
-
-    let paidCash = 0;
-    let paidCard = 0;
-    for (const p of payments) {
-      if (isCash(p.payment_method)) {
-        paidCash += p.amount;
-      } else {
-        paidCard += p.amount;
-      }
-    }
-
-    const debt = sale.clientDebts.reduce(
-      (sum, d) => sum + Number(d.remainingAmountUzs ?? 0),
-      0,
-    );
-
-    const subtotal = sale.items.reduce((sum, item) => sum + item.lineTotal, 0);
-
     return {
       id: receipt.id,
       sale_id: sale.id,
       number: receipt.number,
       status: receipt.status,
-      created_at: receipt.createdAt,
+      created_at: sale.createdAt,
+      shop_id: receipt.shopId,
+      branch_code: receipt.branchCode,
       manager_name: receipt.managerName,
       manager_phone: receipt.managerPhone,
       client_name: receipt.clientName,
       client_phone: receipt.clientPhone,
-      items: sale.items.map((item) => ({
-        name: item.name,
-        sku: item.sku ?? item.barcode ?? '',
-        quantity: item.quantity,
-        price: item.salePrice,
-        total: item.finalPrice || item.lineTotal,
-      })),
-      subtotal,
-      discount: sale.discountAmount,
+      items: Array.isArray(receipt.items) ? receipt.items : [],
+      subtotal: receipt.subtotal,
+      discount: receipt.discount,
       cashback_earned: receipt.cashbackEarned,
-      total_due: sale.payableTotal,
-      paid_cash: paidCash,
-      paid_card: paidCard,
-      paid_cashback: 0,
-      debt,
+      total_due: receipt.totalDue,
+      paid_cash: receipt.paidCash,
+      paid_card: receipt.paidCard,
+      paid_cashback: receipt.paidCashback,
+      debt: receipt.debt,
       qr_payload: receipt.qrPayload,
       printed_at: receipt.printedAt,
       sent_at: receipt.sentAt,

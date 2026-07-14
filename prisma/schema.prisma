@@ -641,6 +641,17 @@ model Receipt {
   qrPayload      String?
   printedAt      DateTime?
   sentAt         DateTime?
+  // snapshot fields — frozen at first print (sale completion), never recalculated
+  // on reprint so a receipt printed today and reprinted in 6 months are identical
+  // even if product prices/company payment-type config change later.
+  items          Json?
+  subtotal       Float     @default(0)
+  discount       Float     @default(0)
+  totalDue       Float     @default(0)
+  paidCash       Float     @default(0)
+  paidCard       Float     @default(0)
+  paidCashback   Float     @default(0)
+  debt           Float     @default(0)
   sale           Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
   company        Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   shop           Shop?     @relation(fields: [shopId], references: [id], onDelete: SetNull)
