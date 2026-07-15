@@ -200,7 +200,7 @@ export class ReceiptsService {
         })
       : null;
 
-    return this.toSettingsResponse(settings, shop?.id ?? shopIdOrCode);
+    return this.toSettingsResponse(settings, shop?.id ?? shopIdOrCode, shop);
   }
 
   async updateReceiptSettings(
@@ -216,11 +216,23 @@ export class ReceiptsService {
     const patch = this.toPatch(dto);
     const settings = await this.prisma.receiptSettings.upsert({
       where: { shopId: shop.id },
-      create: { companyId, shopId: shop.id, ...patch },
+      // A shop's own name/address are already known — default the receipt
+      // header to show them so a freshly-created branch doesn't print
+      // headerless receipts until someone remembers to visit settings.
+      // ...patch still wins if the request explicitly set these fields.
+      create: {
+        companyId,
+        shopId: shop.id,
+        branchName: shop.name,
+        hasBranchName: true,
+        address: shop.address ?? '',
+        hasAddress: Boolean(shop.address),
+        ...patch,
+      },
       update: patch,
     });
 
-    return this.toSettingsResponse(settings, shop.id);
+    return this.toSettingsResponse(settings, shop.id, shop);
   }
 
   private toPatch(dto: UpdateReceiptSettingsDto) {
@@ -262,7 +274,11 @@ export class ReceiptsService {
     return patch;
   }
 
-  private toSettingsResponse(settings: any, shopId: string) {
+  private toSettingsResponse(
+    settings: any,
+    shopId: string,
+    shop?: { name: string; address: string | null } | null,
+  ) {
     const s = settings ?? {
       showClientInfo: true,
       showManagerName: true,
@@ -282,10 +298,10 @@ export class ReceiptsService {
       hasLogo: false,
       logoUrl: '',
       hasBarCode: false,
-      branchName: '',
-      hasBranchName: false,
-      address: '',
-      hasAddress: false,
+      branchName: shop?.name ?? '',
+      hasBranchName: Boolean(shop?.name),
+      address: shop?.address ?? '',
+      hasAddress: Boolean(shop?.address),
       phone: '',
       hasPhone: false,
       workingHours: '',
