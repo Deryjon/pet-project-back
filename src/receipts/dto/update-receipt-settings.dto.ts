@@ -4,6 +4,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  Max,
   Min,
 } from 'class-validator';
 
@@ -39,6 +40,7 @@ export class UpdateReceiptSettingsDto {
   @IsOptional()
   @IsInt()
   @Min(20)
+  @Max(120)
   paper_width?: number;
 
   @IsOptional()
