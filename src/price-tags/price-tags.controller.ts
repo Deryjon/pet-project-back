@@ -36,13 +36,19 @@ export class PriceTagsController {
   async getPriceTagsData(
     @Query('productIds') productIds: string,
     @Query('copies') copies: string | undefined,
+    @Query('branchId') branchId: string | undefined,
     @Headers('authorization') authorization?: string,
   ) {
     const companyId = await this.requireCompanyId(authorization);
     if (!productIds) {
       return { products: [] };
     }
-    return this.priceTagsService.getPriceTagsData(productIds, copies, companyId);
+    return this.priceTagsService.getPriceTagsData(
+      productIds,
+      copies,
+      companyId,
+      branchId,
+    );
   }
 
   // branchId is accepted per the print-flow contract (per-branch print stations)

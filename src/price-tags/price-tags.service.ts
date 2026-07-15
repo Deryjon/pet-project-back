@@ -26,12 +26,18 @@ export class PriceTagsService {
     return map;
   }
 
-  async getPriceTagsData(productIds: string, copies: string | undefined, companyId: string) {
+  async getPriceTagsData(
+    productIds: string,
+    copies: string | undefined,
+    companyId: string,
+    branchId?: string,
+  ) {
     const ids = this.parseIds(productIds);
     const copiesMap = this.parseCopies(copies);
 
     const products = await this.prisma.product.findMany({
       where: { id: { in: ids }, companyId },
+      include: { stocks: true },
     });
 
     const byId = new Map(products.map((p) => [p.id, p]));
@@ -40,15 +46,22 @@ export class PriceTagsService {
       products: ids
         .map((id) => byId.get(id))
         .filter((p): p is NonNullable<typeof p> => Boolean(p))
-        .map((p) => ({
-          id: p.id,
-          name: p.name,
-          sku: p.sku ?? '',
-          barcode: p.barcode ?? '',
-          price: p.discountPrice ?? p.salePrice ?? 0,
-          unit: p.unit ?? '',
-          copies: copiesMap.get(p.id) ?? 1,
-        })),
+        .map((p) => {
+          const stock = branchId
+            ? p.stocks.find((s) => s.branchCode === branchId)
+            : p.stocks[0];
+          const price = stock?.salePrice ?? p.discountPrice ?? p.salePrice ?? 0;
+
+          return {
+            id: p.id,
+            name: p.name,
+            sku: p.sku ?? '',
+            barcode: p.barcode ?? '',
+            price,
+            unit: p.unit ?? '',
+            copies: copiesMap.get(p.id) ?? 1,
+          };
+        }),
     };
   }
 }
