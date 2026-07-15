@@ -9433,8 +9433,14 @@ export class ProductsService {
     }
 
     if (
-      normalizedValue.toLowerCase() === 'unit' ||
-      normalizedValue.toLowerCase() === 'countable'
+      [
+        'unit',
+        'countable',
+        'piece',
+        'pieces',
+        'pcs',
+        'pc',
+      ].includes(normalizedValue.toLowerCase())
     ) {
       return DEFAULT_MEASUREMENT_UNIT.short_name;
     }
@@ -9449,8 +9455,14 @@ export class ProductsService {
     }
 
     if (
-      normalizedValue.toLowerCase() === 'unit' ||
-      normalizedValue.toLowerCase() === 'countable'
+      [
+        'unit',
+        'countable',
+        'piece',
+        'pieces',
+        'pcs',
+        'pc',
+      ].includes(normalizedValue.toLowerCase())
     ) {
       return DEFAULT_MEASUREMENT_UNIT.name;
     }
