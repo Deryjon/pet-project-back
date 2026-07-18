@@ -103,7 +103,7 @@ export class ReportsRepository {
         SUM(CASE WHEN s."saleType" = 'return' THEN -COALESCE(si."profitAtSale", COALESCE(si."finalPrice", si."lineTotal", (si."salePrice" * si.quantity)) - COALESCE(si."supplyPriceAtSale", 0)) ELSE COALESCE(si."profitAtSale", COALESCE(si."finalPrice", si."lineTotal", (si."salePrice" * si.quantity)) - COALESCE(si."supplyPriceAtSale", 0)) END) AS gross_profit,
         SUM(CASE WHEN s."saleType" = 'return' THEN -COALESCE(si."discountAmount", 0) ELSE COALESCE(si."discountAmount", 0) END) AS discount_sum,
         SUM(CASE WHEN s."saleType" = 'return' THEN 1 ELSE 0 END) AS returns_count,
-        SUM(COALESCE(si."sellerBonusAmount", 0)) AS bonus_amount
+        SUM(CASE WHEN s."saleType" = 'return' THEN -COALESCE(si."sellerBonusAmount", 0) ELSE COALESCE(si."sellerBonusAmount", 0) END) AS bonus_amount
       FROM "SaleItem" si
       INNER JOIN "Sale" s ON s.id = si."saleId"
       LEFT JOIN "User" u ON u.id = COALESCE(si."sellerId", s."userId")

@@ -6,35 +6,6 @@ export class SalaryService {
     return Number(finalPrice ?? 0) - Number(supplyPriceAtSale ?? 0);
   }
 
-  calculateSellerBonus(
-    calculationType: string,
-    salaryPercent: number,
-    finalPrice: number,
-    profitAtSale: number,
-    bonusEnabled = true,
-  ) {
-    if (!bonusEnabled) {
-      return 0;
-    }
-
-    const percent = Number(salaryPercent ?? 0);
-    if (
-      calculationType === 'REVENUE_PERCENT_ONLY' ||
-      calculationType === 'FIXED_PLUS_REVENUE'
-    ) {
-      return (Number(finalPrice ?? 0) * percent) / 100;
-    }
-
-    if (
-      calculationType === 'PROFIT_PERCENT_ONLY' ||
-      calculationType === 'FIXED_PLUS_PROFIT'
-    ) {
-      return (Number(profitAtSale ?? 0) * percent) / 100;
-    }
-
-    return 0;
-  }
-
   calculateSellerSalary(input: {
     fixedSalary: number;
     salaryPercent: number;

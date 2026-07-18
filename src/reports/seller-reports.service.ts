@@ -238,15 +238,7 @@ export class SellerReportsService {
         finalPrice,
         supplyPriceAtSale,
       );
-      const sellerBonusAmount =
-        Number(row.seller_bonus_amount ?? 0) ||
-        this.salaryService.calculateSellerBonus(
-          settings.calculationType,
-          Number(settings.salaryPercent ?? 0),
-          finalPrice,
-          profitAtSale,
-          Boolean(settings.bonusEnabled),
-        );
+      const sellerBonusAmount = Number(row.seller_bonus_amount ?? 0);
 
       return {
         sale_id: Number(row.sale_id),
@@ -276,7 +268,10 @@ export class SellerReportsService {
       (sum, item) => sum + (item.sale_type === 'return' ? -1 : 1) * item.profit_at_sale,
       0,
     );
-    const bonusAmount = items.reduce((sum, item) => sum + item.seller_bonus_amount, 0);
+    const bonusAmount = items.reduce(
+      (sum, item) => sum + (item.sale_type === 'return' ? -1 : 1) * item.seller_bonus_amount,
+      0,
+    );
     const salaryTotal = this.salaryService.calculateSellerSalary({
       fixedSalary: Number(settings.fixedSalary ?? 0),
       salaryPercent: Number(settings.salaryPercent ?? 0),
