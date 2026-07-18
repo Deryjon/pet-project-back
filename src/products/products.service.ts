@@ -874,9 +874,12 @@ export class ProductsService {
     const safePage = Math.max(1, query.page ?? 1);
     const safeLimit = Math.min(Math.max(1, query.limit ?? 10), 100);
     const context = await this.getRequestContext(authorization);
+    const companyId =
+      context?.userType === 'company' ? (context.companyId ?? undefined) : undefined;
     const sessions = await this.listPersistedImportSessions(
       (safePage - 1) * safeLimit,
       safeLimit,
+      companyId,
     );
     const imports = sessions.map((session, index) =>
       this.toLegacyImportListItem(
@@ -888,13 +891,22 @@ export class ProductsService {
 
     return {
       imports,
-      count: await this.countPersistedImportSessions(),
+      count: await this.countPersistedImportSessions(companyId),
     };
   }
 
-  async getImportById(id: string) {
+  async getImportById(id: string, authorization?: string) {
     const session = await this.resolveImportSessionFromStore(id);
     if (!session) {
+      throw new NotFoundException('Import session not found');
+    }
+
+    const context = await this.getRequestContext(authorization);
+    if (
+      context?.userType === 'company' &&
+      context.companyId &&
+      session.companyId !== context.companyId
+    ) {
       throw new NotFoundException('Import session not found');
     }
 
@@ -1933,7 +1945,11 @@ export class ProductsService {
     return rows[0] ? this.deserializePersistedImportSession(rows[0]) : undefined;
   }
 
-  private async listPersistedImportSessions(offset: number, limit: number) {
+  private async listPersistedImportSessions(
+    offset: number,
+    limit: number,
+    companyId?: string,
+  ) {
     const rows = await this.prisma.$queryRaw<PersistedImportSessionRow[]>(
       Prisma.sql`
         SELECT
@@ -1956,6 +1972,7 @@ export class ProductsService {
           "createdAt",
           "updatedAt"
         FROM "ProductImportSession"
+        WHERE ${companyId ? Prisma.sql`"companyId" = ${companyId}` : Prisma.sql`TRUE`}
         ORDER BY "createdAt" DESC
         OFFSET ${offset}
         LIMIT ${limit}
@@ -1965,11 +1982,12 @@ export class ProductsService {
     return rows.map((row) => this.deserializePersistedImportSession(row));
   }
 
-  private async countPersistedImportSessions() {
+  private async countPersistedImportSessions(companyId?: string) {
     const rows = await this.prisma.$queryRaw<Array<{ count: bigint | number }>>(
       Prisma.sql`
         SELECT COUNT(*)::bigint AS "count"
         FROM "ProductImportSession"
+        WHERE ${companyId ? Prisma.sql`"companyId" = ${companyId}` : Prisma.sql`TRUE`}
       `,
     );
 

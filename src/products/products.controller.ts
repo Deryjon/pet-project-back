@@ -115,8 +115,11 @@ export class ProductsController {
   @Header('Pragma', 'no-cache')
   @Header('Expires', '0')
   @Header('Surrogate-Control', 'no-store')
-  getImportById(@Param('id') id: string) {
-    return this.productsService.getImportById(id);
+  getImportById(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.getImportById(id, authorization);
   }
 
   @Post('v2/imports/:id/validate')
