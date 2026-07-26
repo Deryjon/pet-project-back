@@ -200,6 +200,18 @@ export class CompanySettingsController {
     );
   }
 
+  @Get(['price-tag/:id', 'v1/price-tag/:id'])
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard)
+  async getPriceTagById(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const context = authorization
+      ? await this.usersService.getRequestContext(authorization)
+      : null;
+    return this.companySettingsService.getPriceTagById(id, context?.companyId ?? undefined);
+  }
+
   @Post(['price-tag', 'v1/price-tag'])
   @UseGuards(JwtAuthGuard, CompanyAccessGuard)
   async createPriceTag(

@@ -35,12 +35,18 @@ export class PriceTagsService {
     const ids = this.parseIds(productIds);
     const copiesMap = this.parseCopies(copies);
 
-    const products = await this.prisma.product.findMany({
-      where: { id: { in: ids }, companyId },
-      include: { stocks: true },
-    });
+    const [products, shop] = await Promise.all([
+      this.prisma.product.findMany({
+        where: { id: { in: ids }, companyId },
+        include: { stocks: true },
+      }),
+      branchId
+        ? this.prisma.shop.findFirst({ where: { companyId, branchCode: branchId } })
+        : null,
+    ]);
 
     const byId = new Map(products.map((p) => [p.id, p]));
+    const shopName = shop?.name ?? '';
 
     return {
       products: ids
@@ -52,13 +58,23 @@ export class PriceTagsService {
             : p.stocks[0];
           const price = stock?.salePrice ?? p.discountPrice ?? p.salePrice ?? 0;
 
+          const oldPrice = p.salePrice ?? 0;
+          const hasDiscount =
+            p.discountPrice != null && oldPrice > 0 && p.discountPrice < oldPrice;
+          const discountPercent = hasDiscount
+            ? Math.round((1 - p.discountPrice! / oldPrice) * 100)
+            : 0;
+
           return {
             id: p.id,
             name: p.name,
             sku: p.sku ?? '',
             barcode: p.barcode ?? '',
             price,
+            old_price: hasDiscount ? oldPrice : 0,
+            discount_percent: discountPercent,
             unit: p.unit ?? '',
+            shop_name: shopName,
             copies: copiesMap.get(p.id) ?? 1,
           };
         }),

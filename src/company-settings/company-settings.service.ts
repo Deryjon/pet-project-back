@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { barcodeTypeIdFor, defaultPriceTagProperties } from './price-tag-element.constant';
 
 type CurrencyConfig = {
   id: string;
@@ -1192,10 +1193,28 @@ export class CompanySettingsService {
     };
   }
 
+  async getPriceTagById(id: string, companyId?: string) {
+    const priceTag = await this.db.priceTagSetting.findUnique({ where: { id } });
+    if (!priceTag || (companyId && priceTag.companyId !== companyId)) {
+      throw new NotFoundException('Price tag not found');
+    }
+    return {
+      id: priceTag.id,
+      company_id: priceTag.companyId,
+      name: priceTag.name,
+      width: priceTag.width,
+      length: priceTag.length,
+      barcode_type: priceTag.barcodeType,
+      barcode_type_id: priceTag.barcodeTypeId,
+      properties: priceTag.properties,
+    };
+  }
+
   async createPriceTag(body: Record<string, unknown>, resolvedCompanyId?: string) {
     const companyId =
       resolvedCompanyId ?? this.optionalString(body.company_id) ?? DEFAULT_COMPANY_ID;
     await this.ensureCompanySettingsSeeded(companyId);
+    const barcodeType = this.optionalString(body.barcode_type) ?? 'CODE128';
     const created = await this.db.priceTagSetting.create({
       data: {
         id: randomUUID(),
@@ -1203,11 +1222,9 @@ export class CompanySettingsService {
         name: this.requireString(body.name, 'name'),
         width: this.toNumber(body.width) ?? 40,
         length: this.toNumber(body.length) ?? 20,
-        barcodeType: this.optionalString(body.barcode_type) ?? 'EAN13',
-        barcodeTypeId:
-          this.optionalString(body.barcode_type_id) ??
-          '5517af95-ea38-444e-bf19-90fe4e9e4df7',
-        properties: (body.properties ?? null) as any,
+        barcodeType,
+        barcodeTypeId: this.optionalString(body.barcode_type_id) ?? barcodeTypeIdFor(barcodeType),
+        properties: (body.properties ?? defaultPriceTagProperties()) as any,
       },
     });
 
