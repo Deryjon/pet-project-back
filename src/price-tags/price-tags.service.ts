@@ -75,6 +75,7 @@ export class PriceTagsService {
             discount_percent: discountPercent,
             unit: p.unit ?? '',
             shop_name: shopName,
+            quantity: stock?.quantity ?? p.quantity ?? 0,
             copies: copiesMap.get(p.id) ?? 1,
           };
         }),
