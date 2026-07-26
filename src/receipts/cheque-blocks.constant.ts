@@ -23,10 +23,12 @@ export const DEFAULT_CHEQUE_BLOCKS: ChequeBlockDefinition[] = [
   { key: 'shop_name', blockType: 'information_block', name: 'Название магазина', sequenceNumber: 10, isActive: true },
   { key: 'date', blockType: 'information_block', name: 'Дата и время', sequenceNumber: 20, isActive: true },
   { key: 'working_hours', blockType: 'information_block', name: 'Часы работы', sequenceNumber: 30, isActive: false },
+  { key: 'seller', blockType: 'information_block', name: 'Продавец', sequenceNumber: 35, isActive: false },
   { key: 'cashier', blockType: 'information_block', name: 'Кассир', sequenceNumber: 40, isActive: true },
   { key: 'cashier_phone', blockType: 'information_block', name: 'Телефон кассира', sequenceNumber: 50, isActive: false },
   { key: 'client', blockType: 'information_block', name: 'Клиент', sequenceNumber: 60, isActive: true },
   { key: 'client_phone', blockType: 'information_block', name: 'Телефон клиента', sequenceNumber: 70, isActive: true },
+  { key: 'sale_comment', blockType: 'information_block', name: 'Комментарий к продаже', sequenceNumber: 75, isActive: false },
   { key: 'contacts', blockType: 'information_block', name: 'Контакты магазина', sequenceNumber: 80, isActive: false },
   { key: 'address', blockType: 'information_block', name: 'Адрес', sequenceNumber: 90, isActive: false },
   { key: 'legal_name', blockType: 'information_block', name: 'Юридическое лицо', sequenceNumber: 100, isActive: false },
@@ -61,6 +63,7 @@ export const DEFAULT_CHEQUE_BLOCKS: ChequeBlockDefinition[] = [
   { key: 'website', blockType: 'lower_block', name: 'Сайт', sequenceNumber: 330, isActive: false },
   { key: 'footer_message', blockType: 'lower_block', name: 'Текст благодарности', sequenceNumber: 340, isActive: true },
   { key: 'footer_note', blockType: 'lower_block', name: 'Примечание', sequenceNumber: 350, isActive: false },
+  { key: 'branding', blockType: 'lower_block', name: 'Чек создан в Konkurent', sequenceNumber: 360, isActive: false },
 ];
 
 export const CHEQUE_BLOCK_KEYS = new Set(DEFAULT_CHEQUE_BLOCKS.map((b) => b.key));

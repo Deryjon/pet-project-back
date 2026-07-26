@@ -1396,6 +1396,8 @@ export class SalesService {
           )
         : null;
 
+    const saleComment = this.optionalString(body.comment);
+
     const updatedSale = await this.prisma.$transaction(async (tx) => {
       const persistedSale = await tx.sale.update({
         where: { id },
@@ -1410,6 +1412,7 @@ export class SalesService {
           parkNote: null,
           branchCode,
           paidAt: new Date(),
+          ...(saleComment ? { comment: saleComment } : {}),
         } as any,
       });
       await this.createDebtForFinalizedSale(tx, persistedSale, body, context);

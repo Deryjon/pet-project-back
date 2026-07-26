@@ -14,6 +14,7 @@ interface ReceiptItemSnapshot {
   price: number;
   total: number;
   discount: number;
+  discountPercent: number;
 }
 
 function firstPhoneNumber(raw: unknown): string {
@@ -83,7 +84,7 @@ export class ReceiptsService {
     const sale = await this.prisma.sale.findFirst({
       where: { id: saleId, companyId },
       include: {
-        items: true,
+        items: { include: { seller: true } },
         user: true,
         client: true,
         clientDebts: true,
@@ -148,7 +149,23 @@ export class ReceiptsService {
       price: item.salePrice,
       total: item.finalPrice || item.lineTotal,
       discount: item.discountAmount ?? 0,
+      discountPercent:
+        item.discountAmount > 0 && item.lineTotal > 0
+          ? Math.round((item.discountAmount / item.lineTotal) * 100)
+          : 0,
     }));
+
+    // "Sotuvchi" in Billz — the seller(s) credited on the line items, distinct
+    // from the cashier who processed the payment (sale.user).
+    const sellerNames = Array.from(
+      new Set(
+        sale.items
+          .map((item) => item.seller)
+          .filter((seller): seller is NonNullable<typeof seller> => Boolean(seller))
+          .map((seller) => `${seller.firstName} ${seller.lastName}`.trim()),
+      ),
+    );
+    const sellerName = sellerNames.join(', ');
 
     // Balance/debt breakdown for this sale, derived from the client's current
     // (post-sale) totals minus the delta this sale caused — so it's exact at
@@ -178,12 +195,14 @@ export class ReceiptsService {
       items,
       subtotal,
       discount: sale.discountAmount,
+      discountPercent: sale.discountPercent,
       totalDue: sale.payableTotal,
       paidCash,
       paidCard,
       paidCashback,
       debt,
       cashbackEarned,
+      sellerName,
       balanceBefore,
       balanceAdded,
       balanceDeducted,
@@ -219,15 +238,18 @@ export class ReceiptsService {
             ? `${sale.user.firstName} ${sale.user.lastName}`.trim()
             : null,
           managerPhone: sale.user?.phoneNumber ?? null,
+          sellerName: snapshot.sellerName || null,
           clientName: sale.client
             ? `${sale.client.firstName} ${sale.client.lastName ?? ''}`.trim()
             : (sale.clientName ?? null),
           clientPhone: sale.client?.phone ?? null,
+          saleComment: sale.comment ?? null,
           cashbackEarned: snapshot.cashbackEarned,
           qrPayload: `${process.env.FRONTEND_URL ?? ''}/order/all?receipt=${encodeURIComponent(sale.number)}`,
           items: snapshot.items as any,
           subtotal: snapshot.subtotal,
           discount: snapshot.discount,
+          discountPercent: snapshot.discountPercent,
           totalDue: snapshot.totalDue,
           paidCash: snapshot.paidCash,
           paidCard: snapshot.paidCard,
@@ -251,9 +273,12 @@ export class ReceiptsService {
       receipt = await this.prisma.receipt.update({
         where: { saleId: sale.id },
         data: {
+          sellerName: snapshot.sellerName || null,
+          saleComment: sale.comment ?? null,
           items: snapshot.items as any,
           subtotal: snapshot.subtotal,
           discount: snapshot.discount,
+          discountPercent: snapshot.discountPercent,
           totalDue: snapshot.totalDue,
           paidCash: snapshot.paidCash,
           paidCard: snapshot.paidCard,
@@ -480,6 +505,8 @@ export class ReceiptsService {
     if (dto.item_dividers !== undefined) patch.itemDividers = dto.item_dividers;
     if (dto.has_logo !== undefined) patch.hasLogo = dto.has_logo;
     if (dto.logo_url !== undefined) patch.logoUrl = dto.logo_url;
+    if (dto.has_additional_image !== undefined) patch.hasAdditionalImage = dto.has_additional_image;
+    if (dto.additional_image_url !== undefined) patch.additionalImageUrl = dto.additional_image_url;
     if (dto.footer_message !== undefined) patch.footerMessage = dto.footer_message;
     if (dto.footer_note !== undefined) patch.footerNote = dto.footer_note;
     if (dto.qr_code_url !== undefined) patch.qrCodeUrl = dto.qr_code_url;
@@ -501,6 +528,8 @@ export class ReceiptsService {
     itemDividers: boolean;
     hasLogo: boolean;
     logoUrl: string;
+    hasAdditionalImage: boolean;
+    additionalImageUrl: string;
     footerMessage: string;
     footerNote: string;
     qrCodeUrl: string;
@@ -531,6 +560,8 @@ export class ReceiptsService {
       item_dividers: settings.itemDividers,
       has_logo: settings.hasLogo,
       logo_url: settings.logoUrl,
+      has_additional_image: settings.hasAdditionalImage,
+      additional_image_url: settings.additionalImageUrl,
       footer_message: settings.footerMessage,
       footer_note: settings.footerNote,
       qr_code_url: settings.qrCodeUrl,
@@ -549,11 +580,14 @@ export class ReceiptsService {
       branchCode: string | null;
       managerName: string | null;
       managerPhone: string | null;
+      sellerName: string | null;
       clientName: string | null;
       clientPhone: string | null;
+      saleComment: string | null;
       items: unknown;
       subtotal: number;
       discount: number;
+      discountPercent: number;
       cashbackEarned: number;
       totalDue: number;
       paidCash: number;
@@ -585,11 +619,14 @@ export class ReceiptsService {
       branch_code: receipt.branchCode,
       manager_name: receipt.managerName,
       manager_phone: receipt.managerPhone,
+      seller_name: receipt.sellerName,
       client_name: receipt.clientName,
       client_phone: receipt.clientPhone,
+      sale_comment: receipt.saleComment,
       items: Array.isArray(receipt.items) ? receipt.items : [],
       subtotal: receipt.subtotal,
       discount: receipt.discount,
+      discount_percent: receipt.discountPercent,
       cashback_earned: receipt.cashbackEarned,
       total_due: receipt.totalDue,
       paid_cash: receipt.paidCash,

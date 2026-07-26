@@ -595,8 +595,10 @@ model Receipt {
   status         String    @default("CREATED") // CREATED | PRINTED | SENT
   managerName    String?
   managerPhone   String?
+  sellerName     String?
   clientName     String?
   clientPhone    String?
+  saleComment    String?
   cashbackEarned Float     @default(0)
   qrPayload      String?
   printedAt      DateTime?
@@ -607,6 +609,7 @@ model Receipt {
   items          Json?
   subtotal       Float     @default(0)
   discount       Float     @default(0)
+  discountPercent Float    @default(0)
   totalDue       Float     @default(0)
   paidCash       Float     @default(0)
   paidCard       Float     @default(0)
@@ -660,6 +663,8 @@ model ChequeSettings {
   // values with no other source
   hasLogo            Boolean  @default(false)
   logoUrl            String   @default("")
+  hasAdditionalImage Boolean  @default(false)
+  additionalImageUrl String   @default("")
   footerMessage      String   @default("")
   footerNote         String   @default("")
   qrCodeUrl          String   @default("")
@@ -1097,6 +1102,7 @@ model Sale {
   clientId        String?
   clientName      String?
   parkNote        String?
+  comment         String?
   branchCode      String?
   isDraft         Boolean    @default(true)
   userId          Int?

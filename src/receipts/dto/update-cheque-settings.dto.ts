@@ -79,6 +79,14 @@ export class UpdateChequeSettingsDto {
   logo_url?: string;
 
   @IsOptional()
+  @IsBoolean()
+  has_additional_image?: boolean;
+
+  @IsOptional()
+  @IsString()
+  additional_image_url?: string;
+
+  @IsOptional()
   @IsString()
   footer_message?: string;
 
