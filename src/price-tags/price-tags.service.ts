@@ -5,21 +5,23 @@ import { PrismaService } from '../prisma/prisma.service';
 export class PriceTagsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private parseIds(productIds: string): number[] {
+  private parseRequestedIds(productIds: string): string[] {
     return productIds
       .split(',')
-      .map((id) => Number(id.trim()))
-      .filter((id) => Number.isInteger(id) && id > 0);
+      .map((id) => id.trim())
+      .filter(Boolean);
   }
 
-  private parseCopies(copies?: string): Map<number, number> {
-    const map = new Map<number, number>();
+  // Keyed by the raw id string as sent by the client (same id space as
+  // productIds — see below), not a normalized numeric id.
+  private parseCopies(copies?: string): Map<string, number> {
+    const map = new Map<string, number>();
     if (!copies) return map;
     for (const pair of copies.split(',')) {
       const [idPart, countPart] = pair.split(':');
-      const id = Number(idPart?.trim());
+      const id = idPart?.trim();
       const count = Number(countPart?.trim());
-      if (Number.isInteger(id) && id > 0 && Number.isFinite(count) && count > 0) {
+      if (id && Number.isFinite(count) && count > 0) {
         map.set(id, Math.floor(count));
       }
     }
@@ -32,12 +34,27 @@ export class PriceTagsService {
     companyId: string,
     branchId?: string,
   ) {
-    const ids = this.parseIds(productIds);
+    // Callers may pass either the internal numeric id or the product's
+    // public_id (UUID) — e.g. the catalog's product-detail card only exposes
+    // public_id as `id`. Resolve both so a UUID here doesn't silently return
+    // zero products.
+    const requestedIds = this.parseRequestedIds(productIds);
     const copiesMap = this.parseCopies(copies);
+
+    const numericIds = requestedIds
+      .map((id) => Number(id))
+      .filter((id) => Number.isInteger(id) && id > 0);
+    const publicIds = requestedIds.filter((id) => !/^\d+$/.test(id));
 
     const [products, shop] = await Promise.all([
       this.prisma.product.findMany({
-        where: { id: { in: ids }, companyId },
+        where: {
+          companyId,
+          OR: [
+            ...(numericIds.length ? [{ id: { in: numericIds } }] : []),
+            ...(publicIds.length ? [{ publicId: { in: publicIds } }] : []),
+          ],
+        },
         include: { stocks: true },
       }),
       branchId
@@ -45,14 +62,18 @@ export class PriceTagsService {
         : null,
     ]);
 
-    const byId = new Map(products.map((p) => [p.id, p]));
+    const byNumericId = new Map(products.map((p) => [String(p.id), p]));
+    const byPublicId = new Map(products.map((p) => [p.publicId, p]));
     const shopName = shop?.name ?? '';
 
     return {
-      products: ids
-        .map((id) => byId.get(id))
-        .filter((p): p is NonNullable<typeof p> => Boolean(p))
-        .map((p) => {
+      products: requestedIds
+        .map((rawId) => ({ rawId, product: byNumericId.get(rawId) ?? byPublicId.get(rawId) }))
+        .filter(
+          (entry): entry is { rawId: string; product: NonNullable<typeof entry.product> } =>
+            Boolean(entry.product),
+        )
+        .map(({ rawId, product: p }) => {
           const stock = branchId
             ? p.stocks.find((s) => s.branchCode === branchId)
             : p.stocks[0];
@@ -76,7 +97,7 @@ export class PriceTagsService {
             unit: p.unit ?? '',
             shop_name: shopName,
             quantity: stock?.quantity ?? p.quantity ?? 0,
-            copies: copiesMap.get(p.id) ?? 1,
+            copies: copiesMap.get(rawId) ?? 1,
           };
         }),
     };
