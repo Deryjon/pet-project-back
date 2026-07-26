@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { barcodeTypeIdFor, defaultPriceTagProperties } from './price-tag-element.constant';
+import { barcodeTypeIdFor } from './price-tag-element.constant';
 
 type CurrencyConfig = {
   id: string;
@@ -1224,7 +1224,7 @@ export class CompanySettingsService {
         length: this.toNumber(body.length) ?? 20,
         barcodeType,
         barcodeTypeId: this.optionalString(body.barcode_type_id) ?? barcodeTypeIdFor(barcodeType),
-        properties: (body.properties ?? defaultPriceTagProperties()) as any,
+        properties: (body.properties ?? []) as any,
       },
     });
 
