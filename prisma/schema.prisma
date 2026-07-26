@@ -103,9 +103,8 @@ model Company {
   loyaltyProgram     LoyaltyProgramSetting?
   measurementUnits   MeasurementUnitSetting[]
   priceTags          PriceTagSetting[]
-  cheques            ChequeSetting[]
   receipts           Receipt[]
-  receiptSettings    ReceiptSettings[]
+  chequeSettings     ChequeSettings?
   orders             Order[]
   stockMovements     StockMovement[]
   auditLogs          AuditLog[]
@@ -168,7 +167,6 @@ model Shop {
   arrivalTransfers   Transfer[]        @relation("TransferArrivalShop")
   inventorySessions  InventorySession[]
   receipts       Receipt[]
-  receiptSettings ReceiptSettings?
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
@@ -587,44 +585,6 @@ model PriceTagSetting {
   @@index([companyId])
 }
 
-// DEPRECATED: superseded by ReceiptSettings. Keep until prisma/migrate-receipt-settings.ts
-// has been run against production data, then remove this model + Company.cheques below
-// and apply a follow-up migration to drop the table.
-model ChequeSetting {
-  id                    String   @id
-  companyId             String
-  name                  String
-  hasLogo               Boolean  @default(false)
-  logoImage             Json
-  hasInformationBlock   Boolean  @default(true)
-  hasAdditionalInfo     Boolean  @default(true)
-  hasLowerBlock         Boolean  @default(true)
-  displayText           String
-  chequeItems           Json
-  hasBarCode            Boolean  @default(false)
-  isDefault             Boolean  @default(false)
-  type                  String   @default("cheque")
-  hasAdditionalImage    Boolean  @default(false)
-  additionalImage       Json
-  hasCustomerDebt       Boolean  @default(false)
-  hasCustomerBalance    Boolean  @default(false)
-  printedWithBillz      Boolean  @default(true)
-  logoUrl               String   @default("")
-  width                 Float    @default(0)
-  length                Float    @default(0)
-  xAxis                 Float    @default(0)
-  yAxis                 Float    @default(0)
-  rotation              Float    @default(0)
-  logo                  String   @default("")
-  compact               Boolean  @default(false)
-  extraSettings         Json?
-  company               Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-
-  @@index([companyId])
-}
-
 model Receipt {
   id             String    @id @default(uuid())
   saleId         Int       @unique
@@ -652,6 +612,17 @@ model Receipt {
   paidCard       Float     @default(0)
   paidCashback   Float     @default(0)
   debt           Float     @default(0)
+  // customer balance/debt breakdown — frozen at snapshot time same as the
+  // money fields above, so a reprint never shows a balance/debt state that
+  // no longer matches what the customer was told at sale time
+  balanceBefore   Float    @default(0)
+  balanceAdded    Float    @default(0)
+  balanceDeducted Float    @default(0)
+  balanceAfter    Float    @default(0)
+  debtBefore      Float    @default(0)
+  debtAdded       Float    @default(0)
+  debtPaid        Float    @default(0)
+  debtAfter       Float    @default(0)
   sale           Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
   company        Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   shop           Shop?     @relation(fields: [shopId], references: [id], onDelete: SetNull)
@@ -663,53 +634,36 @@ model Receipt {
   @@index([branchCode])
 }
 
-model ReceiptSettings {
+// Company-wide cheque template: one row per company. Which pieces of
+// information appear on the cheque (and in what order) lives in `blocks`
+// (see cheque-blocks.constant.ts) — a Billz-style ordered list of toggleable
+// items grouped by block_type. The fields below are the handful of values
+// that have no other natural home (everything else — shop name/address/
+// phone/socials, legal name, INN — is resolved live from Shop /
+// CompanyProfileSetting at render time).
+model ChequeSettings {
   id                 String   @id @default(uuid())
-  companyId          String
-  shopId             String   @unique
-  // ТЗ visibility toggles
-  showClientInfo     Boolean  @default(true)
-  showManagerName    Boolean  @default(true)
-  showManagerPhone   Boolean  @default(false)
-  showCashback       Boolean  @default(true)
-  showDebtLine       Boolean  @default(true)
-  showQrCode         Boolean  @default(false)
-  showItemIndex      Boolean  @default(true)
-  // ТЗ layout
+  companyId          String   @unique
+  hasInformationBlock Boolean @default(true)
+  hasLowerBlock      Boolean  @default(true)
+  // layout
   paperWidth         Int      @default(80)
   fontSize           Int      @default(13)
   dividerStyle       String   @default("single") // single | double | none
   dividerGap         Int      @default(8)
   sectionGap         Int      @default(12)
   itemDividers       Boolean  @default(false)
-  footerMessage      String   @default("")
-  footerNote         String   @default("")
-  // legacy ChequeSetting/extraSettings merge — no feature regression
+  // values with no other source
   hasLogo            Boolean  @default(false)
   logoUrl            String   @default("")
-  hasBarCode         Boolean  @default(false)
-  branchName         String   @default("")
-  hasBranchName      Boolean  @default(false)
-  address            String   @default("")
-  hasAddress         Boolean  @default(false)
-  phone              String   @default("")
-  hasPhone           Boolean  @default(false)
-  workingHours       String   @default("")
-  hasWorkingHours    Boolean  @default(false)
-  website            String   @default("")
-  hasWebsite         Boolean  @default(false)
-  taxId              String   @default("")
-  hasTaxId           Boolean  @default(false)
+  footerMessage      String   @default("")
+  footerNote         String   @default("")
   qrCodeUrl          String   @default("")
-  hasCustomerDebt    Boolean  @default(false)
-  hasCustomerBalance Boolean  @default(false)
   elementStyles      Json?    // [{id,label,fontSize,fontWeight,visible,order,marginBottom}]
+  blocks             Json     // ChequeBlockDefinition[] — key, block_type, name, sequence_number, is_active
   company            Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  shop               Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
-
-  @@index([companyId])
 }
 
 model Client {

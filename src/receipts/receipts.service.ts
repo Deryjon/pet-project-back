@@ -1,6 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { UpdateReceiptSettingsDto } from './dto/update-receipt-settings.dto';
+import { UpdateChequeSettingsDto } from './dto/update-cheque-settings.dto';
+import {
+  ChequeBlockDefinition,
+  DEFAULT_CHEQUE_BLOCKS,
+  reconcileChequeBlocks,
+} from './cheque-blocks.constant';
 
 interface ReceiptItemSnapshot {
   name: string;
@@ -8,6 +13,30 @@ interface ReceiptItemSnapshot {
   quantity: number;
   price: number;
   total: number;
+  discount: number;
+}
+
+function firstPhoneNumber(raw: unknown): string {
+  if (!Array.isArray(raw) || raw.length === 0) return '';
+  const first = raw[0] as unknown;
+  if (typeof first === 'string') return first;
+  if (first && typeof first === 'object') {
+    const obj = first as Record<string, unknown>;
+    const val = obj.number ?? obj.phone ?? obj.value;
+    if (typeof val === 'string') return val;
+  }
+  return '';
+}
+
+function formatWorkingHours(raw: unknown): string {
+  if (typeof raw === 'string') return raw;
+  if (raw && typeof raw === 'object') {
+    const obj = raw as Record<string, unknown>;
+    const from = obj.from ?? obj.open ?? obj.start;
+    const to = obj.to ?? obj.close ?? obj.end;
+    if (typeof from === 'string' && typeof to === 'string') return `${from} – ${to}`;
+  }
+  return '';
 }
 
 @Injectable()
@@ -21,6 +50,33 @@ export class ReceiptsService {
         OR: [{ id: shopIdOrCode }, { branchCode: shopIdOrCode }],
       },
     });
+  }
+
+  private async getShopInfo(shopId: string | null) {
+    if (!shopId) return null;
+    const shop = await this.prisma.shop.findUnique({ where: { id: shopId } });
+    if (!shop) return null;
+    return {
+      name: shop.name,
+      address: shop.address ?? '',
+      phone: firstPhoneNumber(shop.phoneNumbers),
+      working_hours: formatWorkingHours(shop.workingHours),
+      facebook: shop.facebook ?? '',
+      instagram: shop.instagram ?? '',
+      telegram: shop.telegram ?? '',
+      website: shop.website ?? '',
+    };
+  }
+
+  private async getCompanyLegalInfo(companyId: string) {
+    const profile = await this.prisma.companyProfileSetting.findUnique({
+      where: { companyId },
+    });
+    const data = (profile?.data ?? {}) as Record<string, unknown>;
+    return {
+      legal_name: typeof data.legal_name === 'string' ? data.legal_name : '',
+      tax_id: typeof data.inn === 'string' ? data.inn : '',
+    };
   }
 
   private async loadSaleForSnapshot(saleId: number, companyId: string) {
@@ -91,7 +147,32 @@ export class ReceiptsService {
       quantity: item.quantity,
       price: item.salePrice,
       total: item.finalPrice || item.lineTotal,
+      discount: item.discountAmount ?? 0,
     }));
+
+    // Balance/debt breakdown for this sale, derived from the client's current
+    // (post-sale) totals minus the delta this sale caused — so it's exact at
+    // the moment the receipt is first created, then frozen forever after.
+    const paidCashback = 0;
+    let balanceAfter = 0;
+    let balanceAdded = 0;
+    let balanceDeducted = 0;
+    let balanceBefore = 0;
+    let debtAfter = 0;
+    let debtAdded = 0;
+    const debtPaid = 0;
+    let debtBefore = 0;
+
+    if (sale.client) {
+      balanceAfter = Number(sale.client.balanceUzs);
+      balanceAdded = cashbackEarned;
+      balanceDeducted = paidCashback;
+      balanceBefore = balanceAfter - balanceAdded + balanceDeducted;
+
+      debtAfter = Number(sale.client.debtUzs);
+      debtAdded = debt;
+      debtBefore = debtAfter - debtAdded + debtPaid;
+    }
 
     return {
       items,
@@ -100,9 +181,17 @@ export class ReceiptsService {
       totalDue: sale.payableTotal,
       paidCash,
       paidCard,
-      paidCashback: 0,
+      paidCashback,
       debt,
       cashbackEarned,
+      balanceBefore,
+      balanceAdded,
+      balanceDeducted,
+      balanceAfter,
+      debtBefore,
+      debtAdded,
+      debtPaid,
+      debtAfter,
     };
   }
 
@@ -144,6 +233,14 @@ export class ReceiptsService {
           paidCard: snapshot.paidCard,
           paidCashback: snapshot.paidCashback,
           debt: snapshot.debt,
+          balanceBefore: snapshot.balanceBefore,
+          balanceAdded: snapshot.balanceAdded,
+          balanceDeducted: snapshot.balanceDeducted,
+          balanceAfter: snapshot.balanceAfter,
+          debtBefore: snapshot.debtBefore,
+          debtAdded: snapshot.debtAdded,
+          debtPaid: snapshot.debtPaid,
+          debtAfter: snapshot.debtAfter,
         },
       });
     } else if (receipt.items === null) {
@@ -162,11 +259,24 @@ export class ReceiptsService {
           paidCard: snapshot.paidCard,
           paidCashback: snapshot.paidCashback,
           debt: snapshot.debt,
+          balanceBefore: snapshot.balanceBefore,
+          balanceAdded: snapshot.balanceAdded,
+          balanceDeducted: snapshot.balanceDeducted,
+          balanceAfter: snapshot.balanceAfter,
+          debtBefore: snapshot.debtBefore,
+          debtAdded: snapshot.debtAdded,
+          debtPaid: snapshot.debtPaid,
+          debtAfter: snapshot.debtAfter,
         },
       });
     }
 
-    return this.assembleResponse(sale, receipt);
+    const [shopInfo, companyInfo] = await Promise.all([
+      this.getShopInfo(receipt.shopId),
+      this.getCompanyLegalInfo(companyId),
+    ]);
+
+    return this.assembleResponse(sale, receipt, shopInfo, companyInfo);
   }
 
   async getByNumber(number: string, companyId: string) {
@@ -192,166 +302,120 @@ export class ReceiptsService {
     return { id: updated.id, status: updated.status, printed_at: updated.printedAt };
   }
 
-  async getReceiptSettings(shopIdOrCode: string, companyId: string) {
-    const shop = await this.resolveShop(shopIdOrCode, companyId);
-    const settings = shop
-      ? await this.prisma.receiptSettings.findUnique({
-          where: { shopId: shop.id },
-        })
-      : null;
-
-    return this.toSettingsResponse(settings, shop?.id ?? shopIdOrCode, shop);
-  }
-
-  async updateReceiptSettings(
-    shopIdOrCode: string,
-    dto: UpdateReceiptSettingsDto,
-    companyId: string,
-  ) {
-    const shop = await this.resolveShop(shopIdOrCode, companyId);
-    if (!shop) {
-      throw new NotFoundException('Shop not found');
-    }
-
-    const patch = this.toPatch(dto);
-    const settings = await this.prisma.receiptSettings.upsert({
-      where: { shopId: shop.id },
-      // A shop's own name/address are already known — default the receipt
-      // header to show them so a freshly-created branch doesn't print
-      // headerless receipts until someone remembers to visit settings.
-      // ...patch still wins if the request explicitly set these fields.
-      create: {
-        companyId,
-        shopId: shop.id,
-        branchName: shop.name,
-        hasBranchName: true,
-        address: shop.address ?? '',
-        hasAddress: Boolean(shop.address),
-        ...patch,
-      },
-      update: patch,
+  private async getOrCreateChequeSettings(companyId: string) {
+    const existing = await this.prisma.chequeSettings.findUnique({
+      where: { companyId },
     });
 
-    return this.toSettingsResponse(settings, shop.id, shop);
+    if (!existing) {
+      return this.prisma.chequeSettings.create({
+        data: { companyId, blocks: DEFAULT_CHEQUE_BLOCKS as any },
+      });
+    }
+
+    const reconciled = reconcileChequeBlocks(existing.blocks);
+    const changed = JSON.stringify(reconciled) !== JSON.stringify(existing.blocks);
+    if (!changed) {
+      return existing;
+    }
+
+    return this.prisma.chequeSettings.update({
+      where: { companyId },
+      data: { blocks: reconciled as any },
+    });
   }
 
-  private toPatch(dto: UpdateReceiptSettingsDto) {
+  async getChequeSettings(companyId: string) {
+    const settings = await this.getOrCreateChequeSettings(companyId);
+    return this.toSettingsResponse(settings);
+  }
+
+  async updateChequeSettings(companyId: string, dto: UpdateChequeSettingsDto) {
+    const current = await this.getOrCreateChequeSettings(companyId);
+    const patch = this.toPatch(dto);
+
+    if (dto.blocks) {
+      const blocks = reconcileChequeBlocks(current.blocks);
+      const byKey = new Map(blocks.map((b) => [b.key, b]));
+      for (const item of dto.blocks) {
+        const existing = byKey.get(item.key);
+        if (!existing) continue;
+        if (item.is_active !== undefined) existing.isActive = item.is_active;
+        if (item.sequence_number !== undefined) existing.sequenceNumber = item.sequence_number;
+      }
+      patch.blocks = Array.from(byKey.values());
+    }
+
+    const updated = await this.prisma.chequeSettings.update({
+      where: { companyId },
+      data: patch,
+    });
+
+    return this.toSettingsResponse(updated);
+  }
+
+  private toPatch(dto: UpdateChequeSettingsDto) {
     const patch: Record<string, unknown> = {};
-    if (dto.show_client_info !== undefined) patch.showClientInfo = dto.show_client_info;
-    if (dto.show_manager_name !== undefined) patch.showManagerName = dto.show_manager_name;
-    if (dto.show_manager_phone !== undefined) patch.showManagerPhone = dto.show_manager_phone;
-    if (dto.show_cashback !== undefined) patch.showCashback = dto.show_cashback;
-    if (dto.show_debt_line !== undefined) patch.showDebtLine = dto.show_debt_line;
-    if (dto.show_qr_code !== undefined) patch.showQrCode = dto.show_qr_code;
-    if (dto.show_item_index !== undefined) patch.showItemIndex = dto.show_item_index;
+    if (dto.has_information_block !== undefined) patch.hasInformationBlock = dto.has_information_block;
+    if (dto.has_lower_block !== undefined) patch.hasLowerBlock = dto.has_lower_block;
     if (dto.paper_width !== undefined) patch.paperWidth = dto.paper_width;
     if (dto.font_size !== undefined) patch.fontSize = dto.font_size;
     if (dto.divider_style !== undefined) patch.dividerStyle = dto.divider_style;
     if (dto.divider_gap !== undefined) patch.dividerGap = dto.divider_gap;
     if (dto.section_gap !== undefined) patch.sectionGap = dto.section_gap;
     if (dto.item_dividers !== undefined) patch.itemDividers = dto.item_dividers;
-    if (dto.footer_message !== undefined) patch.footerMessage = dto.footer_message;
-    if (dto.footer_note !== undefined) patch.footerNote = dto.footer_note;
     if (dto.has_logo !== undefined) patch.hasLogo = dto.has_logo;
     if (dto.logo_url !== undefined) patch.logoUrl = dto.logo_url;
-    if (dto.has_bar_code !== undefined) patch.hasBarCode = dto.has_bar_code;
-    if (dto.branch_name !== undefined) patch.branchName = dto.branch_name;
-    if (dto.has_branch_name !== undefined) patch.hasBranchName = dto.has_branch_name;
-    if (dto.address !== undefined) patch.address = dto.address;
-    if (dto.has_address !== undefined) patch.hasAddress = dto.has_address;
-    if (dto.phone !== undefined) patch.phone = dto.phone;
-    if (dto.has_phone !== undefined) patch.hasPhone = dto.has_phone;
-    if (dto.working_hours !== undefined) patch.workingHours = dto.working_hours;
-    if (dto.has_working_hours !== undefined) patch.hasWorkingHours = dto.has_working_hours;
-    if (dto.website !== undefined) patch.website = dto.website;
-    if (dto.has_website !== undefined) patch.hasWebsite = dto.has_website;
-    if (dto.tax_id !== undefined) patch.taxId = dto.tax_id;
-    if (dto.has_tax_id !== undefined) patch.hasTaxId = dto.has_tax_id;
+    if (dto.footer_message !== undefined) patch.footerMessage = dto.footer_message;
+    if (dto.footer_note !== undefined) patch.footerNote = dto.footer_note;
     if (dto.qr_code_url !== undefined) patch.qrCodeUrl = dto.qr_code_url;
-    if (dto.has_customer_debt !== undefined) patch.hasCustomerDebt = dto.has_customer_debt;
-    if (dto.has_customer_balance !== undefined) patch.hasCustomerBalance = dto.has_customer_balance;
     if (dto.element_styles !== undefined) patch.elementStyles = dto.element_styles;
     return patch;
   }
 
-  private toSettingsResponse(
-    settings: any,
-    shopId: string,
-    shop?: { name: string; address: string | null } | null,
-  ) {
-    const s = settings ?? {
-      showClientInfo: true,
-      showManagerName: true,
-      showManagerPhone: false,
-      showCashback: true,
-      showDebtLine: true,
-      showQrCode: false,
-      showItemIndex: true,
-      paperWidth: 80,
-      fontSize: 13,
-      dividerStyle: 'single',
-      dividerGap: 8,
-      sectionGap: 12,
-      itemDividers: false,
-      footerMessage: '',
-      footerNote: '',
-      hasLogo: false,
-      logoUrl: '',
-      hasBarCode: false,
-      branchName: shop?.name ?? '',
-      hasBranchName: Boolean(shop?.name),
-      address: shop?.address ?? '',
-      hasAddress: Boolean(shop?.address),
-      phone: '',
-      hasPhone: false,
-      workingHours: '',
-      hasWorkingHours: false,
-      website: '',
-      hasWebsite: false,
-      taxId: '',
-      hasTaxId: false,
-      qrCodeUrl: '',
-      hasCustomerDebt: false,
-      hasCustomerBalance: false,
-      elementStyles: null,
-    };
+  private toSettingsResponse(settings: {
+    hasInformationBlock: boolean;
+    hasLowerBlock: boolean;
+    paperWidth: number;
+    fontSize: number;
+    dividerStyle: string;
+    dividerGap: number;
+    sectionGap: number;
+    itemDividers: boolean;
+    hasLogo: boolean;
+    logoUrl: string;
+    footerMessage: string;
+    footerNote: string;
+    qrCodeUrl: string;
+    elementStyles: unknown;
+    blocks: unknown;
+  }) {
+    const blocks = reconcileChequeBlocks(settings.blocks)
+      .sort((a, b) => a.sequenceNumber - b.sequenceNumber)
+      .map((b: ChequeBlockDefinition) => ({
+        key: b.key,
+        block_type: b.blockType,
+        name: b.name,
+        sequence_number: b.sequenceNumber,
+        is_active: b.isActive,
+      }));
 
     return {
-      shop_id: shopId,
-      show_client_info: s.showClientInfo,
-      show_manager_name: s.showManagerName,
-      show_manager_phone: s.showManagerPhone,
-      show_cashback: s.showCashback,
-      show_debt_line: s.showDebtLine,
-      show_qr_code: s.showQrCode,
-      show_item_index: s.showItemIndex,
-      paper_width: s.paperWidth,
-      font_size: s.fontSize,
-      divider_style: s.dividerStyle,
-      divider_gap: s.dividerGap,
-      section_gap: s.sectionGap,
-      item_dividers: s.itemDividers,
-      footer_message: s.footerMessage,
-      footer_note: s.footerNote,
-      has_logo: s.hasLogo,
-      logo_url: s.logoUrl,
-      has_bar_code: s.hasBarCode,
-      branch_name: s.branchName,
-      has_branch_name: s.hasBranchName,
-      address: s.address,
-      has_address: s.hasAddress,
-      phone: s.phone,
-      has_phone: s.hasPhone,
-      working_hours: s.workingHours,
-      has_working_hours: s.hasWorkingHours,
-      website: s.website,
-      has_website: s.hasWebsite,
-      tax_id: s.taxId,
-      has_tax_id: s.hasTaxId,
-      qr_code_url: s.qrCodeUrl,
-      has_customer_debt: s.hasCustomerDebt,
-      has_customer_balance: s.hasCustomerBalance,
-      element_styles: s.elementStyles ?? null,
+      has_information_block: settings.hasInformationBlock,
+      has_lower_block: settings.hasLowerBlock,
+      paper_width: settings.paperWidth,
+      font_size: settings.fontSize,
+      divider_style: settings.dividerStyle,
+      divider_gap: settings.dividerGap,
+      section_gap: settings.sectionGap,
+      item_dividers: settings.itemDividers,
+      has_logo: settings.hasLogo,
+      logo_url: settings.logoUrl,
+      footer_message: settings.footerMessage,
+      footer_note: settings.footerNote,
+      qr_code_url: settings.qrCodeUrl,
+      element_styles: settings.elementStyles ?? null,
+      blocks,
     };
   }
 
@@ -376,10 +440,20 @@ export class ReceiptsService {
       paidCard: number;
       paidCashback: number;
       debt: number;
+      balanceBefore: number;
+      balanceAdded: number;
+      balanceDeducted: number;
+      balanceAfter: number;
+      debtBefore: number;
+      debtAdded: number;
+      debtPaid: number;
+      debtAfter: number;
       qrPayload: string | null;
       printedAt: Date | null;
       sentAt: Date | null;
     },
+    shopInfo: Awaited<ReturnType<ReceiptsService['getShopInfo']>>,
+    companyInfo: Awaited<ReturnType<ReceiptsService['getCompanyLegalInfo']>>,
   ) {
     return {
       id: receipt.id,
@@ -402,9 +476,19 @@ export class ReceiptsService {
       paid_card: receipt.paidCard,
       paid_cashback: receipt.paidCashback,
       debt: receipt.debt,
+      balance_before: receipt.balanceBefore,
+      balance_added: receipt.balanceAdded,
+      balance_deducted: receipt.balanceDeducted,
+      balance_after: receipt.balanceAfter,
+      debt_before: receipt.debtBefore,
+      debt_added: receipt.debtAdded,
+      debt_paid: receipt.debtPaid,
+      debt_after: receipt.debtAfter,
       qr_payload: receipt.qrPayload,
       printed_at: receipt.printedAt,
       sent_at: receipt.sentAt,
+      shop: shopInfo,
+      company: companyInfo,
     };
   }
 }

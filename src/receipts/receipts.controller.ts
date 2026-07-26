@@ -16,7 +16,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { Permissions } from '../auth/permissions.decorator';
-import { UpdateReceiptSettingsDto } from './dto/update-receipt-settings.dto';
+import { UpdateChequeSettingsDto } from './dto/update-cheque-settings.dto';
 
 @Controller()
 export class ReceiptsController {
@@ -77,25 +77,21 @@ export class ReceiptsController {
 
   // send-telegram deferred — future work should reuse TelegramService.sendMessage()
 
-  @Get(['receipt-settings/:branchId', 'v1/receipt-settings/:branchId'])
+  @Get(['cheque-settings', 'v1/cheque-settings'])
   @UseGuards(JwtAuthGuard, CompanyAccessGuard)
-  async getReceiptSettings(
-    @Param('branchId') branchId: string,
-    @Headers('authorization') authorization?: string,
-  ) {
+  async getChequeSettings(@Headers('authorization') authorization?: string) {
     const companyId = await this.requireCompanyId(authorization);
-    return this.receiptsService.getReceiptSettings(branchId, companyId);
+    return this.receiptsService.getChequeSettings(companyId);
   }
 
-  @Put(['receipt-settings/:branchId', 'v1/receipt-settings/:branchId'])
+  @Put(['cheque-settings', 'v1/cheque-settings'])
   @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
   @Permissions('cheque-edit')
-  async updateReceiptSettings(
-    @Param('branchId') branchId: string,
-    @Body() dto: UpdateReceiptSettingsDto,
+  async updateChequeSettings(
+    @Body() dto: UpdateChequeSettingsDto,
     @Headers('authorization') authorization?: string,
   ) {
     const companyId = await this.requireCompanyId(authorization);
-    return this.receiptsService.updateReceiptSettings(branchId, dto, companyId);
+    return this.receiptsService.updateChequeSettings(companyId, dto);
   }
 }
