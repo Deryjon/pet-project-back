@@ -2,12 +2,14 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   Param,
   ParseIntPipe,
   Post,
   Put,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ReceiptsService } from './receipts.service';
@@ -17,6 +19,7 @@ import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { Permissions } from '../auth/permissions.decorator';
 import { UpdateChequeSettingsDto } from './dto/update-cheque-settings.dto';
+import { CreateChequeTemplateDto } from './dto/create-cheque-template.dto';
 
 @Controller()
 export class ReceiptsController {
@@ -77,6 +80,7 @@ export class ReceiptsController {
 
   // send-telegram deferred — future work should reuse TelegramService.sendMessage()
 
+  // Read-only: the template actually used to render/print receipts (isDefault=true).
   @Get(['cheque-settings', 'v1/cheque-settings'])
   @UseGuards(JwtAuthGuard, CompanyAccessGuard)
   async getChequeSettings(@Headers('authorization') authorization?: string) {
@@ -84,14 +88,57 @@ export class ReceiptsController {
     return this.receiptsService.getChequeSettings(companyId);
   }
 
-  @Put(['cheque-settings', 'v1/cheque-settings'])
+  @Get(['cheque', 'v1/cheque'])
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard)
+  async listCheque(
+    @Query() query: { name?: string; page?: string; limit?: string },
+    @Headers('authorization') authorization?: string,
+  ) {
+    const companyId = await this.requireCompanyId(authorization);
+    return this.receiptsService.listChequeTemplates(companyId, query);
+  }
+
+  @Get(['cheque/:id', 'v1/cheque/:id'])
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard)
+  async getChequeById(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const companyId = await this.requireCompanyId(authorization);
+    return this.receiptsService.getChequeTemplateById(companyId, id);
+  }
+
+  @Post(['cheque', 'v1/cheque'])
   @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
   @Permissions('cheque-edit')
-  async updateChequeSettings(
+  async createCheque(
+    @Body() dto: CreateChequeTemplateDto,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const companyId = await this.requireCompanyId(authorization);
+    return this.receiptsService.createChequeTemplate(companyId, dto.name);
+  }
+
+  @Put(['cheque/:id', 'v1/cheque/:id'])
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('cheque-edit')
+  async updateChequeById(
+    @Param('id') id: string,
     @Body() dto: UpdateChequeSettingsDto,
     @Headers('authorization') authorization?: string,
   ) {
     const companyId = await this.requireCompanyId(authorization);
-    return this.receiptsService.updateChequeSettings(companyId, dto);
+    return this.receiptsService.updateChequeTemplate(companyId, id, dto);
+  }
+
+  @Delete(['cheque/:id', 'v1/cheque/:id'])
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('cheque-edit')
+  async deleteChequeById(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const companyId = await this.requireCompanyId(authorization);
+    return this.receiptsService.deleteChequeTemplate(companyId, id);
   }
 }

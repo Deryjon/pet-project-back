@@ -26,6 +26,14 @@ class ChequeBlockPatchDto {
 
 export class UpdateChequeSettingsDto {
   @IsOptional()
+  @IsString()
+  name?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  is_default?: boolean;
+
+  @IsOptional()
   @IsBoolean()
   has_information_block?: boolean;
 

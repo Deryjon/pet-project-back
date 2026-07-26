@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateChequeSettingsDto } from './dto/update-cheque-settings.dto';
 import {
@@ -302,36 +302,122 @@ export class ReceiptsService {
     return { id: updated.id, status: updated.status, printed_at: updated.printedAt };
   }
 
-  private async getOrCreateChequeSettings(companyId: string) {
-    const existing = await this.prisma.chequeSettings.findUnique({
-      where: { companyId },
-    });
-
-    if (!existing) {
-      return this.prisma.chequeSettings.create({
-        data: { companyId, blocks: DEFAULT_CHEQUE_BLOCKS as any },
-      });
-    }
-
-    const reconciled = reconcileChequeBlocks(existing.blocks);
-    const changed = JSON.stringify(reconciled) !== JSON.stringify(existing.blocks);
-    if (!changed) {
-      return existing;
-    }
-
-    return this.prisma.chequeSettings.update({
-      where: { companyId },
+  /** Reconciles a template's stored blocks against the current catalog,
+   * persisting the merge if anything changed (schema evolution — see
+   * cheque-blocks.constant.ts). */
+  private async reconcileTemplate<T extends { id: string; blocks: unknown }>(row: T): Promise<T> {
+    const reconciled = reconcileChequeBlocks(row.blocks);
+    const changed = JSON.stringify(reconciled) !== JSON.stringify(row.blocks);
+    if (!changed) return row;
+    const updated = await this.prisma.chequeSettings.update({
+      where: { id: row.id },
       data: { blocks: reconciled as any },
     });
+    return updated as unknown as T;
+  }
+
+  /** The template used to actually render/print receipts. Every company has
+   * exactly one — created lazily, and self-healing if none is flagged. */
+  private async getOrCreateDefaultChequeTemplate(companyId: string) {
+    let row = await this.prisma.chequeSettings.findFirst({
+      where: { companyId, isDefault: true },
+    });
+
+    if (!row) {
+      const anyRow = await this.prisma.chequeSettings.findFirst({
+        where: { companyId },
+        orderBy: { createdAt: 'asc' },
+      });
+      row = anyRow
+        ? await this.prisma.chequeSettings.update({
+            where: { id: anyRow.id },
+            data: { isDefault: true },
+          })
+        : await this.prisma.chequeSettings.create({
+            data: {
+              companyId,
+              name: 'Стандартный',
+              isDefault: true,
+              blocks: DEFAULT_CHEQUE_BLOCKS as any,
+            },
+          });
+    }
+
+    return this.reconcileTemplate(row);
   }
 
   async getChequeSettings(companyId: string) {
-    const settings = await this.getOrCreateChequeSettings(companyId);
-    return this.toSettingsResponse(settings);
+    const template = await this.getOrCreateDefaultChequeTemplate(companyId);
+    return this.toSettingsResponse(template);
   }
 
-  async updateChequeSettings(companyId: string, dto: UpdateChequeSettingsDto) {
-    const current = await this.getOrCreateChequeSettings(companyId);
+  async listChequeTemplates(
+    companyId: string,
+    query: { name?: string; page?: string | number; limit?: string | number },
+  ) {
+    await this.getOrCreateDefaultChequeTemplate(companyId); // ensure at least one exists
+
+    const page = Math.max(1, parseInt(String(query.page ?? '1'), 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(String(query.limit ?? '10'), 10) || 10));
+    const name = typeof query.name === 'string' ? query.name.trim() : '';
+
+    const where = {
+      companyId,
+      ...(name ? { name: { contains: name, mode: 'insensitive' as const } } : {}),
+    };
+
+    const [rows, total] = await Promise.all([
+      this.prisma.chequeSettings.findMany({
+        where,
+        orderBy: [{ isDefault: 'desc' as const }, { createdAt: 'asc' as const }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.chequeSettings.count({ where }),
+    ]);
+
+    return {
+      items: rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        is_default: row.isDefault,
+        created_at: row.createdAt,
+        updated_at: row.updatedAt,
+      })),
+      page,
+      limit,
+      total,
+    };
+  }
+
+  async getChequeTemplateById(companyId: string, id: string) {
+    const row = await this.prisma.chequeSettings.findFirst({ where: { id, companyId } });
+    if (!row) {
+      throw new NotFoundException('Cheque template not found');
+    }
+    const reconciled = await this.reconcileTemplate(row);
+    return this.toSettingsResponse(reconciled);
+  }
+
+  async createChequeTemplate(companyId: string, name?: string) {
+    const existingCount = await this.prisma.chequeSettings.count({ where: { companyId } });
+    const created = await this.prisma.chequeSettings.create({
+      data: {
+        companyId,
+        name: name?.trim() || 'Новый чек',
+        isDefault: existingCount === 0,
+        blocks: DEFAULT_CHEQUE_BLOCKS as any,
+      },
+    });
+    return this.toSettingsResponse(created);
+  }
+
+  async updateChequeTemplate(companyId: string, id: string, dto: UpdateChequeSettingsDto) {
+    const current = await this.prisma.chequeSettings.findFirst({ where: { id, companyId } });
+    if (!current) {
+      throw new NotFoundException('Cheque template not found');
+    }
+
     const patch = this.toPatch(dto);
 
     if (dto.blocks) {
@@ -346,16 +432,44 @@ export class ReceiptsService {
       patch.blocks = Array.from(byKey.values());
     }
 
-    const updated = await this.prisma.chequeSettings.update({
-      where: { companyId },
-      data: patch,
-    });
+    if (dto.is_default === true) {
+      await this.prisma.$transaction([
+        this.prisma.chequeSettings.updateMany({
+          where: { companyId, NOT: { id } },
+          data: { isDefault: false },
+        }),
+        this.prisma.chequeSettings.update({ where: { id }, data: { ...patch, isDefault: true } }),
+      ]);
+    } else {
+      if (dto.is_default === false && current.isDefault) {
+        throw new BadRequestException(
+          'Нельзя снять этот шаблон с "по умолчанию" — сначала назначьте другой шаблон по умолчанию',
+        );
+      }
+      await this.prisma.chequeSettings.update({ where: { id }, data: patch });
+    }
 
+    const updated = await this.prisma.chequeSettings.findUniqueOrThrow({ where: { id } });
     return this.toSettingsResponse(updated);
+  }
+
+  async deleteChequeTemplate(companyId: string, id: string) {
+    const current = await this.prisma.chequeSettings.findFirst({ where: { id, companyId } });
+    if (!current) {
+      throw new NotFoundException('Cheque template not found');
+    }
+    if (current.isDefault) {
+      throw new BadRequestException(
+        'Нельзя удалить шаблон по умолчанию — сначала назначьте другой шаблон по умолчанию',
+      );
+    }
+    await this.prisma.chequeSettings.delete({ where: { id } });
+    return { success: true };
   }
 
   private toPatch(dto: UpdateChequeSettingsDto) {
     const patch: Record<string, unknown> = {};
+    if (dto.name !== undefined) patch.name = dto.name.trim() || 'Новый чек';
     if (dto.has_information_block !== undefined) patch.hasInformationBlock = dto.has_information_block;
     if (dto.has_lower_block !== undefined) patch.hasLowerBlock = dto.has_lower_block;
     if (dto.paper_width !== undefined) patch.paperWidth = dto.paper_width;
@@ -374,6 +488,9 @@ export class ReceiptsService {
   }
 
   private toSettingsResponse(settings: {
+    id: string;
+    name: string;
+    isDefault: boolean;
     hasInformationBlock: boolean;
     hasLowerBlock: boolean;
     paperWidth: number;
@@ -401,6 +518,9 @@ export class ReceiptsService {
       }));
 
     return {
+      id: settings.id,
+      name: settings.name,
+      is_default: settings.isDefault,
       has_information_block: settings.hasInformationBlock,
       has_lower_block: settings.hasLowerBlock,
       paper_width: settings.paperWidth,

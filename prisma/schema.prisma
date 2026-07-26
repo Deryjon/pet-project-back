@@ -104,7 +104,7 @@ model Company {
   measurementUnits   MeasurementUnitSetting[]
   priceTags          PriceTagSetting[]
   receipts           Receipt[]
-  chequeSettings     ChequeSettings?
+  chequeSettings     ChequeSettings[]
   orders             Order[]
   stockMovements     StockMovement[]
   auditLogs          AuditLog[]
@@ -634,16 +634,20 @@ model Receipt {
   @@index([branchCode])
 }
 
-// Company-wide cheque template: one row per company. Which pieces of
-// information appear on the cheque (and in what order) lives in `blocks`
-// (see cheque-blocks.constant.ts) — a Billz-style ordered list of toggleable
-// items grouped by block_type. The fields below are the handful of values
-// that have no other natural home (everything else — shop name/address/
-// phone/socials, legal name, INN — is resolved live from Shop /
+// A cheque template. A company can have any number of these (like Billz's
+// /api/v1/cheque list, named and independently editable) but exactly one is
+// isDefault=true at a time — that's the one used to render/print receipts.
+// Which pieces of information appear on the cheque (and in what order) lives
+// in `blocks` (see cheque-blocks.constant.ts) — a Billz-style ordered list of
+// toggleable items grouped by block_type. The fields below are the handful of
+// values that have no other natural home (everything else — shop name/
+// address/phone/socials, legal name, INN — is resolved live from Shop /
 // CompanyProfileSetting at render time).
 model ChequeSettings {
   id                 String   @id @default(uuid())
-  companyId          String   @unique
+  companyId          String
+  name               String   @default("Стандартный")
+  isDefault          Boolean  @default(false)
   hasInformationBlock Boolean @default(true)
   hasLowerBlock      Boolean  @default(true)
   // layout
@@ -664,6 +668,8 @@ model ChequeSettings {
   company            Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+
+  @@index([companyId])
 }
 
 model Client {
