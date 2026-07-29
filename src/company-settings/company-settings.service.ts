@@ -1188,6 +1188,7 @@ export class CompanySettingsService {
         length: priceTag.length,
         barcode_type: priceTag.barcodeType,
         barcode_type_id: priceTag.barcodeTypeId,
+        is_default: priceTag.isDefault,
         properties: priceTag.properties,
       })),
     };
@@ -1206,6 +1207,7 @@ export class CompanySettingsService {
       length: priceTag.length,
       barcode_type: priceTag.barcodeType,
       barcode_type_id: priceTag.barcodeTypeId,
+      is_default: priceTag.isDefault,
       properties: priceTag.properties,
     };
   }
@@ -1215,17 +1217,33 @@ export class CompanySettingsService {
       resolvedCompanyId ?? this.optionalString(body.company_id) ?? DEFAULT_COMPANY_ID;
     await this.ensureCompanySettingsSeeded(companyId);
     const barcodeType = this.optionalString(body.barcode_type) ?? 'CODE128';
-    const created = await this.db.priceTagSetting.create({
-      data: {
-        id: randomUUID(),
-        companyId,
-        name: this.requireString(body.name, 'name'),
-        width: this.toNumber(body.width) ?? 40,
-        length: this.toNumber(body.length) ?? 20,
-        barcodeType,
-        barcodeTypeId: this.optionalString(body.barcode_type_id) ?? barcodeTypeIdFor(barcodeType),
-        properties: (body.properties ?? []) as any,
-      },
+    // The very first template for a company becomes the default automatically
+    // (nothing else to fall back to at print time); afterwards defaulting is
+    // opt-in via is_default so creating a new template never silently steals
+    // the slot sale-time printing relies on.
+    const existingCount = await this.db.priceTagSetting.count({ where: { companyId } });
+    const isDefault = existingCount === 0 || body.is_default === true;
+
+    const created = await this.db.$transaction(async (tx) => {
+      if (isDefault) {
+        await tx.priceTagSetting.updateMany({
+          where: { companyId },
+          data: { isDefault: false },
+        });
+      }
+      return tx.priceTagSetting.create({
+        data: {
+          id: randomUUID(),
+          companyId,
+          name: this.requireString(body.name, 'name'),
+          width: this.toNumber(body.width) ?? 40,
+          length: this.toNumber(body.length) ?? 20,
+          barcodeType,
+          barcodeTypeId: this.optionalString(body.barcode_type_id) ?? barcodeTypeIdFor(barcodeType),
+          isDefault,
+          properties: (body.properties ?? []) as any,
+        },
+      });
     });
 
     return {
@@ -1236,6 +1254,7 @@ export class CompanySettingsService {
       length: created.length,
       barcode_type: created.barcodeType,
       barcode_type_id: created.barcodeTypeId,
+      is_default: created.isDefault,
       properties: created.properties,
     };
   }
@@ -1245,36 +1264,53 @@ export class CompanySettingsService {
     if (!priceTag || (resolvedCompanyId && priceTag.companyId !== resolvedCompanyId)) {
       throw new NotFoundException('Price tag not found');
     }
-    const updated = await this.db.priceTagSetting.update({
-      where: { id },
-      data: {
-        ...(body.company_id !== undefined
-          ? { companyId: this.requireString(body.company_id, 'company_id') }
-          : {}),
-        ...(body.name !== undefined
-          ? { name: this.requireString(body.name, 'name') }
-          : {}),
-        ...(body.width !== undefined
-          ? { width: this.toRequiredNumber(body.width, 'width') }
-          : {}),
-        ...(body.length !== undefined
-          ? { length: this.toRequiredNumber(body.length, 'length') }
-          : {}),
-        ...(body.barcode_type !== undefined
-          ? {
-              barcodeType: this.requireString(body.barcode_type, 'barcode_type'),
-            }
-          : {}),
-        ...(body.barcode_type_id !== undefined
-          ? {
-              barcodeTypeId: this.requireString(
-                body.barcode_type_id,
-                'barcode_type_id',
-              ),
-            }
-          : {}),
-        ...(body.properties !== undefined ? { properties: body.properties as any } : {}),
-      } as any,
+
+    // is_default is exclusive per company — turning it on here means turning
+    // it off everywhere else, so sale-time printing always has exactly one
+    // unambiguous template to fall back to.
+    const makeDefault = body.is_default === true;
+    const clearDefault = body.is_default === false;
+
+    const updated = await this.db.$transaction(async (tx) => {
+      if (makeDefault) {
+        await tx.priceTagSetting.updateMany({
+          where: { companyId: priceTag.companyId, id: { not: id } },
+          data: { isDefault: false },
+        });
+      }
+      return tx.priceTagSetting.update({
+        where: { id },
+        data: {
+          ...(body.company_id !== undefined
+            ? { companyId: this.requireString(body.company_id, 'company_id') }
+            : {}),
+          ...(body.name !== undefined
+            ? { name: this.requireString(body.name, 'name') }
+            : {}),
+          ...(body.width !== undefined
+            ? { width: this.toRequiredNumber(body.width, 'width') }
+            : {}),
+          ...(body.length !== undefined
+            ? { length: this.toRequiredNumber(body.length, 'length') }
+            : {}),
+          ...(body.barcode_type !== undefined
+            ? {
+                barcodeType: this.requireString(body.barcode_type, 'barcode_type'),
+              }
+            : {}),
+          ...(body.barcode_type_id !== undefined
+            ? {
+                barcodeTypeId: this.requireString(
+                  body.barcode_type_id,
+                  'barcode_type_id',
+                ),
+              }
+            : {}),
+          ...(makeDefault ? { isDefault: true } : {}),
+          ...(clearDefault ? { isDefault: false } : {}),
+          ...(body.properties !== undefined ? { properties: body.properties as any } : {}),
+        } as any,
+      });
     });
 
     return {
@@ -1285,6 +1321,7 @@ export class CompanySettingsService {
       length: updated.length,
       barcode_type: updated.barcodeType,
       barcode_type_id: updated.barcodeTypeId,
+      is_default: updated.isDefault,
       properties: updated.properties,
     };
   }
@@ -1295,6 +1332,21 @@ export class CompanySettingsService {
       throw new NotFoundException('Price tag not found');
     }
     const deleted = await this.db.priceTagSetting.delete({ where: { id } });
+
+    // Deleting the default template must not leave sale-time printing
+    // without one — promote the next most recent remaining template.
+    if (deleted.isDefault) {
+      const nextDefault = await this.db.priceTagSetting.findFirst({
+        where: { companyId: deleted.companyId },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (nextDefault) {
+        await this.db.priceTagSetting.update({
+          where: { id: nextDefault.id },
+          data: { isDefault: true },
+        });
+      }
+    }
 
     return {
       success: true,
