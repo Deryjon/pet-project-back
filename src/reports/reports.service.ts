@@ -1884,7 +1884,7 @@ export class ReportsService {
         existing.average_discount += this.getItemDiscount(item);
         existing._discount_count += 1;
         if (sale.saleType === 'return') {
-          existing.returns += item.quantity;
+          existing.returns += Number(item.quantity);
         }
         products.set(key, existing);
       }
@@ -1936,15 +1936,16 @@ export class ReportsService {
           _markup_count: 0,
         };
 
-        current.sold_quantity += sign > 0 ? item.quantity : 0;
-        current.returned_quantity += sign < 0 ? item.quantity : 0;
+        const itemQuantity = Number(item.quantity);
+        current.sold_quantity += sign > 0 ? itemQuantity : 0;
+        current.returned_quantity += sign < 0 ? itemQuantity : 0;
         current.revenue += this.getItemRetailPrice(item) * sign;
         current.net_gross_sales += this.getItemFinalPrice(item) * sign;
         current.supply_cost += this.getItemSupplyPrice(item) * sign;
         current.gross_profit += this.getItemProfit(item) * sign;
         current.average_discount += this.getItemDiscount(item);
-        current.average_price += item.quantity
-          ? this.getItemFinalPrice(item) / item.quantity
+        current.average_price += itemQuantity
+          ? this.getItemFinalPrice(item) / itemQuantity
           : 0;
         if (item.markupAtSale !== undefined && item.markupAtSale !== null) {
           current.average_markup += Number(item.markupAtSale);
@@ -2629,12 +2630,12 @@ export class ReportsService {
         if (sign < 0) {
           returnedByProduct.set(
             item.productId,
-            (returnedByProduct.get(item.productId) ?? 0) + item.quantity,
+            (returnedByProduct.get(item.productId) ?? 0) + Number(item.quantity),
           );
         } else {
           soldByProduct.set(
             item.productId,
-            (soldByProduct.get(item.productId) ?? 0) + item.quantity,
+            (soldByProduct.get(item.productId) ?? 0) + Number(item.quantity),
           );
         }
       }
@@ -2721,7 +2722,7 @@ export class ReportsService {
               : 0;
         existing.average_markup_count += 1;
         if (sale.saleType === 'return') {
-          existing.returns += item.quantity;
+          existing.returns += Number(item.quantity);
         }
         suppliers.set(supplierKey, existing);
       }

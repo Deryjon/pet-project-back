@@ -1064,6 +1064,7 @@ export class PlatformService {
       saleNotifications: notifications?.saleNotifications ?? true,
       stockAlerts: notifications?.stockAlerts ?? false,
       lowStockThreshold: notifications?.lowStockThreshold ?? false,
+      lowStockThresholdValue: notifications?.lowStockThresholdValue ?? 5,
       dailyReport: notifications?.dailyReport ?? false,
     };
   }

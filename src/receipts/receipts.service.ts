@@ -114,7 +114,7 @@ export class ReceiptsService {
       Array.isArray(sale.extraPayments) && (sale.extraPayments as unknown[]).length > 1
         ? (sale.extraPayments as Array<{ payment_method: string; amount: number }>)
         : sale.paymentMethod
-          ? [{ payment_method: sale.paymentMethod, amount: sale.payableTotal }]
+          ? [{ payment_method: sale.paymentMethod, amount: Number(sale.payableTotal) }]
           : [];
 
     let paidCash = 0;
@@ -132,28 +132,38 @@ export class ReceiptsService {
       0,
     );
 
-    const subtotal = sale.items.reduce((sum, item) => sum + item.lineTotal, 0);
+    const subtotal = sale.items.reduce(
+      (sum, item) => sum + Number(item.lineTotal),
+      0,
+    );
 
     const loyalty = await this.prisma.loyaltyProgramSetting.findUnique({
       where: { companyId },
     });
     const cashbackEarned =
       loyalty?.isActive && loyalty.cashbackPercent > 0
-        ? (sale.payableTotal * loyalty.cashbackPercent) / 100
+        ? (Number(sale.payableTotal) * loyalty.cashbackPercent) / 100
         : 0;
 
-    const items: ReceiptItemSnapshot[] = sale.items.map((item) => ({
-      name: item.name,
-      sku: item.sku ?? item.barcode ?? '',
-      quantity: item.quantity,
-      price: item.salePrice,
-      total: item.finalPrice || item.lineTotal,
-      discount: item.discountAmount ?? 0,
-      discountPercent:
-        item.discountAmount > 0 && item.lineTotal > 0
-          ? Math.round((item.discountAmount / item.lineTotal) * 100)
-          : 0,
-    }));
+    const items: ReceiptItemSnapshot[] = sale.items.map((item) => {
+      const lineTotal = Number(item.lineTotal);
+      const finalPrice = item.finalPrice != null ? Number(item.finalPrice) : 0;
+      const discountAmount =
+        item.discountAmount != null ? Number(item.discountAmount) : 0;
+
+      return {
+        name: item.name,
+        sku: item.sku ?? item.barcode ?? '',
+        quantity: Number(item.quantity),
+        price: Number(item.salePrice),
+        total: finalPrice || lineTotal,
+        discount: discountAmount,
+        discountPercent:
+          discountAmount > 0 && lineTotal > 0
+            ? Math.round((discountAmount / lineTotal) * 100)
+            : 0,
+      };
+    });
 
     // "Sotuvchi" in Billz — the seller(s) credited on the line items, distinct
     // from the cashier who processed the payment (sale.user).
@@ -194,9 +204,9 @@ export class ReceiptsService {
     return {
       items,
       subtotal,
-      discount: sale.discountAmount,
-      discountPercent: sale.discountPercent,
-      totalDue: sale.payableTotal,
+      discount: Number(sale.discountAmount),
+      discountPercent: Number(sale.discountPercent),
+      totalDue: Number(sale.payableTotal),
       paidCash,
       paidCard,
       paidCashback,

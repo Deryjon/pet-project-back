@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -240,9 +241,9 @@ export class DashboardService {
           total_price: 0,
           net_sales: 0,
         };
-        existingProduct.quantity += item.quantity * itemSign;
-        existingProduct.total_price += item.lineTotal * itemSign;
-        existingProduct.net_sales += item.lineTotal * itemSign;
+        existingProduct.quantity += Number(item.quantity) * itemSign;
+        existingProduct.total_price += Number(item.lineTotal) * itemSign;
+        existingProduct.net_sales += Number(item.lineTotal) * itemSign;
         productTotals.set(productName, existingProduct);
       }
     }
@@ -476,11 +477,11 @@ export class DashboardService {
   }
 
   private getSignedSaleAmount(sale: {
-    payableTotal?: number | null;
-    total?: number | null;
+    payableTotal?: Prisma.Decimal | number | null;
+    total?: Prisma.Decimal | number | null;
     saleType?: string;
   }) {
-    const amount = sale.payableTotal ?? sale.total ?? 0;
+    const amount = Number(sale.payableTotal) || Number(sale.total) || 0;
     return sale.saleType === 'return' ? -amount : amount;
   }
 }

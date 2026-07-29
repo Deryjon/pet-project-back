@@ -40,6 +40,7 @@ export class TelegramController {
       notifyOnSale?: boolean;
       notifySellerAnalytics?: boolean;
       notifyOnLogin?: boolean;
+      notifyOnLowStock?: boolean;
       branchCode?: string | null;
     },
     @Headers('authorization') authorization: string,

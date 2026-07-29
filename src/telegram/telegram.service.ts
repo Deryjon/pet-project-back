@@ -4,7 +4,9 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { UAParser } from 'ua-parser-js';
+import { PlatformService } from '../platform/platform.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 
@@ -27,6 +29,7 @@ export class TelegramService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
+    private readonly platformService: PlatformService,
   ) {}
 
   async sendMessage(chatId: string, text: string): Promise<void> {
@@ -152,8 +155,8 @@ export class TelegramService {
     number: string;
     companyId: string | null;
     branchCode: string | null;
-    payableTotal: number;
-    total: number;
+    payableTotal: Prisma.Decimal | number;
+    total: Prisma.Decimal | number;
     userId: number | null;
     paymentMethod: string | null;
     extraPayments: any;
@@ -224,7 +227,7 @@ export class TelegramService {
         ? `${seller.firstName} ${seller.lastName}`.trim()
         : '';
       const shopName = shop?.name ?? sale.branchCode ?? '';
-      const amount = sale.payableTotal || sale.total || 0;
+      const amount = Number(sale.payableTotal) || Number(sale.total) || 0;
       const paidAt = sale.paidAt ?? new Date();
 
       // Date formatting
@@ -265,8 +268,11 @@ export class TelegramService {
 
       // Items
       const itemLines = items.map((item, i) => {
-        const originalTotal = item.retailPriceAtSale || item.lineTotal || item.salePrice * item.quantity;
-        const finalTotal = item.finalPrice || originalTotal;
+        const quantity = Number(item.quantity);
+        const salePrice = Number(item.salePrice);
+        const originalTotal =
+          Number(item.retailPriceAtSale) || Number(item.lineTotal) || salePrice * quantity;
+        const finalTotal = Number(item.finalPrice) || originalTotal;
         const discountPct =
           originalTotal > 0 && finalTotal < originalTotal
             ? (((originalTotal - finalTotal) / originalTotal) * 100).toFixed(2)
@@ -275,7 +281,7 @@ export class TelegramService {
         let line = `${i + 1}. ${item.name}`;
         if (item.barcode) line += ` / ${item.barcode}`;
         if (item.sku) line += ` / Арт: ${item.sku}`;
-        line += ` / ${item.quantity} шт x ${this.fmt(item.salePrice)} UZS`;
+        line += ` / ${quantity} шт x ${this.fmt(salePrice)} UZS`;
         line += ` / (Сумма: ${this.fmt(finalTotal)} UZS)`;
         if (discountPct) {
           const isLast = i === items.length - 1;
@@ -312,6 +318,56 @@ export class TelegramService {
       );
     } catch (err) {
       this.logger.error('notifySale error', err);
+    }
+  }
+
+  async getLowStockThresholdSettings(): Promise<{
+    enabled: boolean;
+    threshold: number;
+  }> {
+    const settings = await this.platformService.getNotificationSettings();
+    return {
+      enabled: settings.enabled && settings.lowStockThreshold,
+      threshold: Number(settings.lowStockThresholdValue) || 0,
+    };
+  }
+
+  async notifyLowStock(args: {
+    companyId: string;
+    branchCode: string | null;
+    productName: string;
+    sku: string | null;
+    barcode: string | null;
+    quantity: number;
+    threshold: number;
+  }): Promise<void> {
+    try {
+      const subscribers = await this.prisma.telegramSubscriber.findMany({
+        where: {
+          companyId: args.companyId,
+          notifyOnLowStock: true,
+          OR: [{ branchCode: args.branchCode ?? undefined }, { branchCode: null }],
+        },
+      });
+
+      if (!subscribers.length) return;
+
+      const lines = [
+        '⚠️ <b>Низкий остаток товара</b>',
+        '',
+        `Товар: ${args.productName}`,
+        ...(args.sku ? [`Арт: ${args.sku}`] : []),
+        ...(args.barcode ? [`Штрихкод: ${args.barcode}`] : []),
+        `Остаток: ${this.fmt(args.quantity)} (порог: ${this.fmt(args.threshold)})`,
+      ];
+
+      const text = lines.join('\n');
+
+      await Promise.all(
+        subscribers.map((sub) => this.sendMessage(sub.chatId, text)),
+      );
+    } catch (err) {
+      this.logger.error('notifyLowStock error', err);
     }
   }
 
@@ -390,6 +446,7 @@ export class TelegramService {
       notifyOnSale: s.notifyOnSale,
       notifySellerAnalytics: s.notifySellerAnalytics,
       notifyOnLogin: s.notifyOnLogin,
+      notifyOnLowStock: s.notifyOnLowStock,
       branchCode: s.branchCode,
       linkedAt: s.linkedAt,
     }));
@@ -401,6 +458,7 @@ export class TelegramService {
       notifyOnSale?: boolean;
       notifySellerAnalytics?: boolean;
       notifyOnLogin?: boolean;
+      notifyOnLowStock?: boolean;
       branchCode?: string | null;
     },
     authorization: string,
@@ -422,6 +480,9 @@ export class TelegramService {
         }),
         ...(body.notifyOnLogin !== undefined && {
           notifyOnLogin: body.notifyOnLogin,
+        }),
+        ...(body.notifyOnLowStock !== undefined && {
+          notifyOnLowStock: body.notifyOnLowStock,
         }),
         ...(body.branchCode !== undefined && { branchCode: body.branchCode }),
       },

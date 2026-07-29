@@ -316,7 +316,7 @@ export class SalesService {
     this.assertSaleAccess(sale, context);
     return this.emptyOrderDraftDebt(
       String(sale.id),
-      sale.payableTotal || sale.total,
+      Number(sale.payableTotal) || Number(sale.total),
     );
   }
 
@@ -441,7 +441,7 @@ export class SalesService {
 
       if ((sale as any).saleType === 'return') {
         totalReturnalsCount += 1;
-        totalReturnedSum += sale.payableTotal || sale.total || 0;
+        totalReturnedSum += Number(sale.payableTotal) || Number(sale.total) || 0;
       }
 
       if ((sale as any).saleType === 'exchange') {
@@ -452,13 +452,13 @@ export class SalesService {
         if (
           item.product?.productType === '5a0e556a-15f8-47ac-ae07-46972f3c6ab4'
         ) {
-          totalServices += item.quantity;
+          totalServices += Number(item.quantity);
         } else {
-          totalProducts += item.quantity;
+          totalProducts += Number(item.quantity);
         }
 
         if ((sale as any).saleType === 'return') {
-          totalReturnedMeasurementValue += item.quantity;
+          totalReturnedMeasurementValue += Number(item.quantity);
         }
       }
 
@@ -788,7 +788,7 @@ export class SalesService {
           clientName: resolvedClient.clientName,
           parkNote: null,
           paidAt: new Date(),
-        } as any,
+        },
       });
       paidSale = updatedSale;
       await this.createDebtForFinalizedSale(tx, updatedSale, body, context);
@@ -1035,11 +1035,12 @@ export class SalesService {
       success: true,
       type: 'exchange',
       original_order_id: String(originalSale.id),
-      returned_total: returnSale.payableTotal,
-      exchange_total: exchangeSale.payableTotal,
+      returned_total: Number(returnSale.payableTotal),
+      exchange_total: Number(exchangeSale.payableTotal),
       balance_due: Number(
         (
-          (exchangeSale.payableTotal ?? 0) - (returnSale.payableTotal ?? 0)
+          Number(exchangeSale.payableTotal ?? 0) -
+          Number(returnSale.payableTotal ?? 0)
         ).toFixed(2),
       ),
       return_order: this.toSaleListItem(returnSale, context),
@@ -1106,25 +1107,25 @@ export class SalesService {
     });
 
     if (existingItem) {
+      const newQuantity = Number(existingItem.quantity) + quantity;
       await this.prisma.saleItem.update({
         where: { id: existingItem.id },
         data: {
-          quantity: existingItem.quantity + quantity,
+          quantity: newQuantity,
           sellerId: sale.userId ?? undefined,
           salePrice,
-          lineTotal: (existingItem.quantity + quantity) * salePrice,
-          retailPriceAtSale: (existingItem.quantity + quantity) * salePrice,
-          finalPrice: (existingItem.quantity + quantity) * salePrice,
-          supplyPriceAtSale:
-            (existingItem.quantity + quantity) * (product.purchasePrice ?? 0),
+          lineTotal: newQuantity * salePrice,
+          retailPriceAtSale: newQuantity * salePrice,
+          finalPrice: newQuantity * salePrice,
+          supplyPriceAtSale: newQuantity * (product.purchasePrice ?? 0),
           profitAtSale:
-            (existingItem.quantity + quantity) * salePrice -
-            (existingItem.quantity + quantity) * (product.purchasePrice ?? 0),
+            newQuantity * salePrice -
+            newQuantity * (product.purchasePrice ?? 0),
           markupAtSale:
             product.purchasePrice && product.purchasePrice > 0
               ? salePrice / product.purchasePrice
               : null,
-        } as any,
+        },
       });
     } else {
       await this.prisma.saleItem.create({
@@ -1147,7 +1148,7 @@ export class SalesService {
             product.purchasePrice && product.purchasePrice > 0
               ? salePrice / product.purchasePrice
               : null,
-        } as any,
+        },
       });
     }
 
@@ -1213,7 +1214,7 @@ export class SalesService {
       throw new BadRequestException('quantity must be greater than 0');
     }
 
-    const salePrice = this.toNumber(body.sale_price) ?? item.salePrice;
+    const salePrice = this.toNumber(body.sale_price) ?? Number(item.salePrice);
     const product = item.productId
       ? await this.prisma.product.findFirst({
           where: this.buildProductScope(
@@ -1239,7 +1240,7 @@ export class SalesService {
         profitAtSale: quantity * salePrice - quantity * purchasePrice,
         markupAtSale:
           purchasePrice > 0 ? salePrice / purchasePrice : null,
-      } as any,
+      },
     });
 
     await this.recalculateSale(id);
@@ -1307,7 +1308,7 @@ export class SalesService {
       data: {
         clientId: client.id,
         clientName: this.buildClientDisplayName(client),
-      } as any,
+      },
     });
 
     return this.findDraft(id, authorization);
@@ -1413,7 +1414,7 @@ export class SalesService {
           branchCode,
           paidAt: new Date(),
           ...(saleComment ? { comment: saleComment } : {}),
-        } as any,
+        },
       });
       await this.createDebtForFinalizedSale(tx, persistedSale, body, context);
       await this.refreshClientSalesAggregates(
@@ -1430,11 +1431,11 @@ export class SalesService {
       });
     });
 
-    this.telegramService.notifySale(updatedSale as any).catch((err) =>
+    this.telegramService.notifySale(updatedSale).catch((err) =>
       this.logger.error('Telegram notifySale failed', err),
     );
 
-    return this.toSaleListItem(updatedSale as any, context);
+    return this.toSaleListItem(updatedSale, context);
   }
 
   async parkDraft(
@@ -1472,7 +1473,7 @@ export class SalesService {
           this.optionalString(body.note) ??
           (sale as any).parkNote ??
           null,
-      } as any,
+      },
       include: {
         user: true,
         items: true,
@@ -1484,7 +1485,7 @@ export class SalesService {
       return {
         success: true,
         action: 'drafted',
-        sale: this.toDraftResponse(updatedSale as any),
+        sale: this.toDraftResponse(updatedSale),
       };
     }
 
@@ -1494,7 +1495,7 @@ export class SalesService {
     );
 
     return {
-      parked_sale: this.toDraftResponse(updatedSale as any),
+      parked_sale: this.toDraftResponse(updatedSale),
       new_draft: this.toDraftSummary(newDraft),
     };
   }
@@ -1582,7 +1583,7 @@ export class SalesService {
     const childSalesCount = await this.prisma.sale.count({
       where: {
         parentSaleId: sale.id,
-      } as any,
+      },
     });
 
     if (childSalesCount > 0) {
@@ -1744,14 +1745,15 @@ export class SalesService {
         );
       }
 
+      const originalSalePrice = Number(originalItem.salePrice);
       normalizedItems.push({
         productId,
         name: originalItem.name,
         barcode: originalItem.barcode,
         sku: originalItem.sku,
         quantity,
-        salePrice: originalItem.salePrice,
-        lineTotal: Number((quantity * originalItem.salePrice).toFixed(2)),
+        salePrice: originalSalePrice,
+        lineTotal: Number((quantity * originalSalePrice).toFixed(2)),
       });
     }
 
@@ -1858,14 +1860,14 @@ export class SalesService {
       where: {
         parentSaleId: originalSale.id,
         saleType: 'return',
-      } as any,
+      },
       include: {
         items: true,
       },
     });
 
     const returnedMap = new Map<number, number>();
-    for (const returnSale of returns as any[]) {
+    for (const returnSale of returns) {
       for (const item of returnSale.items) {
         if (!item.productId) {
           continue;
@@ -1873,7 +1875,7 @@ export class SalesService {
 
         returnedMap.set(
           item.productId,
-          (returnedMap.get(item.productId) ?? 0) + item.quantity,
+          (returnedMap.get(item.productId) ?? 0) + Number(item.quantity),
         );
       }
     }
@@ -1886,7 +1888,7 @@ export class SalesService {
 
       returnableMap.set(
         item.productId,
-        item.quantity - (returnedMap.get(item.productId) ?? 0),
+        Number(item.quantity) - (returnedMap.get(item.productId) ?? 0),
       );
     }
 
@@ -1945,7 +1947,7 @@ export class SalesService {
             finalPrice: item.lineTotal,
           })),
         },
-      } as any,
+      },
       include: {
         user: true,
         items: true,
@@ -2186,7 +2188,7 @@ export class SalesService {
     const childSales = await this.prisma.sale.findMany({
       where: {
         parentSaleId: saleId,
-      } as any,
+      },
       include: {
         items: true,
       },
@@ -2195,7 +2197,7 @@ export class SalesService {
     const returnedMap = new Map<number, number>();
     let hasExchange = false;
 
-    for (const childSale of childSales as any[]) {
+    for (const childSale of childSales) {
       if (childSale.saleType === 'exchange') {
         hasExchange = true;
       }
@@ -2211,7 +2213,7 @@ export class SalesService {
 
         returnedMap.set(
           item.productId,
-          (returnedMap.get(item.productId) ?? 0) + item.quantity,
+          (returnedMap.get(item.productId) ?? 0) + Number(item.quantity),
         );
       }
     }
@@ -2229,7 +2231,7 @@ export class SalesService {
         hasReturnedItems = true;
       }
 
-      if (returnedQuantity < item.quantity) {
+      if (returnedQuantity < Number(item.quantity)) {
         fullyReturned = false;
       }
     }
@@ -2263,9 +2265,12 @@ export class SalesService {
       throw new NotFoundException('Sale not found');
     }
 
-    const total = sale.items.reduce((sum, item) => sum + item.lineTotal, 0);
-    const percentDiscount = (total * sale.discountPercent) / 100;
-    const flatDiscount = sale.discountAmount;
+    const total = sale.items.reduce(
+      (sum, item) => sum + Number(item.lineTotal),
+      0,
+    );
+    const percentDiscount = (total * Number(sale.discountPercent)) / 100;
+    const flatDiscount = Number(sale.discountAmount);
     const payableTotal = Math.max(0, total - percentDiscount - flatDiscount);
 
     await this.prisma.sale.update({
@@ -2301,15 +2306,15 @@ export class SalesService {
         where: { userId: sellerId },
       }));
     const retailTotal = sale.items.reduce(
-      (sum, item) => sum + item.lineTotal,
+      (sum, item) => sum + Number(item.lineTotal),
       0,
     );
-    const flatDiscount = sale.discountAmount || 0;
-    const percentDiscount = sale.discountPercent || 0;
+    const flatDiscount = Number(sale.discountAmount) || 0;
+    const percentDiscount = Number(sale.discountPercent) || 0;
 
-    for (const item of sale.items as any[]) {
+    for (const item of sale.items) {
       const retailPriceAtSale = Number(
-        item.lineTotal || item.quantity * item.salePrice || 0,
+        item.lineTotal || Number(item.quantity) * Number(item.salePrice) || 0,
       );
       const percentPart = retailPriceAtSale * (percentDiscount / 100);
       const flatPart =
@@ -2339,7 +2344,7 @@ export class SalesService {
       }
 
       const supplyPriceAtSale = Number(
-        (unitSupplyPrice * item.quantity).toFixed(2),
+        (unitSupplyPrice * Number(item.quantity)).toFixed(2),
       );
       const profitAtSale = Number((finalPrice - supplyPriceAtSale).toFixed(2));
       const markupAtSale =
@@ -2367,13 +2372,13 @@ export class SalesService {
           profitAtSale,
           markupAtSale,
           sellerBonusAmount,
-        } as any,
+        },
       });
     }
   }
 
   private async writeOffSaleItemsFromStock(
-    sale: {
+    saleInput: {
       id: number;
       number: string;
       companyId?: string | null;
@@ -2381,12 +2386,20 @@ export class SalesService {
       branchCode: string | null;
       items: {
         productId: number | null;
-        quantity: number;
-        salePrice: number;
+        quantity: Prisma.Decimal | number;
+        salePrice: Prisma.Decimal | number;
       }[];
     },
     branchCodeOverride?: string | null,
   ) {
+    const sale = {
+      ...saleInput,
+      items: saleInput.items.map((item) => ({
+        ...item,
+        quantity: Number(item.quantity),
+        salePrice: Number(item.salePrice),
+      })),
+    };
     const branchCode = branchCodeOverride ?? sale.branchCode;
     if (!branchCode) {
       return;
@@ -2413,6 +2426,12 @@ export class SalesService {
       return;
     }
 
+    const lowStockSettings = await this.telegramService.getLowStockThresholdSettings();
+    const lowStockCrossings: Array<{
+      productId: number;
+      quantity: number;
+    }> = [];
+
     await this.prisma.$transaction(async (tx) => {
       for (const item of sale.items) {
         if (!item.productId) {
@@ -2429,12 +2448,31 @@ export class SalesService {
         if (stock) {
           const beforeQuantity = stock.quantity;
           const afterQuantity = stock.quantity - item.quantity;
+          const crossedBelow =
+            lowStockSettings.threshold > 0 &&
+            beforeQuantity >= lowStockSettings.threshold &&
+            afterQuantity < lowStockSettings.threshold &&
+            !stock.lowStockNotifiedAt;
+          const crossedAbove =
+            lowStockSettings.threshold > 0 &&
+            afterQuantity >= lowStockSettings.threshold &&
+            stock.lowStockNotifiedAt;
+
+          if (crossedBelow) {
+            lowStockCrossings.push({
+              productId: item.productId,
+              quantity: afterQuantity,
+            });
+          }
+
           await tx.productStock.update({
             where: { id: stock.id },
             data: {
               quantity: {
                 decrement: item.quantity,
               },
+              ...(crossedBelow ? { lowStockNotifiedAt: new Date() } : {}),
+              ...(crossedAbove ? { lowStockNotifiedAt: null } : {}),
             },
           });
 
@@ -2509,9 +2547,40 @@ export class SalesService {
         });
       }
     });
+
+    if (lowStockSettings.enabled && lowStockCrossings.length) {
+      const products = await this.prisma.product.findMany({
+        where: { id: { in: lowStockCrossings.map((c) => c.productId) } },
+        select: { id: true, name: true, sku: true, barcode: true },
+      });
+      const productById = new Map(products.map((p) => [p.id, p]));
+
+      await Promise.all(
+        lowStockCrossings.map((crossing) => {
+          const product = productById.get(crossing.productId);
+          if (!product) {
+            return Promise.resolve();
+          }
+
+          return this.telegramService
+            .notifyLowStock({
+              companyId,
+              branchCode,
+              productName: product.name,
+              sku: product.sku,
+              barcode: product.barcode,
+              quantity: crossing.quantity,
+              threshold: lowStockSettings.threshold,
+            })
+            .catch((err) =>
+              this.logger.error('Telegram notifyLowStock failed', err),
+            );
+        }),
+      );
+    }
   }
 
-  private async restoreSaleStock(sale: {
+  private async restoreSaleStock(saleInput: {
     id?: number;
     number?: string;
     companyId?: string | null;
@@ -2519,13 +2588,21 @@ export class SalesService {
     branchCode: string | null;
     items: Array<{
       productId: number | null;
-      quantity: number;
-      salePrice: number;
+      quantity: Prisma.Decimal | number;
+      salePrice: Prisma.Decimal | number;
       product?: {
         purchasePrice: number | null;
       } | null;
     }>;
   }) {
+    const sale = {
+      ...saleInput,
+      items: saleInput.items.map((item) => ({
+        ...item,
+        quantity: Number(item.quantity),
+        salePrice: Number(item.salePrice),
+      })),
+    };
     const branchCode = sale.branchCode;
     if (!branchCode) {
       return;
@@ -2892,9 +2969,9 @@ export class SalesService {
       number: string;
       status?: string;
       parkNote?: string | null;
-      discountPercent: number;
-      discountAmount: number;
-      payableTotal: number;
+      discountPercent: Prisma.Decimal | number;
+      discountAmount: Prisma.Decimal | number;
+      payableTotal: Prisma.Decimal | number;
       clientId?: string | null;
       clientName?: string | null;
     },
@@ -2908,9 +2985,9 @@ export class SalesService {
       status: sale.status ?? 'draft',
       park_status: sale.status === 'parked' ? 'parked' : '',
       park_note: sale.parkNote ?? '',
-      discount_percent: sale.discountPercent,
-      discount_amount: sale.discountAmount,
-      payable_total: sale.payableTotal,
+      discount_percent: Number(sale.discountPercent),
+      discount_amount: Number(sale.discountAmount),
+      payable_total: Number(sale.payableTotal),
       client_id: sale.clientId ?? null,
       customer_id: sale.clientId ?? '',
       client_name: sale.clientName ?? null,
@@ -2927,18 +3004,18 @@ export class SalesService {
       parkNote?: string | null;
       clientId?: string | null;
       clientName?: string | null;
-      discountPercent: number;
-      discountAmount: number;
-      payableTotal: number;
-      total: number;
+      discountPercent: Prisma.Decimal | number;
+      discountAmount: Prisma.Decimal | number;
+      payableTotal: Prisma.Decimal | number;
+      total: Prisma.Decimal | number;
       items: {
         id: number;
         productId: number | null;
         name: string;
-        salePrice: number;
+        salePrice: Prisma.Decimal | number;
         barcode: string | null;
         sku: string | null;
-        quantity: number;
+        quantity: Prisma.Decimal | number;
         product?: {
           id: number;
           unit?: string | null;
@@ -2956,10 +3033,10 @@ export class SalesService {
       status: sale.status,
       park_status: sale.status === 'parked' ? 'parked' : '',
       park_note: sale.parkNote ?? '',
-      discount_percent: sale.discountPercent,
-      discount_amount: sale.discountAmount,
-      payable_total: sale.payableTotal,
-      total: sale.total,
+      discount_percent: Number(sale.discountPercent),
+      discount_amount: Number(sale.discountAmount),
+      payable_total: Number(sale.payableTotal),
+      total: Number(sale.total),
       client_id: sale.clientId ?? null,
       customer_id: sale.clientId ?? '',
       client_name: sale.clientName ?? null,
@@ -2983,10 +3060,10 @@ export class SalesService {
               ? { id: item.productId }
               : null,
         name: item.name,
-        sale_price: item.salePrice,
+        sale_price: Number(item.salePrice),
         barcode: item.barcode,
         sku: item.sku,
-        quantity: item.quantity,
+        quantity: Number(item.quantity),
       })),
     };
   }
@@ -3000,9 +3077,9 @@ export class SalesService {
       createdAt: Date;
       status: string;
       parkNote?: string | null;
-      payableTotal: number;
-      total: number;
-      discountAmount: number;
+      payableTotal: Prisma.Decimal | number;
+      total: Prisma.Decimal | number;
+      discountAmount: Prisma.Decimal | number;
       clientId?: string | null;
       paymentMethod: string | null;
       clientName: string | null;
@@ -3013,8 +3090,8 @@ export class SalesService {
         id: number;
         productId: number | null;
         name: string;
-        salePrice: number;
-        quantity: number;
+        salePrice: Prisma.Decimal | number;
+        quantity: Prisma.Decimal | number;
         barcode: string | null;
         sku: string | null;
       }[];
@@ -3040,6 +3117,9 @@ export class SalesService {
     const payment = sale.paymentMethod
       ? paymentTypeLookup?.get(sale.paymentMethod)
       : undefined;
+    const payableTotal = Number(sale.payableTotal);
+    const total = Number(sale.total);
+    const discountAmount = Number(sale.discountAmount);
 
     return {
       id: sale.id,
@@ -3051,12 +3131,12 @@ export class SalesService {
       status: sale.status,
       park_status: sale.status === 'parked' ? 'parked' : '',
       park_note: sale.parkNote ?? '',
-      payable_total: sale.payableTotal,
-      total: sale.total,
-      amount: sale.payableTotal,
-      grand_total: sale.payableTotal,
-      discount_amount: sale.discountAmount,
-      discount: sale.discountAmount,
+      payable_total: payableTotal,
+      total: total,
+      amount: payableTotal,
+      grand_total: payableTotal,
+      discount_amount: discountAmount,
+      discount: discountAmount,
       seller_name: sellerName,
       shop_id: shop?.shop_id ?? sale.branchCode,
       branch_title: shop?.shop_name ?? sale.branchCode,
@@ -3101,16 +3181,16 @@ export class SalesService {
         id: item.id,
         product_id: item.productId,
         name: item.name,
-        sale_price: item.salePrice,
+        sale_price: Number(item.salePrice),
         barcode: item.barcode,
         sku: item.sku,
-        quantity: item.quantity,
+        quantity: Number(item.quantity),
       })),
     };
   }
 
   private async toV2OrderResponse(
-    sale: {
+    saleInput: {
       id: number;
       number: string;
       saleType?: string;
@@ -3121,10 +3201,10 @@ export class SalesService {
       createdAt: Date;
       updatedAt: Date;
       isDraft: boolean;
-      discountPercent: number;
-      total: number;
-      payableTotal: number;
-      discountAmount: number;
+      discountPercent: Prisma.Decimal | number;
+      total: Prisma.Decimal | number;
+      payableTotal: Prisma.Decimal | number;
+      discountAmount: Prisma.Decimal | number;
       clientId?: string | null;
       clientName?: string | null;
       paymentMethod: string | null;
@@ -3135,11 +3215,11 @@ export class SalesService {
         name: string;
         sku: string | null;
         barcode: string | null;
-        quantity: number;
-        salePrice: number;
-        lineTotal: number;
-        discountAmount?: number;
-        finalPrice?: number;
+        quantity: Prisma.Decimal | number;
+        salePrice: Prisma.Decimal | number;
+        lineTotal: Prisma.Decimal | number;
+        discountAmount?: Prisma.Decimal | number | null;
+        finalPrice?: Prisma.Decimal | number | null;
         product: {
           id: number;
           name: string;
@@ -3164,6 +3244,22 @@ export class SalesService {
     context?: any,
     shopLookup?: Map<string, { shop_id: string; shop_name: string }>,
   ) {
+    const sale = {
+      ...saleInput,
+      discountPercent: Number(saleInput.discountPercent),
+      total: Number(saleInput.total),
+      payableTotal: Number(saleInput.payableTotal),
+      discountAmount: Number(saleInput.discountAmount),
+      items: saleInput.items.map((item) => ({
+        ...item,
+        quantity: Number(item.quantity),
+        salePrice: Number(item.salePrice),
+        lineTotal: Number(item.lineTotal),
+        discountAmount:
+          item.discountAmount != null ? Number(item.discountAmount) : undefined,
+        finalPrice: item.finalPrice != null ? Number(item.finalPrice) : undefined,
+      })),
+    };
     const shop = this.resolveShopByBranchCode(
       sale.branchCode ?? '',
       shopLookup,
@@ -3714,11 +3810,11 @@ export class SalesService {
   }
 
   private getSignedSaleAmount(sale: {
-    payableTotal?: number | null;
-    total?: number | null;
+    payableTotal?: Prisma.Decimal | number | null;
+    total?: Prisma.Decimal | number | null;
     saleType?: string;
   }) {
-    const amount = sale.payableTotal || sale.total || 0;
+    const amount = Number(sale.payableTotal) || Number(sale.total) || 0;
     return sale.saleType === 'return' ? -amount : amount;
   }
 
@@ -3935,8 +4031,8 @@ export class SalesService {
       companyId?: string | null;
       branchCode?: string | null;
       clientId?: string | null;
-      payableTotal?: number | null;
-      total?: number | null;
+      payableTotal?: Prisma.Decimal | number | null;
+      total?: Prisma.Decimal | number | null;
     },
     body: Record<string, unknown>,
     context?: {
@@ -3944,7 +4040,10 @@ export class SalesService {
       companyId?: string | null;
     } | null,
   ) {
-    const debtInput = this.parseDebtPayload(body, sale.payableTotal || sale.total || 0);
+    const debtInput = this.parseDebtPayload(
+      body,
+      Number(sale.payableTotal) || Number(sale.total) || 0,
+    );
     if (!debtInput) {
       return null;
     }
@@ -4012,7 +4111,7 @@ export class SalesService {
           clientId,
           isDraft: false,
           saleType: { in: ['sale', 'exchange'] },
-        } as any,
+        },
       }),
       tx.sale.aggregate({
         where: {
@@ -4020,7 +4119,7 @@ export class SalesService {
           clientId,
           isDraft: false,
           saleType: { in: ['sale', 'exchange'] },
-        } as any,
+        },
         _sum: {
           payableTotal: true,
         },

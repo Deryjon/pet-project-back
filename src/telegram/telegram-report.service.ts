@@ -344,8 +344,12 @@ export class TelegramReportService {
     this.logger.log(`Report sent to ${subscribers.length} subscribers for company ${companyId}`);
   }
 
-  private async fetchSales(companyId: string, start: Date, end: Date) {
-    return this.prisma.sale.findMany({
+  private async fetchSales(
+    companyId: string,
+    start: Date,
+    end: Date,
+  ): Promise<SaleWithItems[]> {
+    const sales = await this.prisma.sale.findMany({
       where: { companyId, status: 'paid', paidAt: { gte: start, lt: end } },
       select: {
         saleType: true,
@@ -356,6 +360,19 @@ export class TelegramReportService {
         clientId: true,
         items: { select: { quantity: true, profitAtSale: true } },
       },
-    }) as Promise<SaleWithItems[]>;
+    });
+
+    return sales.map((sale) => ({
+      saleType: sale.saleType,
+      branchCode: sale.branchCode,
+      payableTotal: Number(sale.payableTotal),
+      total: Number(sale.total),
+      userId: sale.userId,
+      clientId: sale.clientId,
+      items: sale.items.map((item) => ({
+        quantity: Number(item.quantity),
+        profitAtSale: Number(item.profitAtSale),
+      })),
+    }));
   }
 }

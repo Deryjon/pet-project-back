@@ -43,7 +43,7 @@ export class SellerAnalyticsService {
     companyId: string,
     period: AnalyticsPeriod,
   ): Promise<SellerAnalyticsReport[]> {
-    const sales = (await this.prisma.sale.findMany({
+    const rawSales = await this.prisma.sale.findMany({
       where: {
         companyId,
         status: 'paid',
@@ -66,7 +66,21 @@ export class SellerAnalyticsService {
           },
         },
       },
-    })) as SaleWithItems[];
+    });
+
+    const sales: SaleWithItems[] = rawSales.map((sale) => ({
+      userId: sale.userId,
+      branchCode: sale.branchCode,
+      total: Number(sale.total),
+      payableTotal: Number(sale.payableTotal),
+      items: sale.items.map((item) => ({
+        name: item.name,
+        quantity: Number(item.quantity),
+        lineTotal: Number(item.lineTotal),
+        profitAtSale: Number(item.profitAtSale),
+        product: item.product,
+      })),
+    }));
 
     if (!sales.length) return [];
 

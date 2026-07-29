@@ -994,15 +994,16 @@ model ProductSupplier {
 }
 
 model ProductStock {
-  id            Int      @id @default(autoincrement())
-  productId     Int
-  branchCode    String
-  quantity      Float    @default(0)
-  purchasePrice Float?
-  salePrice     Float?
-  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                 Int       @id @default(autoincrement())
+  productId          Int
+  branchCode         String
+  quantity           Float     @default(0)
+  purchasePrice      Float?
+  salePrice          Float?
+  lowStockNotifiedAt DateTime?
+  product            Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 }
 
 model InventorySession {
@@ -1094,10 +1095,10 @@ model Sale {
   number          String     @unique
   saleType        String     @default("sale")
   status          String     @default("draft")
-  discountPercent Float      @default(0)
-  discountAmount  Float      @default(0)
-  payableTotal    Float      @default(0)
-  total           Float      @default(0)
+  discountPercent Decimal    @default(0) @db.Decimal(12, 2)
+  discountAmount  Decimal    @default(0) @db.Decimal(12, 2)
+  payableTotal    Decimal    @default(0) @db.Decimal(12, 2)
+  total           Decimal    @default(0) @db.Decimal(12, 2)
   paymentMethod   String?
   extraPayments   Json?
   clientId        String?
@@ -1137,16 +1138,16 @@ model SaleItem {
   name      String
   barcode   String?
   sku       String?
-  quantity  Float
-  salePrice Float
-  lineTotal Float
-  retailPriceAtSale Float      @default(0)
-  discountAmount    Float      @default(0)
-  finalPrice        Float      @default(0)
-  supplyPriceAtSale Float      @default(0)
-  profitAtSale      Float      @default(0)
-  markupAtSale      Float?
-  sellerBonusAmount Float      @default(0)
+  quantity  Decimal  @db.Decimal(12, 3)
+  salePrice Decimal  @db.Decimal(12, 2)
+  lineTotal Decimal  @db.Decimal(12, 2)
+  retailPriceAtSale Decimal    @default(0) @db.Decimal(12, 2)
+  discountAmount    Decimal    @default(0) @db.Decimal(12, 2)
+  finalPrice        Decimal    @default(0) @db.Decimal(12, 2)
+  supplyPriceAtSale Decimal    @default(0) @db.Decimal(12, 2)
+  profitAtSale      Decimal    @default(0) @db.Decimal(12, 2)
+  markupAtSale      Decimal?   @db.Decimal(12, 2)
+  sellerBonusAmount Decimal    @default(0) @db.Decimal(12, 2)
   sale      Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
   product   Product? @relation(fields: [productId], references: [id])
   seller    User?    @relation("SaleItemSeller", fields: [sellerId], references: [id], onDelete: SetNull)
@@ -1212,6 +1213,7 @@ model TelegramSubscriber {
   notifyOnSale   Boolean  @default(true)
   notifySellerAnalytics Boolean @default(false)
   notifyOnLogin  Boolean  @default(false)
+  notifyOnLowStock Boolean @default(false)
   branchCode     String?
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   linkedAt       DateTime @default(now())
@@ -1220,6 +1222,7 @@ model TelegramSubscriber {
   @@index([companyId, notifyOnSale])
   @@index([companyId, notifySellerAnalytics])
   @@index([companyId, notifyOnLogin])
+  @@index([companyId, notifyOnLowStock])
 }
 
 model TelegramLinkToken {

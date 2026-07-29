@@ -64,17 +64,17 @@ export class ReportsRepository {
         sh.name AS shop_name,
         si.id AS sale_item_id,
         si."productId" AS product_id,
-        si.quantity,
-        COALESCE(si."retailPriceAtSale", si."lineTotal", (si."salePrice" * si.quantity)) AS retail_price_at_sale,
-        COALESCE(si."discountAmount", 0) AS discount_amount,
-        COALESCE(si."finalPrice", si."lineTotal", (si."salePrice" * si.quantity)) AS final_price,
-        COALESCE(si."supplyPriceAtSale", (COALESCE(p."purchasePrice", 0) * si.quantity)) AS supply_price_at_sale,
+        si.quantity::float8 AS quantity,
+        COALESCE(si."retailPriceAtSale", si."lineTotal", (si."salePrice" * si.quantity))::float8 AS retail_price_at_sale,
+        COALESCE(si."discountAmount", 0)::float8 AS discount_amount,
+        COALESCE(si."finalPrice", si."lineTotal", (si."salePrice" * si.quantity))::float8 AS final_price,
+        COALESCE(si."supplyPriceAtSale", (COALESCE(p."purchasePrice", 0) * si.quantity))::float8 AS supply_price_at_sale,
         COALESCE(
           si."profitAtSale",
           COALESCE(si."finalPrice", si."lineTotal", (si."salePrice" * si.quantity)) -
           COALESCE(si."supplyPriceAtSale", (COALESCE(p."purchasePrice", 0) * si.quantity))
-        ) AS profit_at_sale,
-        COALESCE(si."sellerBonusAmount", 0) AS seller_bonus_amount
+        )::float8 AS profit_at_sale,
+        COALESCE(si."sellerBonusAmount", 0)::float8 AS seller_bonus_amount
       FROM "SaleItem" si
       INNER JOIN "Sale" s ON s.id = si."saleId"
       LEFT JOIN "User" u ON u.id = COALESCE(si."sellerId", s."userId")
@@ -97,13 +97,13 @@ export class ReportsRepository {
         COALESCE(u."lastName", '') AS seller_last_name,
         COALESCE(sh.name, s."branchCode", '') AS shop_name,
         COUNT(DISTINCT s.id) AS transactions_count,
-        SUM(CASE WHEN s."saleType" = 'return' THEN -si.quantity ELSE si.quantity END) AS products_sold,
-        SUM(CASE WHEN s."saleType" = 'return' THEN -COALESCE(si."retailPriceAtSale", si."lineTotal", (si."salePrice" * si.quantity)) ELSE COALESCE(si."retailPriceAtSale", si."lineTotal", (si."salePrice" * si.quantity)) END) AS gross_sales,
-        SUM(CASE WHEN s."saleType" = 'return' THEN -COALESCE(si."finalPrice", si."lineTotal", (si."salePrice" * si.quantity)) ELSE COALESCE(si."finalPrice", si."lineTotal", (si."salePrice" * si.quantity)) END) AS net_gross_sales,
-        SUM(CASE WHEN s."saleType" = 'return' THEN -COALESCE(si."profitAtSale", COALESCE(si."finalPrice", si."lineTotal", (si."salePrice" * si.quantity)) - COALESCE(si."supplyPriceAtSale", 0)) ELSE COALESCE(si."profitAtSale", COALESCE(si."finalPrice", si."lineTotal", (si."salePrice" * si.quantity)) - COALESCE(si."supplyPriceAtSale", 0)) END) AS gross_profit,
-        SUM(CASE WHEN s."saleType" = 'return' THEN -COALESCE(si."discountAmount", 0) ELSE COALESCE(si."discountAmount", 0) END) AS discount_sum,
+        SUM(CASE WHEN s."saleType" = 'return' THEN -si.quantity ELSE si.quantity END)::float8 AS products_sold,
+        SUM(CASE WHEN s."saleType" = 'return' THEN -COALESCE(si."retailPriceAtSale", si."lineTotal", (si."salePrice" * si.quantity)) ELSE COALESCE(si."retailPriceAtSale", si."lineTotal", (si."salePrice" * si.quantity)) END)::float8 AS gross_sales,
+        SUM(CASE WHEN s."saleType" = 'return' THEN -COALESCE(si."finalPrice", si."lineTotal", (si."salePrice" * si.quantity)) ELSE COALESCE(si."finalPrice", si."lineTotal", (si."salePrice" * si.quantity)) END)::float8 AS net_gross_sales,
+        SUM(CASE WHEN s."saleType" = 'return' THEN -COALESCE(si."profitAtSale", COALESCE(si."finalPrice", si."lineTotal", (si."salePrice" * si.quantity)) - COALESCE(si."supplyPriceAtSale", 0)) ELSE COALESCE(si."profitAtSale", COALESCE(si."finalPrice", si."lineTotal", (si."salePrice" * si.quantity)) - COALESCE(si."supplyPriceAtSale", 0)) END)::float8 AS gross_profit,
+        SUM(CASE WHEN s."saleType" = 'return' THEN -COALESCE(si."discountAmount", 0) ELSE COALESCE(si."discountAmount", 0) END)::float8 AS discount_sum,
         SUM(CASE WHEN s."saleType" = 'return' THEN 1 ELSE 0 END) AS returns_count,
-        SUM(CASE WHEN s."saleType" = 'return' THEN -COALESCE(si."sellerBonusAmount", 0) ELSE COALESCE(si."sellerBonusAmount", 0) END) AS bonus_amount
+        SUM(CASE WHEN s."saleType" = 'return' THEN -COALESCE(si."sellerBonusAmount", 0) ELSE COALESCE(si."sellerBonusAmount", 0) END)::float8 AS bonus_amount
       FROM "SaleItem" si
       INNER JOIN "Sale" s ON s.id = si."saleId"
       LEFT JOIN "User" u ON u.id = COALESCE(si."sellerId", s."userId")

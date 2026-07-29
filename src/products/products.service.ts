@@ -10,6 +10,10 @@ import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import { extname, join } from 'path';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
+import {
+  normalizeProductPhotoForStorage,
+  resolveProductPhotoUrl,
+} from '../common/product-photo.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 
@@ -680,7 +684,7 @@ export class ProductsService {
 
     return {
       message: 'Product photo uploaded',
-      url: this.buildProductPhotoUrl(fileName),
+      url: `/uploads/products/${fileName}`,
     };
   }
 
@@ -3119,7 +3123,7 @@ export class ProductsService {
     const name = this.requireString(body.name, 'name');
     const sku = this.optionalString(body.sku);
     const barcode = this.optionalString(body.barcode);
-    const photo = this.normalizeProductPhotoValue(this.optionalString(body.photo));
+    const photo = normalizeProductPhotoForStorage(this.optionalString(body.photo));
     const productType = this.optionalString(body.product_type);
     const variantType = this.optionalString(body.variant_type);
     const unit = this.optionalString(body.unit);
@@ -3381,7 +3385,7 @@ export class ProductsService {
         name,
         sku,
         barcode,
-        photo: this.normalizeProductPhotoValue(imageUrl),
+        photo: imageUrl,
         productType,
         variantType,
         unit,
@@ -3683,8 +3687,8 @@ export class ProductsService {
         sku: this.optionalString(body.sku) ?? existingProduct.sku,
         barcode: this.optionalString(body.barcode) ?? existingProduct.barcode,
         photo:
-          this.normalizeProductPhotoValue(this.extractFirstImage(body.images)) ??
-          this.normalizeProductPhotoValue(existingProduct.photo),
+          this.extractFirstImage(body.images) ??
+          normalizeProductPhotoForStorage(existingProduct.photo),
         productType,
         variantType: isVariative ? 'variative' : 'simple',
         unit:
@@ -8097,7 +8101,7 @@ export class ProductsService {
 
       soldByBranchCode.set(
         branchCode,
-        (soldByBranchCode.get(branchCode) ?? 0) + saleItem.quantity,
+        (soldByBranchCode.get(branchCode) ?? 0) + Number(saleItem.quantity),
       );
     }
 
@@ -8114,7 +8118,7 @@ export class ProductsService {
     );
 
     return {
-      sold: saleItems.reduce((sum, item) => sum + item.quantity, 0),
+      sold: saleItems.reduce((sum, item) => sum + Number(item.quantity), 0),
       soldByBranchCode,
       movements: saleItems.map((saleItem) => {
         const branchCode = saleItem.sale.branchCode ?? '';
@@ -9801,11 +9805,11 @@ export class ProductsService {
 
     const firstImage = value[0];
     if (typeof firstImage === 'string') {
-      return this.normalizeProductPhotoValue(firstImage);
+      return normalizeProductPhotoForStorage(firstImage);
     }
 
     if (firstImage && typeof firstImage === 'object') {
-      return this.normalizeProductPhotoValue(
+      return normalizeProductPhotoForStorage(
         this.optionalString((firstImage as Record<string, unknown>).url),
       );
     }
@@ -9814,36 +9818,7 @@ export class ProductsService {
   }
 
   private normalizeProductPhotoValue(value: string | null | undefined) {
-    const src = String(value ?? '').trim();
-    if (!src) {
-      return undefined;
-    }
-
-    if (/^(https?:)?\/\//i.test(src) || src.startsWith('data:')) {
-      return src;
-    }
-
-    if (src.startsWith('/uploads/')) {
-      const origin =
-        process.env.APP_URL?.trim() ||
-        `http://localhost:${process.env.PORT?.trim() || '3001'}`;
-
-      return `${origin}${src}`;
-    }
-
-    if (!src.includes('/')) {
-      return this.buildProductPhotoUrl(src);
-    }
-
-    return src;
-  }
-
-  private buildProductPhotoUrl(fileName: string) {
-    const origin =
-      process.env.APP_URL?.trim() ||
-      `http://localhost:${process.env.PORT?.trim() || '3001'}`;
-
-    return `${origin}/uploads/products/${fileName}`;
+    return resolveProductPhotoUrl(value);
   }
 }
 

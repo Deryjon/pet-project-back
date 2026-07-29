@@ -11,6 +11,7 @@ import {
   Prisma,
 } from '@prisma/client';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
+import { resolveProductPhotoUrl } from '../common/product-photo.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 
@@ -506,7 +507,7 @@ export class ClientsService {
         product_id: key,
         product_name: item.product.name,
         barcode: item.product.barcode,
-        image_url: item.product.photo,
+        image_url: resolveProductPhotoUrl(item.product.photo) ?? null,
         purchase_count: 0,
         last_purchased_at: null,
       };

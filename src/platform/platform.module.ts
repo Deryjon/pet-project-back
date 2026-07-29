@@ -10,5 +10,6 @@ import { UsersModule } from '../users/users.module';
   imports: [ScheduleModule.forRoot(), UsersModule],
   controllers: [PlatformController],
   providers: [PlatformService, PlatformCronService, PlatformAdminGuard],
+  exports: [PlatformService],
 })
 export class PlatformModule {}
