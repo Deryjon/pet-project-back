@@ -28,7 +28,7 @@ function toRelativePath(value: string): string | null {
   return value.slice(markerIndex);
 }
 
-async function main() {
+async function fixProductPhotoUrls() {
   const candidates = await prisma.product.findMany({
     where: {
       photo: { contains: 'localhost' },
@@ -66,6 +66,74 @@ async function main() {
   );
 
   console.log(`\nUpdated ${changes.length} product(s) to relative photo paths.`);
+}
+
+// User.avatarUrl is stored (and served) as an absolute URL — see
+// buildAvatarUrl() in users.service.ts — unlike Product.photo it isn't
+// rebuilt from a relative path at read time, so the fix here replaces the
+// stale host with the current APP_URL rather than stripping it down to a
+// relative path.
+function toRebasedAvatarUrl(value: string, origin: string): string | null {
+  const markerIndex = value.indexOf(UPLOADS_MARKER);
+  if (markerIndex === -1) {
+    return null;
+  }
+
+  return `${origin}${value.slice(markerIndex)}`;
+}
+
+async function fixUserAvatarUrls() {
+  const origin = process.env.APP_URL?.trim();
+  if (!origin) {
+    console.log(
+      '\nAPP_URL is not set in this environment — skipping User.avatarUrl backfill ' +
+        '(nothing to rebase avatar URLs onto). Set APP_URL and re-run.',
+    );
+    return;
+  }
+
+  const candidates = await prisma.user.findMany({
+    where: {
+      avatarUrl: { contains: 'localhost' },
+    },
+    select: { id: true, firstName: true, lastName: true, avatarUrl: true },
+  });
+
+  console.log(`\nFound ${candidates.length} user(s) with a "localhost" avatarUrl`);
+
+  const changes: { id: number; before: string; after: string }[] = [];
+  for (const user of candidates) {
+    const before = user.avatarUrl ?? '';
+    const after = toRebasedAvatarUrl(before, origin);
+    if (after && after !== before) {
+      changes.push({ id: user.id, before, after });
+    }
+  }
+
+  for (const change of changes) {
+    console.log(`- user #${change.id}: "${change.before}" -> "${change.after}"`);
+  }
+
+  if (DRY_RUN || changes.length === 0) {
+    console.log(DRY_RUN ? 'Dry run — no changes written.' : 'Nothing to update.');
+    return;
+  }
+
+  await prisma.$transaction(
+    changes.map((change) =>
+      prisma.user.update({
+        where: { id: change.id },
+        data: { avatarUrl: change.after },
+      }),
+    ),
+  );
+
+  console.log(`Updated ${changes.length} user(s) avatarUrl to the current APP_URL.`);
+}
+
+async function main() {
+  await fixProductPhotoUrls();
+  await fixUserAvatarUrls();
 }
 
 main()

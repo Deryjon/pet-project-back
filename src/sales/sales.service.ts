@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   InternalServerErrorException,
   Injectable,
   Logger,
@@ -937,26 +938,39 @@ export class SalesService {
       'items',
     );
 
-    const returnSale = await this.createAdjustmentSale({
-      originalSale,
-      saleType: 'return',
-      status: 'returned',
-      items: returnItems,
-      sellerId,
-      paymentMethod:
-        this.optionalString(body.payment_method) ??
-        originalSale.paymentMethod ??
-        undefined,
-    });
+    const returnSale = await this.prisma.$transaction(async (tx) => {
+      const createdReturnSale = await this.createAdjustmentSale(
+        {
+          originalSale,
+          saleType: 'return',
+          status: 'returned',
+          items: returnItems,
+          sellerId,
+          paymentMethod:
+            this.optionalString(body.payment_method) ??
+            originalSale.paymentMethod ??
+            undefined,
+        },
+        tx,
+      );
 
-    await this.applyStockDelta(originalSale.branchCode, returnItems, 1, {
-      companyId: originalSale.companyId,
-      userId: sellerId ?? originalSale.userId,
-      externalId: returnSale.number,
-      movementType: 'RETURN',
+      await this.applyStockDelta(
+        originalSale.branchCode,
+        returnItems,
+        1,
+        {
+          companyId: originalSale.companyId,
+          userId: sellerId ?? originalSale.userId,
+          externalId: createdReturnSale.number,
+          movementType: 'RETURN',
+        },
+        tx,
+      );
+      await this.syncProductsQuantity(returnItems, tx);
+      await this.refreshBaseSaleStatus(originalSale.id, tx);
+
+      return createdReturnSale;
     });
-    await this.syncProductsQuantity(returnItems);
-    await this.refreshBaseSaleStatus(originalSale.id);
 
     return {
       success: true,
@@ -990,46 +1004,73 @@ export class SalesService {
       context,
     );
 
-    const returnSale = await this.createAdjustmentSale({
-      originalSale,
-      saleType: 'return',
-      status: 'returned',
-      items: returnItems,
-      sellerId,
-      paymentMethod:
-        this.optionalString(body.return_payment_method) ??
-        this.optionalString(body.payment_method) ??
-        originalSale.paymentMethod ??
-        undefined,
-    });
+    const { returnSale, exchangeSale } = await this.prisma.$transaction(
+      async (tx) => {
+        const createdReturnSale = await this.createAdjustmentSale(
+          {
+            originalSale,
+            saleType: 'return',
+            status: 'returned',
+            items: returnItems,
+            sellerId,
+            paymentMethod:
+              this.optionalString(body.return_payment_method) ??
+              this.optionalString(body.payment_method) ??
+              originalSale.paymentMethod ??
+              undefined,
+          },
+          tx,
+        );
 
-    const exchangeSale = await this.createAdjustmentSale({
-      originalSale,
-      saleType: 'exchange',
-      status: 'paid',
-      items: exchangeItems,
-      sellerId,
-      paymentMethod:
-        this.optionalString(body.exchange_payment_method) ??
-        this.optionalString(body.payment_method) ??
-        originalSale.paymentMethod ??
-        undefined,
-    });
+        const createdExchangeSale = await this.createAdjustmentSale(
+          {
+            originalSale,
+            saleType: 'exchange',
+            status: 'paid',
+            items: exchangeItems,
+            sellerId,
+            paymentMethod:
+              this.optionalString(body.exchange_payment_method) ??
+              this.optionalString(body.payment_method) ??
+              originalSale.paymentMethod ??
+              undefined,
+          },
+          tx,
+        );
 
-    await this.applyStockDelta(originalSale.branchCode, returnItems, 1, {
-      companyId: originalSale.companyId,
-      userId: sellerId ?? originalSale.userId,
-      externalId: returnSale.number,
-      movementType: 'RETURN',
-    });
-    await this.applyStockDelta(originalSale.branchCode, exchangeItems, -1, {
-      companyId: originalSale.companyId,
-      userId: sellerId ?? originalSale.userId,
-      externalId: exchangeSale.number,
-      movementType: 'SALE',
-    });
-    await this.syncProductsQuantity([...returnItems, ...exchangeItems]);
-    await this.refreshBaseSaleStatus(originalSale.id);
+        await this.applyStockDelta(
+          originalSale.branchCode,
+          returnItems,
+          1,
+          {
+            companyId: originalSale.companyId,
+            userId: sellerId ?? originalSale.userId,
+            externalId: createdReturnSale.number,
+            movementType: 'RETURN',
+          },
+          tx,
+        );
+        // Exchange items consume stock (multiplier -1) — this is the decrement
+        // that must roll back the whole exchange (including both adjustment
+        // sales just created above) if stock isn't actually available.
+        await this.applyStockDelta(
+          originalSale.branchCode,
+          exchangeItems,
+          -1,
+          {
+            companyId: originalSale.companyId,
+            userId: sellerId ?? originalSale.userId,
+            externalId: createdExchangeSale.number,
+            movementType: 'SALE',
+          },
+          tx,
+        );
+        await this.syncProductsQuantity([...returnItems, ...exchangeItems], tx);
+        await this.refreshBaseSaleStatus(originalSale.id, tx);
+
+        return { returnSale: createdReturnSale, exchangeSale: createdExchangeSale };
+      },
+    );
 
     return {
       success: true,
@@ -1895,29 +1936,32 @@ export class SalesService {
     return returnableMap;
   }
 
-  private async createAdjustmentSale(args: {
-    originalSale: any;
-    saleType: 'return' | 'exchange';
-    status: string;
-    items: Array<{
-      productId: number;
-      name: string;
-      barcode: string | null;
-      sku: string | null;
-      quantity: number;
-      salePrice: number;
-      lineTotal: number;
-    }>;
-    sellerId?: number;
-    paymentMethod?: string;
-  }) {
+  private async createAdjustmentSale(
+    args: {
+      originalSale: any;
+      saleType: 'return' | 'exchange';
+      status: string;
+      items: Array<{
+        productId: number;
+        name: string;
+        barcode: string | null;
+        sku: string | null;
+        quantity: number;
+        salePrice: number;
+        lineTotal: number;
+      }>;
+      sellerId?: number;
+      paymentMethod?: string;
+    },
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ) {
     const total = args.items.reduce((sum, item) => sum + item.lineTotal, 0);
     const paymentMethod = await this.resolvePaymentMethod(
       args.paymentMethod,
       args.originalSale.companyId,
     );
 
-    const createdSale = await this.prisma.sale.create({
+    const createdSale = await tx.sale.create({
       data: {
         companyId: args.originalSale.companyId ?? undefined,
         number: this.generateOrderNumber(),
@@ -1959,9 +2003,10 @@ export class SalesService {
       args.originalSale.branchCode ?? null,
       args.sellerId ?? args.originalSale.userId ?? null,
       args.originalSale.companyId ?? null,
+      tx,
     );
 
-    const sale = await this.prisma.sale.findUnique({
+    const sale = await tx.sale.findUnique({
       where: { id: createdSale.id },
       include: {
         user: true,
@@ -1986,6 +2031,7 @@ export class SalesService {
       externalId?: string | null;
       movementType?: 'SALE' | 'RETURN';
     },
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
   ) {
     if (!branchCode) {
       return;
@@ -1996,7 +2042,7 @@ export class SalesService {
     );
 
     for (const item of items) {
-      const stock = await this.prisma.productStock.findFirst({
+      const stock = await tx.productStock.findFirst({
         where: {
           productId: item.productId,
           branchCode,
@@ -2006,15 +2052,39 @@ export class SalesService {
       if (stock) {
         const beforeQuantity = stock.quantity;
         const afterQuantity = stock.quantity + item.quantity * multiplier;
-        await this.prisma.productStock.update({
-          where: { id: stock.id },
-          data: {
-            quantity: afterQuantity,
-          },
-        });
+
+        if (multiplier === -1) {
+          // Decrementing (e.g. consuming stock for a new exchange item) —
+          // guard atomically against a concurrent sale/exchange racing this
+          // one down below zero, instead of computing afterQuantity in JS
+          // and blindly writing it.
+          const updated = await tx.productStock.updateMany({
+            where: {
+              id: stock.id,
+              quantity: { gte: item.quantity },
+            },
+            data: {
+              quantity: { decrement: item.quantity },
+            },
+          });
+
+          if (updated.count === 0) {
+            throw new ConflictException(
+              `Недостаточно остатка по товару ${item.productId} на складе ${branchCode}`,
+            );
+          }
+        } else {
+          // Incrementing (restoring stock from a return) can't go negative,
+          // so no gte-guard is needed — just use the atomic increment
+          // operator instead of a computed absolute write.
+          await tx.productStock.update({
+            where: { id: stock.id },
+            data: { quantity: { increment: item.quantity } },
+          });
+        }
 
         if (shopId && meta?.companyId && meta?.userId && meta?.movementType) {
-          await this.createStockMovement(this.prisma, {
+          await this.createStockMovement(tx, {
             companyId: meta.companyId,
             shopId,
             productId: item.productId,
@@ -2032,7 +2102,7 @@ export class SalesService {
           });
         }
       } else {
-        const product = await this.prisma.product.findUnique({
+        const product = await tx.product.findUnique({
           where: { id: item.productId },
           select: {
             purchasePrice: true,
@@ -2040,7 +2110,7 @@ export class SalesService {
           },
         });
 
-        await this.prisma.productStock.create({
+        await tx.productStock.create({
           data: {
             productId: item.productId,
             branchCode,
@@ -2051,7 +2121,7 @@ export class SalesService {
         });
 
         if (shopId && meta?.companyId && meta?.userId && meta?.movementType) {
-          await this.createStockMovement(this.prisma, {
+          await this.createStockMovement(tx, {
             companyId: meta.companyId,
             shopId,
             productId: item.productId,
@@ -2072,11 +2142,14 @@ export class SalesService {
     }
   }
 
-  private async syncProductsQuantity(items: Array<{ productId: number }>) {
+  private async syncProductsQuantity(
+    items: Array<{ productId: number }>,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ) {
     const uniqueProductIds = [...new Set(items.map((item) => item.productId))];
 
     for (const productId of uniqueProductIds) {
-      const product = await this.prisma.product.findUnique({
+      const product = await tx.product.findUnique({
         where: { id: productId },
         include: { stocks: true },
       });
@@ -2085,7 +2158,7 @@ export class SalesService {
         continue;
       }
 
-      await this.prisma.product.update({
+      await tx.product.update({
         where: { id: productId },
         data: {
           quantity: product.stocks.reduce(
@@ -2173,8 +2246,11 @@ export class SalesService {
     });
   }
 
-  private async refreshBaseSaleStatus(saleId: number) {
-    const originalSale = await this.prisma.sale.findUnique({
+  private async refreshBaseSaleStatus(
+    saleId: number,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ) {
+    const originalSale = await tx.sale.findUnique({
       where: { id: saleId },
       include: {
         items: true,
@@ -2185,7 +2261,7 @@ export class SalesService {
       return;
     }
 
-    const childSales = await this.prisma.sale.findMany({
+    const childSales = await tx.sale.findMany({
       where: {
         parentSaleId: saleId,
       },
@@ -2245,7 +2321,7 @@ export class SalesService {
       }
     }
 
-    await this.prisma.sale.update({
+    await tx.sale.update({
       where: { id: saleId },
       data: {
         status,
@@ -2287,8 +2363,9 @@ export class SalesService {
     branchCode?: string | null,
     sellerId?: number | null,
     companyId?: string | null,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
   ) {
-    const sale = await this.prisma.sale.findUnique({
+    const sale = await tx.sale.findUnique({
       where: { id: saleId },
       include: {
         items: true,
@@ -2302,7 +2379,7 @@ export class SalesService {
     const effectiveBranchCode = branchCode ?? sale.branchCode;
     const sellerSettings =
       sellerId &&
-      (await (this.prisma as any).sellerSalarySettings?.findUnique?.({
+      (await (tx as any).sellerSalarySettings?.findUnique?.({
         where: { userId: sellerId },
       }));
     const retailTotal = sale.items.reduce(
@@ -2327,14 +2404,14 @@ export class SalesService {
       let unitSupplyPrice = 0;
       if (typeof item.productId === 'number') {
         const stock = effectiveBranchCode
-          ? await this.prisma.productStock.findFirst({
+          ? await tx.productStock.findFirst({
               where: {
                 productId: item.productId,
                 branchCode: effectiveBranchCode,
               },
             })
           : null;
-        const product = await this.prisma.product.findUnique({
+        const product = await tx.product.findUnique({
           where: { id: item.productId },
           select: {
             purchasePrice: true,
@@ -2361,7 +2438,7 @@ export class SalesService {
         ).toFixed(2),
       );
 
-      await this.prisma.saleItem.update({
+      await tx.saleItem.update({
         where: { id: item.id },
         data: {
           sellerId: sellerId ?? item.sellerId ?? undefined,
@@ -2458,15 +2535,11 @@ export class SalesService {
             afterQuantity >= lowStockSettings.threshold &&
             stock.lowStockNotifiedAt;
 
-          if (crossedBelow) {
-            lowStockCrossings.push({
-              productId: item.productId,
-              quantity: afterQuantity,
-            });
-          }
-
-          await tx.productStock.update({
-            where: { id: stock.id },
+          const updated = await tx.productStock.updateMany({
+            where: {
+              id: stock.id,
+              quantity: { gte: item.quantity },
+            },
             data: {
               quantity: {
                 decrement: item.quantity,
@@ -2475,6 +2548,19 @@ export class SalesService {
               ...(crossedAbove ? { lowStockNotifiedAt: null } : {}),
             },
           });
+
+          if (updated.count === 0) {
+            throw new ConflictException(
+              `Недостаточно остатка по товару ${item.productId} на складе ${branchCode}`,
+            );
+          }
+
+          if (crossedBelow) {
+            lowStockCrossings.push({
+              productId: item.productId,
+              quantity: afterQuantity,
+            });
+          }
 
           await this.createStockMovement(tx, {
             companyId,

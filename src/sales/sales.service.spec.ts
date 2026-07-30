@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { SalesService } from './sales.service';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
@@ -402,7 +403,7 @@ describe('SalesService money calculations', () => {
       purchasePrice?: number | null;
       salePrice?: number | null;
     }) {
-      const productStockUpdate = jest.fn();
+      const productStockUpdate = jest.fn().mockResolvedValue({ count: 1 });
       const stockMovementCreate = jest.fn();
       const notifyLowStock = jest.fn().mockResolvedValue(undefined);
 
@@ -412,7 +413,7 @@ describe('SalesService money calculations', () => {
         },
         productStock: {
           findFirst: jest.fn().mockResolvedValue(stockRow),
-          update: productStockUpdate,
+          updateMany: productStockUpdate,
           aggregate: jest.fn().mockResolvedValue({ _sum: { quantity: 0 } }),
         },
         product: {
@@ -518,6 +519,120 @@ describe('SalesService money calculations', () => {
         }),
       );
       expect(notifyLowStock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('writeOffSaleItemsFromStock (concurrent decrement race)', () => {
+    // Simulates the DB's atomic conditional UPDATE (the gte-guard) so this
+    // test exercises the same interleaving a real race would produce: both
+    // calls read quantity=1 before either has decremented, then only the
+    // updateMany that still sees quantity >= gte at "commit" time succeeds.
+    function createServiceWithSharedStock(initialQuantity: number) {
+      let quantity = initialQuantity;
+
+      const prisma = {
+        shop: {
+          findFirst: jest.fn().mockResolvedValue({ id: 'shop-1' }),
+        },
+        productStock: {
+          findFirst: jest.fn(async () => ({
+            id: 99,
+            quantity,
+            lowStockNotifiedAt: null,
+            purchasePrice: 10,
+            salePrice: 100,
+          })),
+          updateMany: jest.fn(async ({ where, data }: any) => {
+            if (quantity >= where.quantity.gte) {
+              quantity -= data.quantity.decrement;
+              return { count: 1 };
+            }
+            return { count: 0 };
+          }),
+          aggregate: jest.fn(async () => ({ _sum: { quantity } })),
+        },
+        product: {
+          findMany: jest.fn().mockResolvedValue([]),
+          update: jest.fn(),
+        },
+        stockMovement: {
+          create: jest.fn(),
+        },
+        $transaction: jest.fn(async (fn: any) => fn(prisma)),
+      } as unknown as PrismaService;
+
+      const telegramService = {
+        getLowStockThresholdSettings: jest
+          .fn()
+          .mockResolvedValue({ enabled: false, threshold: 0 }),
+        notifyLowStock: jest.fn(),
+      } as unknown as TelegramService;
+
+      const service = new SalesService(
+        prisma,
+        {} as CompanySettingsService,
+        {} as UsersService,
+        telegramService,
+      );
+
+      return { service, getQuantity: () => quantity };
+    }
+
+    it('exactly one of two concurrent sales for a single unit of stock succeeds; stock never goes negative', async () => {
+      const { service, getQuantity } = createServiceWithSharedStock(1);
+      const sale = {
+        id: 1,
+        number: 'S-1',
+        companyId: 'company-1',
+        userId: 7,
+        branchCode: 'B1',
+        items: [{ productId: 1, quantity: 1, salePrice: 100 }],
+      };
+
+      const results = await Promise.allSettled([
+        (service as any).writeOffSaleItemsFromStock(sale),
+        (service as any).writeOffSaleItemsFromStock(sale),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter(
+        (r): r is PromiseRejectedResult => r.status === 'rejected',
+      );
+
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0].reason).toBeInstanceOf(ConflictException);
+      expect(getQuantity()).toBe(0);
+    });
+
+    it('under a load of 10 concurrent sales for 1 unit of stock, exactly one succeeds', async () => {
+      const { service, getQuantity } = createServiceWithSharedStock(1);
+      const sale = {
+        id: 1,
+        number: 'S-1',
+        companyId: 'company-1',
+        userId: 7,
+        branchCode: 'B1',
+        items: [{ productId: 1, quantity: 1, salePrice: 100 }],
+      };
+
+      const results = await Promise.allSettled(
+        Array.from({ length: 10 }, () =>
+          (service as any).writeOffSaleItemsFromStock(sale),
+        ),
+      );
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter(
+        (r): r is PromiseRejectedResult => r.status === 'rejected',
+      );
+
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(9);
+      for (const r of rejected) {
+        expect(r.reason).toBeInstanceOf(ConflictException);
+      }
+      expect(getQuantity()).toBe(0);
     });
   });
 
