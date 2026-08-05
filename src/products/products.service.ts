@@ -868,7 +868,11 @@ export class ProductsService {
     IMPORT_SESSIONS.set(importId, session);
     await this.persistImportSession(session);
 
-    return this.toImportSessionSummary(session);
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      [session.branchCode],
+      companyId,
+    );
+    return this.toImportSessionSummary(session, shopLookup);
   }
 
   async listImports(
@@ -885,11 +889,16 @@ export class ProductsService {
       safeLimit,
       companyId,
     );
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      sessions.map((session) => session.branchCode),
+      companyId,
+    );
     const imports = sessions.map((session, index) =>
       this.toLegacyImportListItem(
         session,
         (safePage - 1) * safeLimit + index,
         context,
+        shopLookup,
       ),
     );
 
@@ -914,8 +923,13 @@ export class ProductsService {
       throw new NotFoundException('Import session not found');
     }
 
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      [session.branchCode],
+      session.companyId,
+    );
+
     return {
-      ...this.toImportSessionSummary(session),
+      ...this.toImportSessionSummary(session, shopLookup),
       fields: session.fields,
       rows_count: session.rows.length,
       rows: session.rows,
@@ -1578,7 +1592,11 @@ export class ProductsService {
     session.updatedAt = this.formatDateTime(new Date());
     await this.persistImportSession(session);
 
-    return this.toImportSessionSummary(session);
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      [session.branchCode],
+      session.companyId,
+    );
+    return this.toImportSessionSummary(session, shopLookup);
   }
 
   async rollbackImport(
@@ -2412,10 +2430,14 @@ export class ProductsService {
     return summary;
   }
 
-  private toImportSessionSummary(session: ImportSession) {
-    const shopName =
-      session.branchName ??
-      this.resolveShopByBranchCode(session.branchCode).shop_name;
+  private toImportSessionSummary(
+    session: ImportSession,
+    shopLookup?: Map<string, ResolvedShop>,
+  ) {
+    const shopName = this.resolveShopByBranchCode(
+      session.branchCode,
+      shopLookup,
+    ).shop_name;
     const statusName = this.getImportStatusName(session.status);
     const requiresApproval = this.requiresImportApproval(session);
 
@@ -2451,8 +2473,9 @@ export class ProductsService {
       userId?: number;
       fullName?: string;
     } | null,
+    shopLookup?: Map<string, ResolvedShop>,
   ) {
-    const shop = this.resolveShopByBranchCode(session.branchCode);
+    const shop = this.resolveShopByBranchCode(session.branchCode, shopLookup);
     const totals = this.buildLegacyImportTotals(session);
     const actor = this.resolveLegacyImportActor(session, context);
     const finishedActor =
