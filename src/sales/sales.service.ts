@@ -3760,6 +3760,16 @@ export class SalesService {
       (sum, stock) => sum + stock.quantity,
       0,
     );
+    // When the request is scoped to a shop, keep the legacy flat price fields
+    // in sync with the selected shop as well. Some POS clients still read
+    // `retail_price` instead of `shop_prices[0].retail_price`.
+    const selectedPriceStock = branchCode
+      ? selectedStocks.find((stock) => stock.branchCode === branchCode)
+      : selectedStocks[0];
+    const selectedRetailPrice =
+      selectedPriceStock?.salePrice ?? product.salePrice ?? 0;
+    const selectedSupplyPrice =
+      selectedPriceStock?.purchasePrice ?? product.purchasePrice ?? 0;
     const metadata =
       product.metadata &&
       typeof product.metadata === 'object' &&
@@ -3775,8 +3785,8 @@ export class SalesService {
       barcode: product.barcode,
       additional_barcodes: null,
       stock: isService ? null : totalMeasurementValue,
-      retail_price: product.salePrice ?? 0,
-      supply_price: product.purchasePrice ?? 0,
+      retail_price: selectedRetailPrice,
+      supply_price: selectedSupplyPrice,
       description:
       typeof metadata?.description === 'string'
           ? metadata.description
