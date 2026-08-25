@@ -126,15 +126,15 @@ export class SalesService {
   }
 
   async findAll(
-    params: { startDate?: string; page?: number; limit?: number } = {},
+    query: Record<string, string | undefined> = {},
     authorization?: string,
   ) {
     const context = await this.getRequestContext(authorization);
-    const safePage = Math.max(1, params.page ?? 1);
-    const safeLimit = Math.min(Math.max(1, params.limit ?? 10), 100);
+    const safePage = Math.max(1, Number(query.page) || 1);
+    const safeLimit = Math.min(Math.max(1, Number(query.limit) || 10), 100);
 
     const dateFilter: Record<string, unknown>[] = [];
-    const startDate = this.parseDateOnly(params.startDate);
+    const startDate = this.parseDateOnly(query.start_date ?? query.date);
     if (startDate) {
       const endDate = new Date(startDate);
       endDate.setDate(endDate.getDate() + 1);
@@ -149,19 +149,14 @@ export class SalesService {
       ],
     };
 
-    const [total, sales] = await this.prisma.$transaction([
-      this.prisma.sale.count({ where }),
-      this.prisma.sale.findMany({
-        where,
-        include: {
-          user: true,
-          items: true,
-        },
-        orderBy: { createdAt: 'desc' },
-        skip: (safePage - 1) * safeLimit,
-        take: safeLimit,
-      }),
-    ]);
+    const sales = await this.prisma.sale.findMany({
+      where,
+      include: {
+        user: true,
+        items: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
 
     const shopLookup = await this.buildShopLookupByBranchCodes(
       sales
@@ -172,14 +167,30 @@ export class SalesService {
     const paymentTypeLookup = await this.buildPaymentTypeLookup(
       context?.companyId,
     );
+    const filteredSales = this.filterSaleList(
+      sales,
+      query,
+      shopLookup,
+      paymentTypeLookup,
+    );
+    const pagedSales = filteredSales.slice(
+      (safePage - 1) * safeLimit,
+      safePage * safeLimit,
+    );
 
     return {
-      data: sales.map((sale) =>
+      data: pagedSales.map((sale) =>
         this.toSaleListItem(sale, context, shopLookup, paymentTypeLookup),
       ),
-      total,
+      total: filteredSales.length,
       page: safePage,
       limit: safeLimit,
+      stats: this.buildSaleListStats(filteredSales, paymentTypeLookup),
+      filter_options: this.buildSaleListFilterOptions(
+        sales,
+        shopLookup,
+        paymentTypeLookup,
+      ),
     };
   }
 
@@ -3178,6 +3189,10 @@ export class SalesService {
         name: string;
         salePrice: Prisma.Decimal | number;
         quantity: Prisma.Decimal | number;
+        lineTotal: Prisma.Decimal | number;
+        finalPrice?: Prisma.Decimal | number | null;
+        retailPriceAtSale?: Prisma.Decimal | number | null;
+        discountAmount?: Prisma.Decimal | number | null;
         barcode: string | null;
         sku: string | null;
       }[];
@@ -3268,9 +3283,16 @@ export class SalesService {
         product_id: item.productId,
         name: item.name,
         sale_price: Number(item.salePrice),
+        price: Number(item.salePrice),
         barcode: item.barcode,
         sku: item.sku,
         quantity: Number(item.quantity),
+        line_total: Number(item.lineTotal),
+        total: Number(item.finalPrice) || Number(item.lineTotal),
+        amount: Number(item.finalPrice) || Number(item.lineTotal),
+        final_price: Number(item.finalPrice) || Number(item.lineTotal),
+        original_total: Number(item.retailPriceAtSale) || Number(item.lineTotal),
+        discount_amount: Number(item.discountAmount) || 0,
       })),
     };
   }
@@ -3912,6 +3934,304 @@ export class SalesService {
   }) {
     const amount = Number(sale.payableTotal) || Number(sale.total) || 0;
     return sale.saleType === 'return' ? -amount : amount;
+  }
+
+  private filterSaleList(
+    sales: any[],
+    query: Record<string, string | undefined>,
+    shopLookup?: Map<string, { shop_id: string; shop_name: string }>,
+    paymentTypeLookup?: Map<
+      string,
+      {
+        id: string;
+        name: string;
+        payment_type_id: string;
+        payment_type_name: string;
+      }
+    >,
+  ) {
+    const search = this.normalizeFilterValue(query.search);
+    const status = this.normalizeFilterValue(query.status);
+    const scope = this.normalizeFilterValue(query.scope);
+    const shop = this.normalizeFilterValue(query.shop_id ?? query.shop);
+    const seller = this.normalizeFilterValue(query.seller ?? query.seller_id);
+    const cashier = this.normalizeFilterValue(query.cashier ?? query.cashier_id);
+    const payment = this.normalizeFilterValue(
+      query.payment_method ?? query.payment,
+    );
+    const minAmount = this.toNumber(query.amount_from);
+    const maxAmount = this.toNumber(query.amount_to);
+
+    return sales.filter((sale) => {
+      const sellerName = this.normalizeFilterValue(this.buildSaleUserName(sale.user));
+      const sellerValues = [
+        sellerName,
+        sale.userId,
+        sale.user?.id,
+      ].map((value) => this.normalizeFilterValue(value));
+      const shopInfo = sale.branchCode
+        ? this.resolveShopByBranchCode(sale.branchCode, shopLookup)
+        : null;
+      const shopValues = [
+        sale.branchCode,
+        shopInfo?.shop_id,
+        shopInfo?.shop_name,
+      ].map((value) => this.normalizeFilterValue(value));
+      const signedAmount = this.getSignedSaleAmount(sale);
+      const absoluteAmount = Math.abs(signedAmount);
+      const statusValue = this.normalizeFilterValue(sale.status);
+      const saleTypeValue = this.normalizeFilterValue(sale.saleType);
+
+      if (scope === 'deleted') {
+        return ['deleted', 'cancelled', 'removed'].includes(statusValue);
+      }
+
+      if (
+        search &&
+        ![
+          sale.number,
+          sale.clientName,
+          sellerName,
+          sale.branchCode,
+          shopInfo?.shop_name,
+        ]
+          .map((value) => this.normalizeFilterValue(value))
+          .some((value) => value.includes(search))
+      ) {
+        return false;
+      }
+
+      if (
+        status &&
+        status !== 'all' &&
+        statusValue !== status &&
+        saleTypeValue !== status
+      ) {
+        return false;
+      }
+
+      if (shop && shop !== 'all' && !shopValues.some((value) => value === shop)) {
+        return false;
+      }
+
+      if (
+        seller &&
+        seller !== 'all' &&
+        !sellerValues.some((value) => value === seller || value.includes(seller))
+      ) {
+        return false;
+      }
+
+      if (
+        cashier &&
+        cashier !== 'all' &&
+        !sellerValues.some((value) => value === cashier || value.includes(cashier))
+      ) {
+        return false;
+      }
+
+      if (
+        payment &&
+        payment !== 'all' &&
+        !this.saleMatchesPaymentFilter(sale, payment, paymentTypeLookup)
+      ) {
+        return false;
+      }
+
+      if (minAmount !== undefined && absoluteAmount < minAmount) {
+        return false;
+      }
+
+      if (maxAmount !== undefined && absoluteAmount > maxAmount) {
+        return false;
+      }
+
+      return true;
+    });
+  }
+
+  private buildSaleListStats(
+    sales: any[],
+    paymentTypeLookup?: Map<
+      string,
+      {
+        id: string;
+        name: string;
+        payment_type_id: string;
+        payment_type_name: string;
+      }
+    >,
+  ) {
+    const payments: Record<string, number> = {};
+    let totalAmount = 0;
+
+    for (const sale of sales) {
+      const saleAmount = this.getSignedSaleAmount(sale);
+      totalAmount += saleAmount;
+      const extraPayments = this.normalizeExtraPayments(sale.extraPayments);
+
+      if (extraPayments.length > 0) {
+        for (const payment of extraPayments) {
+          payments[payment.payment_method] =
+            (payments[payment.payment_method] ?? 0) +
+            (saleAmount < 0 ? -payment.amount : payment.amount);
+        }
+      } else if (sale.paymentMethod) {
+        payments[sale.paymentMethod] =
+          (payments[sale.paymentMethod] ?? 0) + saleAmount;
+      }
+    }
+
+    return {
+      totalAmount: Number(totalAmount.toFixed(2)),
+      payments: Object.fromEntries(
+        Object.entries(payments).map(([key, value]) => {
+          const payment = paymentTypeLookup?.get(key);
+          return [payment?.id ?? key, Number(value.toFixed(2))];
+        }),
+      ),
+      count: sales.length,
+    };
+  }
+
+  private buildSaleListFilterOptions(
+    sales: any[],
+    shopLookup?: Map<string, { shop_id: string; shop_name: string }>,
+    paymentTypeLookup?: Map<
+      string,
+      {
+        id: string;
+        name: string;
+        payment_type_id: string;
+        payment_type_name: string;
+      }
+    >,
+  ) {
+    const shops = new Set<string>();
+    const sellers = new Set<string>();
+    const cashiers = new Set<string>();
+    const payments = new Map<string, string>();
+
+    for (const sale of sales) {
+      const sellerName = this.buildSaleUserName(sale.user);
+      if (sellerName) {
+        sellers.add(sellerName);
+        cashiers.add(sellerName);
+      }
+
+      if (sale.branchCode) {
+        const shop = this.resolveShopByBranchCode(sale.branchCode, shopLookup);
+        shops.add(shop?.shop_name ?? sale.branchCode);
+      }
+
+      const extraPayments = this.normalizeExtraPayments(sale.extraPayments);
+      if (extraPayments.length > 1) {
+        payments.set('mixed', 'Смешанная оплата');
+      }
+
+      const paymentIds =
+        extraPayments.length > 0
+          ? extraPayments.map((payment) => payment.payment_method)
+          : [sale.paymentMethod].filter(Boolean);
+
+      for (const paymentId of paymentIds) {
+        const payment = paymentTypeLookup?.get(paymentId);
+        payments.set(paymentId, payment?.name ?? paymentId);
+      }
+    }
+
+    const sortRu = (items: string[]) => items.sort((a, b) => a.localeCompare(b, 'ru'));
+
+    return {
+      shops: sortRu([...shops]),
+      sellers: sortRu([...sellers]),
+      cashiers: sortRu([...cashiers]),
+      payments: [...payments.entries()]
+        .map(([value, label]) => ({ value, label }))
+        .sort((a, b) => a.label.localeCompare(b.label, 'ru')),
+    };
+  }
+
+  private saleMatchesPaymentFilter(
+    sale: any,
+    normalizedPaymentFilter: string,
+    paymentTypeLookup?: Map<
+      string,
+      {
+        id: string;
+        name: string;
+        payment_type_id: string;
+        payment_type_name: string;
+      }
+    >,
+  ) {
+    const extraPayments = this.normalizeExtraPayments(sale.extraPayments);
+
+    if (normalizedPaymentFilter === 'mixed') {
+      return extraPayments.length > 1;
+    }
+
+    const paymentIds =
+      extraPayments.length > 0
+        ? extraPayments.map((payment) => payment.payment_method)
+        : [sale.paymentMethod];
+
+    return paymentIds.some((paymentId) => {
+      const payment = paymentId ? paymentTypeLookup?.get(paymentId) : undefined;
+      return [
+        paymentId,
+        payment?.id,
+        payment?.name,
+        payment?.payment_type_id,
+        payment?.payment_type_name,
+      ]
+        .map((value) => this.normalizeFilterValue(value))
+        .some((value) => value === normalizedPaymentFilter);
+    });
+  }
+
+  private normalizeExtraPayments(value: unknown) {
+    return Array.isArray(value)
+      ? value
+          .map((payment) => ({
+            payment_method:
+              payment && typeof payment === 'object'
+                ? this.optionalString((payment as any).payment_method)
+                : undefined,
+            amount:
+              payment && typeof payment === 'object'
+                ? Number((payment as any).amount)
+                : 0,
+          }))
+          .filter(
+            (
+              payment,
+            ): payment is { payment_method: string; amount: number } =>
+              Boolean(payment.payment_method) &&
+              Number.isFinite(payment.amount) &&
+              payment.amount > 0,
+          )
+      : [];
+  }
+
+  private normalizeFilterValue(value: unknown) {
+    return String(value ?? '').trim().toLowerCase();
+  }
+
+  private buildSaleUserName(user: unknown) {
+    if (!user || typeof user !== 'object') {
+      return '';
+    }
+
+    const source = user as Record<string, unknown>;
+    return (
+      this.optionalString(source.name) ??
+      [source.firstName, source.lastName]
+        .map((value) => this.optionalString(value))
+        .filter((value): value is string => Boolean(value))
+        .join(' ')
+        .trim()
+    );
   }
 
   private toBoolean(value: unknown) {

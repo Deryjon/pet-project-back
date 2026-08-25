@@ -22,15 +22,10 @@ export class SalesController {
 
   @Get('sales')
   findAll(
-    @Query('start_date') startDate?: string,
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
+    @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
   ) {
-    return this.salesService.findAll(
-      { startDate, page: Number(page) || 1, limit: Number(limit) || 10 },
-      authorization,
-    );
+    return this.salesService.findAll(query, authorization);
   }
 
   @Post('new-sale')
