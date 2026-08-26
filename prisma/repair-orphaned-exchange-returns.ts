@@ -17,8 +17,37 @@ const requestedParentId = Number(
   process.argv.find((arg) => arg.startsWith('--parent-id='))?.split('=')[1] ??
     0,
 );
+const adjustedStatuses = [
+  'returned',
+  'exchanged',
+  'partially_returned',
+  'partially_exchanged',
+];
 
 async function main() {
+  const stuckOriginalSales = await prisma.sale.findMany({
+    where: {
+      ...(requestedParentId > 0 ? { id: requestedParentId } : {}),
+      saleType: 'sale',
+      isDraft: false,
+      status: {
+        in: adjustedStatuses,
+      },
+      childSales: {
+        none: {},
+      },
+    },
+    select: {
+      id: true,
+      number: true,
+      status: true,
+      updatedAt: true,
+    },
+    orderBy: {
+      updatedAt: 'desc',
+    },
+  });
+
   const orphanedReturns = await prisma.sale.findMany({
     where: {
       saleType: 'return',
@@ -105,26 +134,36 @@ async function main() {
     });
   }
 
-  if (candidates.length === 0) {
-    console.log('No orphaned exchange returns found.');
+  if (stuckOriginalSales.length === 0 && candidates.length === 0) {
+    console.log('No stuck original sales or orphaned exchange returns found.');
     return;
   }
 
-  console.log(
-    JSON.stringify(
-      candidates.map(({ returnSale, parentSale, deletedExchangeMovement }) => ({
-        parentSaleId: parentSale.id,
-        parentNumber: parentSale.number,
-        parentStatus: parentSale.status,
-        orphanReturnId: returnSale.id,
-        orphanReturnNumber: returnSale.number,
-        orphanReturnCreatedAt: returnSale.createdAt,
-        deletedExchangeMovement: deletedExchangeMovement.externalId,
-      })),
-      null,
-      2,
-    ),
-  );
+  if (stuckOriginalSales.length > 0) {
+    console.log('Stuck original sales without adjustments:');
+    console.log(JSON.stringify(stuckOriginalSales, null, 2));
+  }
+
+  if (candidates.length > 0) {
+    console.log('Orphaned exchange returns:');
+    console.log(
+      JSON.stringify(
+        candidates.map(
+          ({ returnSale, parentSale, deletedExchangeMovement }) => ({
+            parentSaleId: parentSale.id,
+            parentNumber: parentSale.number,
+            parentStatus: parentSale.status,
+            orphanReturnId: returnSale.id,
+            orphanReturnNumber: returnSale.number,
+            orphanReturnCreatedAt: returnSale.createdAt,
+            deletedExchangeMovement: deletedExchangeMovement.externalId,
+          }),
+        ),
+        null,
+        2,
+      ),
+    );
+  }
 
   if (!applyChanges) {
     console.log('Dry run only. Re-run with --apply to repair these records.');
@@ -132,6 +171,17 @@ async function main() {
   }
 
   await prisma.$transaction(async (tx) => {
+    for (const sale of stuckOriginalSales) {
+      await tx.sale.update({
+        where: {
+          id: sale.id,
+        },
+        data: {
+          status: 'paid',
+        },
+      });
+    }
+
     for (const { returnSale, parentSale } of candidates) {
       for (const item of returnSale.items) {
         if (!item.productId || !returnSale.branchCode) {
@@ -176,7 +226,9 @@ async function main() {
     }
   });
 
-  console.log(`Repaired ${candidates.length} orphaned exchange return(s).`);
+  console.log(
+    `Repaired ${stuckOriginalSales.length} stuck original sale(s) and ${candidates.length} orphaned exchange return(s).`,
+  );
 }
 
 main()
