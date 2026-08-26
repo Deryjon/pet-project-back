@@ -51,7 +51,15 @@ async function main() {
     },
   });
 
-  const candidates = [];
+  const candidates: Array<{
+    returnSale: (typeof orphanedReturns)[number];
+    parentSale: NonNullable<(typeof orphanedReturns)[number]['parentSale']>;
+    deletedExchangeMovement: {
+      id: string;
+      externalId: string;
+      createdAt: Date;
+    };
+  }> = [];
 
   for (const returnSale of orphanedReturns) {
     if (!returnSale.parentSale) {
