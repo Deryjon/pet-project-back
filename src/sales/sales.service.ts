@@ -1724,6 +1724,78 @@ export class SalesService {
     };
   }
 
+  private async resolveAdjustmentDeletionGroup(sale: any) {
+    const include = {
+      items: {
+        include: {
+          product: {
+            include: {
+              stocks: true,
+            },
+          },
+        },
+      },
+      user: true,
+    };
+
+    const groupComment =
+      typeof sale.comment === 'string' ? sale.comment.trim() : '';
+
+    if (groupComment.startsWith('exchange-group:')) {
+      const groupedSales = await this.prisma.sale.findMany({
+        where: {
+          parentSaleId: sale.parentSaleId,
+          comment: groupComment,
+          saleType: {
+            in: ['return', 'exchange'],
+          },
+        },
+        include,
+        orderBy: {
+          id: 'asc',
+        },
+      });
+
+      const hasReturn = groupedSales.some(
+        (adjustment) => adjustment.saleType === 'return',
+      );
+      const hasExchange = groupedSales.some(
+        (adjustment) => adjustment.saleType === 'exchange',
+      );
+
+      if (hasReturn && hasExchange) {
+        return groupedSales as any[];
+      }
+    }
+
+    const pairSaleType = sale.saleType === 'return' ? 'exchange' : 'return';
+    const pairSaleId = sale.saleType === 'return' ? sale.id + 1 : sale.id - 1;
+    const pairSale = await this.prisma.sale.findFirst({
+      where: {
+        id: pairSaleId,
+        parentSaleId: sale.parentSaleId,
+        saleType: pairSaleType,
+        ...(sale.userId != null ? { userId: sale.userId } : {}),
+      },
+      include,
+    });
+
+    if (pairSale) {
+      const createdDiff = Math.abs(
+        new Date(pairSale.createdAt).getTime() -
+          new Date(sale.createdAt).getTime(),
+      );
+
+      if (createdDiff <= 30_000) {
+        return sale.saleType === 'return'
+          ? ([sale, pairSale] as any[])
+          : ([pairSale, sale] as any[]);
+      }
+    }
+
+    return [sale] as any[];
+  }
+
   private async findBaseSaleForAdjustment(id: string, context: any) {
     const saleId = this.parseEntityId(id, 'order id');
     const sale = await this.prisma.sale.findUnique({
@@ -2381,6 +2453,24 @@ export class SalesService {
 
     if (!originalSale) {
       return;
+    }
+
+    if (originalSale.saleType === 'sale' && !originalSale.isDraft) {
+      const childSalesCount = await tx.sale.count({
+        where: {
+          parentSaleId: saleId,
+        },
+      });
+
+      if (childSalesCount === 0) {
+        await tx.sale.update({
+          where: { id: saleId },
+          data: {
+            status: 'paid',
+          },
+        });
+        return;
+      }
     }
 
     const childSales = await tx.sale.findMany({
