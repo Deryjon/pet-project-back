@@ -47,6 +47,80 @@ describe('SalesService money calculations', () => {
     return { service, prisma };
   }
 
+  describe('zero-safe finalized amounts', () => {
+    it('keeps a legitimate zero payable total after a full discount', () => {
+      const { service } = createService();
+
+      expect(
+        (service as any).getSalePayableAmount({
+          total: 1000,
+          payableTotal: 0,
+          discountPercent: 100,
+          discountAmount: 0,
+        }),
+      ).toBe(0);
+    });
+
+    it('uses the finalized zero item amount after a full discount', () => {
+      const { service } = createService();
+
+      expect(
+        (service as any).getFinalizedItemAmount({
+          lineTotal: 1000,
+          retailPriceAtSale: 1000,
+          discountAmount: 1000,
+          finalPrice: 0,
+        }),
+      ).toBe(0);
+    });
+
+    it('rejects an overpayment in a split payment payload', () => {
+      const { service } = createService();
+
+      expect(() =>
+        (service as any).validatePaymentAmounts(
+          [{ amount: 700 }, { amount: 400 }],
+          1000,
+          {},
+        ),
+      ).toThrow('Payments total cannot exceed the sale payable total');
+    });
+
+    it('uses the discounted unit amount when preparing a return', async () => {
+      const { service } = createService();
+      jest
+        .spyOn(service as any, 'getReturnableQuantities')
+        .mockResolvedValue(new Map([[10, 2]]));
+
+      const items = await (service as any).prepareAdjustmentItems(
+        {
+          id: 1,
+          items: [
+            {
+              id: 11,
+              productId: 10,
+              name: 'Discounted item',
+              barcode: null,
+              sku: null,
+              quantity: 2,
+              salePrice: 100,
+              lineTotal: 200,
+              retailPriceAtSale: 200,
+              discountAmount: 20,
+              finalPrice: 180,
+            },
+          ],
+        },
+        [{ product_id: 10, quantity: 1 }],
+        'items',
+      );
+
+      expect(items[0]).toEqual(
+        expect.objectContaining({ salePrice: 90, lineTotal: 90 }),
+      );
+    });
+  });
+
   describe('recalculateSale', () => {
     it('sums line totals and applies a flat discount', async () => {
       const { service, prisma } = createService();

@@ -6378,6 +6378,7 @@ export class ProductsService {
   ): Prisma.ProductWhereInput | undefined {
     const and: Prisma.ProductWhereInput[] = [];
     const normalizedStatus = this.normalizeCatalogStatus(status);
+    const resolvedShopIds = this.toBranchCodes(shopIds);
 
     if (search) {
       and.push({
@@ -6444,20 +6445,33 @@ export class ProductsService {
     }
 
     if (normalizedStatus === 'small_left') {
-      and.push({
-        quantity: {
-          gt: 0,
-          lte: 5,
-        },
-      });
+      and.push(
+        resolvedShopIds.length
+          ? {
+              stocks: {
+                some: {
+                  branchCode: { in: resolvedShopIds },
+                  quantity: { gt: 0, lte: 5 },
+                },
+              },
+            }
+          : { quantity: { gt: 0, lte: 5 } },
+      );
     }
 
     if (normalizedStatus === 'zero_left') {
-      and.push({
-        quantity: {
-          lte: 0,
-        },
-      });
+      and.push(
+        resolvedShopIds.length
+          ? {
+              stocks: {
+                some: {
+                  branchCode: { in: resolvedShopIds },
+                  quantity: { lte: 0 },
+                },
+              },
+            }
+          : { quantity: { lte: 0 } },
+      );
     }
 
     if (
@@ -6479,7 +6493,6 @@ export class ProductsService {
       });
     }
 
-    const resolvedShopIds = this.toBranchCodes(shopIds);
     if (resolvedShopIds.length) {
       and.push({
         OR: [
@@ -6535,21 +6548,63 @@ export class ProductsService {
       }
     }
 
-    if (supplyPriceFrom !== undefined || supplyPriceTo !== undefined) {
-      and.push({
-        purchasePrice: {
-          gte: supplyPriceFrom,
-          lte: supplyPriceTo,
-        },
-      });
-    }
+    if (
+      supplyPriceFrom !== undefined ||
+      supplyPriceTo !== undefined ||
+      retailPriceFrom !== undefined ||
+      retailPriceTo !== undefined
+    ) {
+      const stockPriceFilter: Prisma.ProductStockWhereInput = {
+        ...(resolvedShopIds.length
+          ? { branchCode: { in: resolvedShopIds } }
+          : {}),
+        ...(supplyPriceFrom !== undefined || supplyPriceTo !== undefined
+          ? {
+              purchasePrice: {
+                gte: supplyPriceFrom,
+                lte: supplyPriceTo,
+              },
+            }
+          : {}),
+        ...(retailPriceFrom !== undefined || retailPriceTo !== undefined
+          ? {
+              salePrice: {
+                gte: retailPriceFrom,
+                lte: retailPriceTo,
+              },
+            }
+          : {}),
+      };
 
-    if (retailPriceFrom !== undefined || retailPriceTo !== undefined) {
       and.push({
-        salePrice: {
-          gte: retailPriceFrom,
-          lte: retailPriceTo,
-        },
+        OR: [
+          { stocks: { some: stockPriceFilter } },
+          {
+            AND: [
+              { stocks: { none: {} } },
+              ...(supplyPriceFrom !== undefined || supplyPriceTo !== undefined
+                ? [
+                    {
+                      purchasePrice: {
+                        gte: supplyPriceFrom,
+                        lte: supplyPriceTo,
+                      },
+                    },
+                  ]
+                : []),
+              ...(retailPriceFrom !== undefined || retailPriceTo !== undefined
+                ? [
+                    {
+                      salePrice: {
+                        gte: retailPriceFrom,
+                        lte: retailPriceTo,
+                      },
+                    },
+                  ]
+                : []),
+            ],
+          },
+        ],
       });
     }
 
@@ -9844,4 +9899,3 @@ export class ProductsService {
     return resolveProductPhotoUrl(value);
   }
 }
-

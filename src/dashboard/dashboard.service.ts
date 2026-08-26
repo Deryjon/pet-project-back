@@ -243,7 +243,8 @@ export class DashboardService {
         };
         existingProduct.quantity += Number(item.quantity) * itemSign;
         existingProduct.total_price += Number(item.lineTotal) * itemSign;
-        existingProduct.net_sales += Number(item.lineTotal) * itemSign;
+        existingProduct.net_sales +=
+          this.getItemNetSales(item) * itemSign;
         productTotals.set(productName, existingProduct);
       }
     }
@@ -480,8 +481,37 @@ export class DashboardService {
     payableTotal?: Prisma.Decimal | number | null;
     total?: Prisma.Decimal | number | null;
     saleType?: string;
+    discountAmount?: Prisma.Decimal | number | null;
+    discountPercent?: Prisma.Decimal | number | null;
   }) {
-    const amount = Number(sale.payableTotal) || Number(sale.total) || 0;
+    const payableTotal = Number(sale.payableTotal ?? 0);
+    const total = Number(sale.total ?? 0);
+    const amount =
+      payableTotal !== 0 ||
+      total === 0 ||
+      Number(sale.discountAmount ?? 0) > 0 ||
+      Number(sale.discountPercent ?? 0) > 0
+        ? payableTotal
+        : total;
     return sale.saleType === 'return' ? -amount : amount;
+  }
+
+  private getItemNetSales(item: {
+    lineTotal?: Prisma.Decimal | number | null;
+    retailPriceAtSale?: Prisma.Decimal | number | null;
+    discountAmount?: Prisma.Decimal | number | null;
+    finalPrice?: Prisma.Decimal | number | null;
+  }) {
+    const lineTotal = Number(item.lineTotal ?? 0);
+    const finalPrice = Number(item.finalPrice ?? 0);
+    const hasFinalizedSnapshot =
+      Number(item.retailPriceAtSale ?? 0) > 0 ||
+      Number(item.discountAmount ?? 0) > 0 ||
+      finalPrice > 0;
+
+    // Legacy sale items have zero-filled snapshot columns. A finalized item
+    // can legitimately have finalPrice = 0 after a 100% discount, so the
+    // other snapshot fields are also used to distinguish that case.
+    return hasFinalizedSnapshot ? finalPrice : lineTotal;
   }
 }

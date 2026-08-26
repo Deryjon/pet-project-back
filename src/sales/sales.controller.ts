@@ -249,7 +249,12 @@ export class SalesController {
     return this.salesService.parkDraft(id, body, authorization);
   }
 
-  @Post(['parked-sales/:id/resume', 'v2/parked-sales/:id/resume'])
+  @Post([
+    'parked-sales/:id/resume',
+    'v2/parked-sales/:id/resume',
+    'draft-sales/:id/resume',
+    'v2/draft-sales/:id/resume',
+  ])
   resumeParkedSale(
     @Param('id', ParseIntPipe) id: number,
     @Headers('authorization') authorization?: string,

@@ -328,7 +328,7 @@ export class SalesService {
     this.assertSaleAccess(sale, context);
     return this.emptyOrderDraftDebt(
       String(sale.id),
-      Number(sale.payableTotal) || Number(sale.total),
+      this.getSalePayableAmount(sale),
     );
   }
 
@@ -453,7 +453,7 @@ export class SalesService {
 
       if ((sale as any).saleType === 'return') {
         totalReturnalsCount += 1;
-        totalReturnedSum += Number(sale.payableTotal) || Number(sale.total) || 0;
+        totalReturnedSum += this.getSalePayableAmount(sale);
       }
 
       if ((sale as any).saleType === 'exchange') {
@@ -747,6 +747,11 @@ export class SalesService {
           (p) => p && typeof p === 'object',
         )
       : [];
+    this.validatePaymentAmounts(
+      paymentsInput,
+      this.getSalePayableAmount(sale),
+      body,
+    );
 
     const primaryMethodRaw =
       paymentsInput[0]?.company_payment_type_id ??
@@ -849,6 +854,11 @@ export class SalesService {
           (p) => p && typeof p === 'object',
         )
       : [];
+    this.validatePaymentAmounts(
+      paymentsInput,
+      this.getSalePayableAmount(sale),
+      body,
+    );
 
     const requestedPaymentMethod =
       this.optionalString(
@@ -1420,6 +1430,12 @@ export class SalesService {
         )
       : [];
 
+    this.validatePaymentAmounts(
+      paymentsInput,
+      this.getSalePayableAmount(sale),
+      body,
+    );
+
     const primaryMethodRaw =
       this.optionalString(
         paymentsInput[0]?.company_payment_type_id ?? paymentsInput[0]?.payment_method,
@@ -1519,7 +1535,7 @@ export class SalesService {
     const updatedSale = await this.prisma.sale.update({
       where: { id },
       data: {
-        status: 'draft',
+        status: this.toBoolean(body.parked) ? 'parked' : 'draft',
         parkNote:
           this.optionalString(body.park_note) ??
           this.optionalString(body.note) ??
@@ -1738,6 +1754,10 @@ export class SalesService {
         sku: string | null;
         quantity: number;
         salePrice: number;
+        lineTotal: number;
+        retailPriceAtSale: number;
+        discountAmount: number;
+        finalPrice: number;
       }>;
     },
     rawItems: unknown,
@@ -1797,7 +1817,12 @@ export class SalesService {
         );
       }
 
-      const originalSalePrice = Number(originalItem.salePrice);
+      const originalQuantity = Number(originalItem.quantity);
+      const originalNetTotal = this.getFinalizedItemAmount(originalItem);
+      const originalSalePrice =
+        originalQuantity > 0
+          ? Number((originalNetTotal / originalQuantity).toFixed(2))
+          : Number(originalItem.salePrice);
       normalizedItems.push({
         productId,
         name: originalItem.name,
@@ -3288,9 +3313,9 @@ export class SalesService {
         sku: item.sku,
         quantity: Number(item.quantity),
         line_total: Number(item.lineTotal),
-        total: Number(item.finalPrice) || Number(item.lineTotal),
-        amount: Number(item.finalPrice) || Number(item.lineTotal),
-        final_price: Number(item.finalPrice) || Number(item.lineTotal),
+        total: this.getFinalizedItemAmount(item),
+        amount: this.getFinalizedItemAmount(item),
+        final_price: this.getFinalizedItemAmount(item),
         original_total: Number(item.retailPriceAtSale) || Number(item.lineTotal),
         discount_amount: Number(item.discountAmount) || 0,
       })),
@@ -3463,7 +3488,7 @@ export class SalesService {
     const totalDiscountAmount = Number(
       orderItems.reduce((sum, item) => sum + item.discount_amount, 0).toFixed(2),
     );
-    const paidAmount = Number((sale.payableTotal || sale.total || 0).toFixed(2));
+    const paidAmount = Number(this.getSalePayableAmount(sale).toFixed(2));
     const totalPrice = Number(
       (
         sale.isDraft
@@ -3931,9 +3956,82 @@ export class SalesService {
     payableTotal?: Prisma.Decimal | number | null;
     total?: Prisma.Decimal | number | null;
     saleType?: string;
+    discountAmount?: Prisma.Decimal | number | null;
+    discountPercent?: Prisma.Decimal | number | null;
   }) {
-    const amount = Number(sale.payableTotal) || Number(sale.total) || 0;
+    const amount = this.getSalePayableAmount(sale);
     return sale.saleType === 'return' ? -amount : amount;
+  }
+
+  private getSalePayableAmount(sale: {
+    payableTotal?: Prisma.Decimal | number | null;
+    total?: Prisma.Decimal | number | null;
+    discountAmount?: Prisma.Decimal | number | null;
+    discountPercent?: Prisma.Decimal | number | null;
+  }) {
+    const payableTotal = Number(sale.payableTotal ?? 0);
+    const total = Number(sale.total ?? 0);
+    const hasCalculatedPayable =
+      payableTotal !== 0 ||
+      total === 0 ||
+      Number(sale.discountAmount ?? 0) > 0 ||
+      Number(sale.discountPercent ?? 0) > 0;
+
+    return hasCalculatedPayable ? payableTotal : total;
+  }
+
+  private getFinalizedItemAmount(item: {
+    lineTotal?: Prisma.Decimal | number | null;
+    retailPriceAtSale?: Prisma.Decimal | number | null;
+    discountAmount?: Prisma.Decimal | number | null;
+    finalPrice?: Prisma.Decimal | number | null;
+  }) {
+    const lineTotal = Number(item.lineTotal ?? 0);
+    const finalPrice = Number(item.finalPrice ?? 0);
+    const hasFinalizedSnapshot =
+      Number(item.retailPriceAtSale ?? 0) > 0 ||
+      Number(item.discountAmount ?? 0) > 0 ||
+      finalPrice > 0;
+
+    return hasFinalizedSnapshot ? finalPrice : lineTotal;
+  }
+
+  private validatePaymentAmounts(
+    payments: Record<string, unknown>[],
+    payableTotal: number,
+    body: Record<string, unknown>,
+  ) {
+    if (!payments.length) {
+      return;
+    }
+
+    const amounts = payments.map((payment) => Number(payment.amount));
+    if (amounts.some((amount) => !Number.isFinite(amount) || amount <= 0)) {
+      throw new BadRequestException(
+        'Each payment amount must be greater than zero',
+      );
+    }
+
+    const paidTotal = Number(
+      amounts.reduce((sum, amount) => sum + amount, 0).toFixed(2),
+    );
+    const expectedTotal = Number(Math.max(0, payableTotal).toFixed(2));
+    const hasDebt =
+      (body.debt && typeof body.debt === 'object') ||
+      body.debt_amount !== undefined ||
+      body.debt_amount_uzs !== undefined;
+
+    if (paidTotal > expectedTotal + 0.01) {
+      throw new BadRequestException(
+        'Payments total cannot exceed the sale payable total',
+      );
+    }
+
+    if (!hasDebt && Math.abs(paidTotal - expectedTotal) > 0.01) {
+      throw new BadRequestException(
+        'Payments total must equal the sale payable total',
+      );
+    }
   }
 
   private filterSaleList(
@@ -4449,6 +4547,8 @@ export class SalesService {
       clientId?: string | null;
       payableTotal?: Prisma.Decimal | number | null;
       total?: Prisma.Decimal | number | null;
+      discountAmount?: Prisma.Decimal | number | null;
+      discountPercent?: Prisma.Decimal | number | null;
     },
     body: Record<string, unknown>,
     context?: {
@@ -4458,7 +4558,7 @@ export class SalesService {
   ) {
     const debtInput = this.parseDebtPayload(
       body,
-      Number(sale.payableTotal) || Number(sale.total) || 0,
+      this.getSalePayableAmount(sale),
     );
     if (!debtInput) {
       return null;

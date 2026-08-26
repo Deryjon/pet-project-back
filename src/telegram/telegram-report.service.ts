@@ -55,6 +55,8 @@ type SaleWithItems = {
   branchCode: string | null;
   payableTotal: number;
   total: number;
+  discountAmount: number;
+  discountPercent: number;
   userId: number | null;
   clientId: string | null;
   items: { quantity: number; profitAtSale: number }[];
@@ -73,6 +75,15 @@ type Agg = {
   uniqueClients: number;
 };
 
+function saleAmountOf(sale: SaleWithItems) {
+  return sale.payableTotal !== 0 ||
+    sale.total === 0 ||
+    sale.discountAmount > 0 ||
+    sale.discountPercent > 0
+    ? sale.payableTotal
+    : sale.total;
+}
+
 function aggregate(sales: SaleWithItems[], branchCode?: string): Agg {
   const filtered = branchCode
     ? sales.filter((s) => s.branchCode === branchCode)
@@ -81,8 +92,8 @@ function aggregate(sales: SaleWithItems[], branchCode?: string): Agg {
   const regular = filtered.filter((s) => s.saleType !== 'return');
   const returns = filtered.filter((s) => s.saleType === 'return');
 
-  const revenue = regular.reduce((s, x) => s + (x.payableTotal || x.total || 0), 0);
-  const returnAmt = returns.reduce((s, x) => s + (x.payableTotal || x.total || 0), 0);
+  const revenue = regular.reduce((sum, sale) => sum + saleAmountOf(sale), 0);
+  const returnAmt = returns.reduce((sum, sale) => sum + saleAmountOf(sale), 0);
   const netRevenue = revenue - returnAmt;
 
   const profit = regular.reduce((s, x) => s + x.items.reduce((a, i) => a + (i.profitAtSale ?? 0), 0), 0);
@@ -289,12 +300,12 @@ export class TelegramReportService {
 
     for (const s of salesCur.filter((x) => x.saleType !== 'return')) {
       if (!s.userId) continue;
-      sellerRevCur.set(s.userId, (sellerRevCur.get(s.userId) ?? 0) + (s.payableTotal || s.total || 0));
+      sellerRevCur.set(s.userId, (sellerRevCur.get(s.userId) ?? 0) + saleAmountOf(s));
       sellerCntCur.set(s.userId, (sellerCntCur.get(s.userId) ?? 0) + 1);
     }
     for (const s of salesPrev.filter((x) => x.saleType !== 'return')) {
       if (!s.userId) continue;
-      sellerRevPrev.set(s.userId, (sellerRevPrev.get(s.userId) ?? 0) + (s.payableTotal || s.total || 0));
+      sellerRevPrev.set(s.userId, (sellerRevPrev.get(s.userId) ?? 0) + saleAmountOf(s));
     }
 
     lines.push('<b>Чистая выручка по продавцам:</b>');
@@ -356,6 +367,8 @@ export class TelegramReportService {
         branchCode: true,
         payableTotal: true,
         total: true,
+        discountAmount: true,
+        discountPercent: true,
         userId: true,
         clientId: true,
         items: { select: { quantity: true, profitAtSale: true } },
@@ -367,6 +380,8 @@ export class TelegramReportService {
       branchCode: sale.branchCode,
       payableTotal: Number(sale.payableTotal),
       total: Number(sale.total),
+      discountAmount: Number(sale.discountAmount),
+      discountPercent: Number(sale.discountPercent),
       userId: sale.userId,
       clientId: sale.clientId,
       items: sale.items.map((item) => ({

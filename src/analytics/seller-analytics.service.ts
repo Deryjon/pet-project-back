@@ -14,6 +14,8 @@ type SaleWithItems = {
   branchCode: string | null;
   total: number;
   payableTotal: number;
+  discountAmount: number;
+  discountPercent: number;
   items: Array<{
     name: string;
     quantity: number;
@@ -23,8 +25,15 @@ type SaleWithItems = {
   }>;
 };
 
-function revenueOf(sale: { payableTotal: number; total: number }) {
-  return sale.payableTotal || sale.total || 0;
+function revenueOf(sale: {
+  payableTotal: number;
+  total: number;
+  discountAmount: number;
+  discountPercent: number;
+}) {
+  return sale.payableTotal !== 0 || sale.total === 0 || sale.discountAmount > 0 || sale.discountPercent > 0
+    ? sale.payableTotal
+    : sale.total;
 }
 
 function average(values: number[]) {
@@ -56,6 +65,8 @@ export class SellerAnalyticsService {
         branchCode: true,
         total: true,
         payableTotal: true,
+        discountAmount: true,
+        discountPercent: true,
         items: {
           select: {
             name: true,
@@ -73,6 +84,8 @@ export class SellerAnalyticsService {
       branchCode: sale.branchCode,
       total: Number(sale.total),
       payableTotal: Number(sale.payableTotal),
+      discountAmount: Number(sale.discountAmount),
+      discountPercent: Number(sale.discountPercent),
       items: sale.items.map((item) => ({
         name: item.name,
         quantity: Number(item.quantity),

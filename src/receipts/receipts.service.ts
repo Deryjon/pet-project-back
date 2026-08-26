@@ -150,13 +150,17 @@ export class ReceiptsService {
       const finalPrice = item.finalPrice != null ? Number(item.finalPrice) : 0;
       const discountAmount =
         item.discountAmount != null ? Number(item.discountAmount) : 0;
+      const hasFinalizedSnapshot =
+        Number(item.retailPriceAtSale ?? 0) > 0 ||
+        discountAmount > 0 ||
+        finalPrice > 0;
 
       return {
         name: item.name,
         sku: item.sku ?? item.barcode ?? '',
         quantity: Number(item.quantity),
         price: Number(item.salePrice),
-        total: finalPrice || lineTotal,
+        total: hasFinalizedSnapshot ? finalPrice : lineTotal,
         discount: discountAmount,
         discountPercent:
           discountAmount > 0 && lineTotal > 0

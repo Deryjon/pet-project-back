@@ -157,6 +157,8 @@ export class TelegramService {
     branchCode: string | null;
     payableTotal: Prisma.Decimal | number;
     total: Prisma.Decimal | number;
+    discountAmount: Prisma.Decimal | number;
+    discountPercent: Prisma.Decimal | number;
     userId: number | null;
     paymentMethod: string | null;
     extraPayments: any;
@@ -227,7 +229,15 @@ export class TelegramService {
         ? `${seller.firstName} ${seller.lastName}`.trim()
         : '';
       const shopName = shop?.name ?? sale.branchCode ?? '';
-      const amount = Number(sale.payableTotal) || Number(sale.total) || 0;
+      const payableTotal = Number(sale.payableTotal ?? 0);
+      const total = Number(sale.total ?? 0);
+      const amount =
+        payableTotal !== 0 ||
+        total === 0 ||
+        Number(sale.discountAmount ?? 0) > 0 ||
+        Number(sale.discountPercent ?? 0) > 0
+          ? payableTotal
+          : total;
       const paidAt = sale.paidAt ?? new Date();
 
       // Date formatting
@@ -272,7 +282,12 @@ export class TelegramService {
         const salePrice = Number(item.salePrice);
         const originalTotal =
           Number(item.retailPriceAtSale) || Number(item.lineTotal) || salePrice * quantity;
-        const finalTotal = Number(item.finalPrice) || originalTotal;
+        const finalPrice = Number(item.finalPrice ?? 0);
+        const hasFinalizedSnapshot =
+          Number(item.retailPriceAtSale ?? 0) > 0 ||
+          Number(item.discountAmount ?? 0) > 0 ||
+          finalPrice > 0;
+        const finalTotal = hasFinalizedSnapshot ? finalPrice : originalTotal;
         const discountPct =
           originalTotal > 0 && finalTotal < originalTotal
             ? (((originalTotal - finalTotal) / originalTotal) * 100).toFixed(2)
