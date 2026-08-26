@@ -6378,7 +6378,8 @@ export class ProductsService {
   ): Prisma.ProductWhereInput | undefined {
     const and: Prisma.ProductWhereInput[] = [];
     const normalizedStatus = this.normalizeCatalogStatus(status);
-    const resolvedShopIds = this.toBranchCodes(shopIds);
+    const resolvedShopIds =
+      shopIds?.map((value) => value.trim()).filter(Boolean) ?? [];
 
     if (search) {
       and.push({
