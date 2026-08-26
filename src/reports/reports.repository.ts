@@ -170,7 +170,9 @@ export class ReportsRepository {
   }
 
   private async buildSaleItemWhere(filter: ReportFilterDto, context: any) {
-    const clauses: string[] = [`s.status = 'paid'`];
+    const clauses: string[] = [
+      `s.status IN ('paid', 'returned', 'partially_returned', 'exchanged', 'partially_exchanged')`,
+    ];
     const params: unknown[] = [];
 
     if (context?.companyId) {

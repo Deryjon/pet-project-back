@@ -59,7 +59,15 @@ export class DashboardService {
 
     const sales = await this.prisma.sale.findMany({
       where: {
-        status: 'paid',
+        status: {
+          in: [
+            'paid',
+            'returned',
+            'partially_returned',
+            'exchanged',
+            'partially_exchanged',
+          ],
+        },
         ...(companyId
           ? {
               user: {

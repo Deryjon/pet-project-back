@@ -10,6 +10,7 @@ import {
 } from './seller-analytics.types';
 
 type SaleWithItems = {
+  saleType: string;
   userId: number | null;
   branchCode: string | null;
   total: number;
@@ -25,15 +26,11 @@ type SaleWithItems = {
   }>;
 };
 
-function revenueOf(sale: {
-  payableTotal: number;
-  total: number;
-  discountAmount: number;
-  discountPercent: number;
-}) {
-  return sale.payableTotal !== 0 || sale.total === 0 || sale.discountAmount > 0 || sale.discountPercent > 0
+function revenueOf(sale: SaleWithItems) {
+  const amount = sale.payableTotal !== 0 || sale.total === 0 || sale.discountAmount > 0 || sale.discountPercent > 0
     ? sale.payableTotal
     : sale.total;
+  return sale.saleType === 'return' ? -amount : amount;
 }
 
 function average(values: number[]) {
@@ -55,13 +52,21 @@ export class SellerAnalyticsService {
     const rawSales = await this.prisma.sale.findMany({
       where: {
         companyId,
-        status: 'paid',
-        saleType: { not: 'return' },
+        status: {
+          in: [
+            'paid',
+            'returned',
+            'partially_returned',
+            'exchanged',
+            'partially_exchanged',
+          ],
+        },
         paidAt: { gte: period.start, lt: period.end },
         userId: { not: null },
       },
       select: {
         userId: true,
+        saleType: true,
         branchCode: true,
         total: true,
         payableTotal: true,
@@ -80,6 +85,7 @@ export class SellerAnalyticsService {
     });
 
     const sales: SaleWithItems[] = rawSales.map((sale) => ({
+      saleType: sale.saleType,
       userId: sale.userId,
       branchCode: sale.branchCode,
       total: Number(sale.total),
@@ -154,7 +160,8 @@ export class SellerAnalyticsService {
     sellerSales: SaleWithItems[],
     branchSales: SaleWithItems[],
   ): SellerAnalyticsReport {
-    const receiptsCount = sellerSales.length;
+    const regularSellerSales = sellerSales.filter((sale) => sale.saleType !== 'return');
+    const receiptsCount = regularSellerSales.length;
     const totalRevenue = sellerSales.reduce((sum, s) => sum + revenueOf(s), 0);
     const avgCheck = receiptsCount > 0 ? totalRevenue / receiptsCount : 0;
 
@@ -167,7 +174,10 @@ export class SellerAnalyticsService {
       receiptsCount,
       totalRevenue,
       avgCheck,
-      discounts: this.buildDiscountInsight(sellerSales, branchSales),
+      discounts: this.buildDiscountInsight(
+        regularSellerSales,
+        branchSales.filter((sale) => sale.saleType !== 'return'),
+      ),
       upsell: this.buildUpsellInsights(sellerSales, branchSales),
       ...this.buildProductStats(sellerSales, branchSales),
     };
@@ -232,12 +242,13 @@ export class SellerAnalyticsService {
     >();
 
     for (const sale of sellerSales) {
+      const sign = sale.saleType === 'return' ? -1 : 1;
       for (const item of sale.items) {
         const groupId = item.product?.productGroupId;
         if (!groupId) continue;
         const group = sellerGroups.get(groupId) ?? { budgetQty: 0, totalQty: 0, label: item.name };
-        group.totalQty += item.quantity;
-        if (item.product?.tier === 'BUDGET') group.budgetQty += item.quantity;
+        group.totalQty += item.quantity * sign;
+        if (item.product?.tier === 'BUDGET') group.budgetQty += item.quantity * sign;
         sellerGroups.set(groupId, group);
       }
     }
@@ -246,16 +257,17 @@ export class SellerAnalyticsService {
     const marginByGroupTier = new Map<string, Map<string, { profit: number; qty: number }>>();
 
     for (const sale of branchSales) {
+      const sign = sale.saleType === 'return' ? -1 : 1;
       for (const item of sale.items) {
         const groupId = item.product?.productGroupId;
         const tier = item.product?.tier;
         if (!groupId || !tier) continue;
-        if (tier === 'PREMIUM') branchPremiumByGroup.add(groupId);
+        if (tier === 'PREMIUM' && sign > 0) branchPremiumByGroup.add(groupId);
 
         const tierMap = marginByGroupTier.get(groupId) ?? new Map();
         const entry = tierMap.get(tier) ?? { profit: 0, qty: 0 };
-        entry.profit += item.profitAtSale;
-        entry.qty += item.quantity;
+        entry.profit += item.profitAtSale * sign;
+        entry.qty += item.quantity * sign;
         tierMap.set(tier, entry);
         marginByGroupTier.set(groupId, tierMap);
       }
@@ -314,10 +326,11 @@ export class SellerAnalyticsService {
   private productQtyMap(sales: SaleWithItems[]) {
     const map = new Map<string, ProductStat>();
     for (const sale of sales) {
+      const sign = sale.saleType === 'return' ? -1 : 1;
       for (const item of sale.items) {
         const existing = map.get(item.name) ?? { name: item.name, qty: 0, revenue: 0 };
-        existing.qty += item.quantity;
-        existing.revenue += item.lineTotal;
+        existing.qty += item.quantity * sign;
+        existing.revenue += item.lineTotal * sign;
         map.set(item.name, existing);
       }
     }

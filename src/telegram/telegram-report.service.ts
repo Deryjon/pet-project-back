@@ -361,7 +361,19 @@ export class TelegramReportService {
     end: Date,
   ): Promise<SaleWithItems[]> {
     const sales = await this.prisma.sale.findMany({
-      where: { companyId, status: 'paid', paidAt: { gte: start, lt: end } },
+      where: {
+        companyId,
+        status: {
+          in: [
+            'paid',
+            'returned',
+            'partially_returned',
+            'exchanged',
+            'partially_exchanged',
+          ],
+        },
+        paidAt: { gte: start, lt: end },
+      },
       select: {
         saleType: true,
         branchCode: true,

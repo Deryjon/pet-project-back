@@ -1540,7 +1540,13 @@ export class ReportsService {
     const and: Record<string, unknown>[] = [
       {
         status: {
-          in: ['paid', 'returned'],
+          in: [
+            'paid',
+            'returned',
+            'partially_returned',
+            'exchanged',
+            'partially_exchanged',
+          ],
         },
       },
     ];
