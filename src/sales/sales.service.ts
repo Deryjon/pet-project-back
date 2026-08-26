@@ -1779,6 +1779,9 @@ export class SalesService {
       quantity: number;
       salePrice: number;
       lineTotal: number;
+      retailPriceAtSale?: number;
+      discountAmount?: number;
+      finalPrice?: number;
     }> = [];
 
     for (const rawItem of rawItems) {
@@ -1831,6 +1834,9 @@ export class SalesService {
         quantity,
         salePrice: originalSalePrice,
         lineTotal: Number((quantity * originalSalePrice).toFixed(2)),
+        retailPriceAtSale: Number((quantity * originalSalePrice).toFixed(2)),
+        discountAmount: 0,
+        finalPrice: Number((quantity * originalSalePrice).toFixed(2)),
       });
     }
 
@@ -1855,6 +1861,9 @@ export class SalesService {
       quantity: number;
       salePrice: number;
       lineTotal: number;
+      retailPriceAtSale: number;
+      discountAmount: number;
+      finalPrice: number;
     }> = [];
 
     for (const rawItem of rawItems) {
@@ -1880,15 +1889,6 @@ export class SalesService {
         throw new NotFoundException(`Product ${productId} not found`);
       }
 
-      const salePrice =
-        this.toNumber(record.sale_price) ?? product.salePrice ?? 0;
-
-      if (salePrice <= 0) {
-        throw new BadRequestException(
-          `Sale price for product ${productId} must be greater than 0`,
-        );
-      }
-
       const stock = originalSale.branchCode
         ? await this.prisma.productStock.findFirst({
             where: {
@@ -1897,6 +1897,22 @@ export class SalesService {
             },
           })
         : null;
+
+      const requestedSalePrice = this.toNumber(record.sale_price);
+      const retailUnitPrice = Number(stock?.salePrice ?? product.salePrice ?? 0);
+      const salePrice = requestedSalePrice ?? retailUnitPrice;
+
+      if (salePrice < 0 || (salePrice === 0 && requestedSalePrice === undefined)) {
+        throw new BadRequestException(
+          `Sale price for product ${productId} must be zero or greater`,
+        );
+      }
+
+      if (retailUnitPrice > 0 && salePrice > retailUnitPrice) {
+        throw new BadRequestException(
+          `Exchange price for product ${productId} cannot exceed its retail price`,
+        );
+      }
 
       const availableQuantity = stock?.quantity ?? product.quantity ?? 0;
       const quantityReturnedInSameExchange = returnItems
@@ -1923,6 +1939,11 @@ export class SalesService {
         quantity,
         salePrice,
         lineTotal: Number((quantity * salePrice).toFixed(2)),
+        retailPriceAtSale: Number((quantity * retailUnitPrice).toFixed(2)),
+        discountAmount: Number(
+          (quantity * Math.max(0, retailUnitPrice - salePrice)).toFixed(2),
+        ),
+        finalPrice: Number((quantity * salePrice).toFixed(2)),
       });
     }
 
@@ -1985,13 +2006,24 @@ export class SalesService {
         quantity: number;
         salePrice: number;
         lineTotal: number;
+        retailPriceAtSale?: number;
+        discountAmount?: number;
+        finalPrice?: number;
       }>;
       sellerId?: number;
       paymentMethod?: string;
     },
     tx: Prisma.TransactionClient | PrismaService = this.prisma,
   ) {
-    const total = args.items.reduce((sum, item) => sum + item.lineTotal, 0);
+    const total = args.items.reduce(
+      (sum, item) => sum + (item.retailPriceAtSale ?? item.lineTotal),
+      0,
+    );
+    const payableTotal = args.items.reduce(
+      (sum, item) => sum + (item.finalPrice ?? item.lineTotal),
+      0,
+    );
+    const discountAmount = Math.max(0, total - payableTotal);
     const paymentMethod = await this.resolvePaymentMethod(
       args.paymentMethod,
       args.originalSale.companyId,
@@ -2003,8 +2035,9 @@ export class SalesService {
         number: this.generateOrderNumber(),
         saleType: args.saleType,
         status: args.status,
-        payableTotal: total,
+        payableTotal,
         total,
+        discountAmount,
         paymentMethod,
         clientId: args.originalSale.clientId ?? undefined,
         clientName: args.originalSale.clientName ?? undefined,
@@ -2022,9 +2055,10 @@ export class SalesService {
             quantity: item.quantity,
             sellerId: args.sellerId,
             salePrice: item.salePrice,
-            lineTotal: item.lineTotal,
-            retailPriceAtSale: item.lineTotal,
-            finalPrice: item.lineTotal,
+            lineTotal: item.retailPriceAtSale ?? item.lineTotal,
+            retailPriceAtSale: item.retailPriceAtSale ?? item.lineTotal,
+            discountAmount: item.discountAmount ?? 0,
+            finalPrice: item.finalPrice ?? item.lineTotal,
           })),
         },
       },
