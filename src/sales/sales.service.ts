@@ -1024,6 +1024,7 @@ export class SalesService {
       returnItems,
       context,
     );
+    const exchangeGroup = `exchange-group:${randomUUID()}`;
 
     const { returnSale, exchangeSale } = await this.prisma.$transaction(
       async (tx) => {
@@ -1033,6 +1034,7 @@ export class SalesService {
             saleType: 'return',
             status: 'returned',
             items: returnItems,
+            comment: exchangeGroup,
             sellerId,
             paymentMethod:
               this.optionalString(body.return_payment_method) ??
@@ -1049,6 +1051,7 @@ export class SalesService {
             saleType: 'exchange',
             status: 'paid',
             items: exchangeItems,
+            comment: exchangeGroup,
             sellerId,
             paymentMethod:
               this.optionalString(body.exchange_payment_method) ??
@@ -1647,33 +1650,42 @@ export class SalesService {
         throw new BadRequestException('Unsupported adjustment document type');
       }
 
-      await this.prisma.$transaction(async (tx) => {
-        const stockMultiplier: 1 | -1 =
-          sale.saleType === 'return' ? -1 : 1;
-        const movementType =
-          sale.saleType === 'return' ? 'SALE' : 'RETURN';
+      const adjustmentSales = await this.resolveAdjustmentDeletionGroup(sale);
 
-        await this.applyStockDelta(
-          sale.branchCode,
-          sale.items
-            .filter((item: any) => typeof item.productId === 'number')
-            .map((item: any) => ({
-              productId: item.productId as number,
-              quantity: Number(item.quantity),
-              salePrice: Number(item.salePrice),
-            })),
-          stockMultiplier,
-          {
-            companyId: sale.companyId,
-            userId: context?.userId ?? sale.userId,
-            externalId: `DELETE-${sale.number}`,
-            movementType,
-          },
+      await this.prisma.$transaction(async (tx) => {
+        for (const adjustment of adjustmentSales) {
+          const stockMultiplier: 1 | -1 =
+            adjustment.saleType === 'return' ? -1 : 1;
+          const movementType =
+            adjustment.saleType === 'return' ? 'SALE' : 'RETURN';
+
+          await this.applyStockDelta(
+            adjustment.branchCode,
+            adjustment.items
+              .filter((item: any) => typeof item.productId === 'number')
+              .map((item: any) => ({
+                productId: item.productId as number,
+                quantity: Number(item.quantity),
+                salePrice: Number(item.salePrice),
+              })),
+            stockMultiplier,
+            {
+              companyId: adjustment.companyId,
+              userId: context?.userId ?? adjustment.userId,
+              externalId: `DELETE-${adjustment.number}`,
+              movementType,
+            },
+            tx,
+          );
+        }
+
+        await this.syncProductsQuantity(
+          adjustmentSales.flatMap((adjustment) => adjustment.items),
           tx,
         );
-
-        await this.syncProductsQuantity(sale.items, tx);
-        await tx.sale.delete({ where: { id: sale.id } });
+        await tx.sale.deleteMany({
+          where: { id: { in: adjustmentSales.map((adjustment) => adjustment.id) } },
+        });
         await this.refreshBaseSaleStatus(sale.parentSaleId, tx);
       });
 
@@ -1681,6 +1693,7 @@ export class SalesService {
         success: true,
         id: sale.id,
         type: sale.saleType,
+        deleted_ids: adjustmentSales.map((adjustment) => adjustment.id),
         parent_order_id: String(sale.parentSaleId),
       };
     }
@@ -2049,6 +2062,7 @@ export class SalesService {
       }>;
       sellerId?: number;
       paymentMethod?: string;
+      comment?: string;
     },
     tx: Prisma.TransactionClient | PrismaService = this.prisma,
   ) {
@@ -2082,6 +2096,7 @@ export class SalesService {
         isDraft: false,
         userId: args.sellerId,
         parentSaleId: args.originalSale.id,
+        comment: args.comment,
         paidAt: new Date(),
         items: {
           create: args.items.map((item) => ({
