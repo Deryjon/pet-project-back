@@ -1643,9 +1643,46 @@ export class SalesService {
     this.assertSaleAccess(sale, context);
 
     if (sale.parentSaleId) {
-      throw new BadRequestException(
-        'Return or exchange documents cannot be deleted separately',
-      );
+      if (!['return', 'exchange'].includes(String(sale.saleType))) {
+        throw new BadRequestException('Unsupported adjustment document type');
+      }
+
+      await this.prisma.$transaction(async (tx) => {
+        const stockMultiplier: 1 | -1 =
+          sale.saleType === 'return' ? -1 : 1;
+        const movementType =
+          sale.saleType === 'return' ? 'SALE' : 'RETURN';
+
+        await this.applyStockDelta(
+          sale.branchCode,
+          sale.items
+            .filter((item: any) => typeof item.productId === 'number')
+            .map((item: any) => ({
+              productId: item.productId as number,
+              quantity: Number(item.quantity),
+              salePrice: Number(item.salePrice),
+            })),
+          stockMultiplier,
+          {
+            companyId: sale.companyId,
+            userId: context?.userId ?? sale.userId,
+            externalId: `DELETE-${sale.number}`,
+            movementType,
+          },
+          tx,
+        );
+
+        await this.syncProductsQuantity(sale.items, tx);
+        await tx.sale.delete({ where: { id: sale.id } });
+        await this.refreshBaseSaleStatus(sale.parentSaleId, tx);
+      });
+
+      return {
+        success: true,
+        id: sale.id,
+        type: sale.saleType,
+        parent_order_id: String(sale.parentSaleId),
+      };
     }
 
     const childSalesCount = await this.prisma.sale.count({
