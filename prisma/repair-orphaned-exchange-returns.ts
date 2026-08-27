@@ -52,11 +52,19 @@ async function main() {
     where: {
       saleType: 'return',
       parentSaleId: requestedParentId > 0 ? requestedParentId : { not: null },
-      comment: {
-        not: {
-          startsWith: 'exchange-group:',
+      adjustmentGroupId: null,
+      OR: [
+        {
+          comment: null,
         },
-      },
+        {
+          comment: {
+            not: {
+              startsWith: 'exchange-group:',
+            },
+          },
+        },
+      ],
     },
     include: {
       items: true,
@@ -69,6 +77,7 @@ async function main() {
               saleType: true,
               status: true,
               comment: true,
+              adjustmentGroupId: true,
               createdAt: true,
             },
           },

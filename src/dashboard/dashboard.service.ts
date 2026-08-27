@@ -1,6 +1,10 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
+import {
+  getSaleItemNetSales,
+  getSignedSaleAmount,
+} from '../common/money-calculations';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
@@ -178,7 +182,7 @@ export class DashboardService {
         ? shopByBranchCode.get(sale.branchCode)
         : undefined;
       const shopName = shop?.name ?? sale.branchCode ?? 'Unknown';
-      const saleTotal = this.getSignedSaleAmount(sale);
+      const saleTotal = getSignedSaleAmount(sale);
 
       if (bucketIndex >= 0) {
         bucketTotals[bucketIndex].total_price += saleTotal;
@@ -252,7 +256,7 @@ export class DashboardService {
         existingProduct.quantity += Number(item.quantity) * itemSign;
         existingProduct.total_price += Number(item.lineTotal) * itemSign;
         existingProduct.net_sales +=
-          this.getItemNetSales(item) * itemSign;
+          getSaleItemNetSales(item) * itemSign;
         productTotals.set(productName, existingProduct);
       }
     }
@@ -279,7 +283,7 @@ export class DashboardService {
       shop_orders: shopOrders,
       total: bucketTotals,
       total_orders_price: sales.reduce(
-        (sum, sale) => sum + this.getSignedSaleAmount(sale),
+        (sum, sale) => sum + getSignedSaleAmount(sale),
         0,
       ),
       payment_type_stats: [...paymentTotals.values()],
@@ -485,41 +489,4 @@ export class DashboardService {
     return this.companySettingsService.formatDateTimeForCompany(value, companyId);
   }
 
-  private getSignedSaleAmount(sale: {
-    payableTotal?: Prisma.Decimal | number | null;
-    total?: Prisma.Decimal | number | null;
-    saleType?: string;
-    discountAmount?: Prisma.Decimal | number | null;
-    discountPercent?: Prisma.Decimal | number | null;
-  }) {
-    const payableTotal = Number(sale.payableTotal ?? 0);
-    const total = Number(sale.total ?? 0);
-    const amount =
-      payableTotal !== 0 ||
-      total === 0 ||
-      Number(sale.discountAmount ?? 0) > 0 ||
-      Number(sale.discountPercent ?? 0) > 0
-        ? payableTotal
-        : total;
-    return sale.saleType === 'return' ? -amount : amount;
-  }
-
-  private getItemNetSales(item: {
-    lineTotal?: Prisma.Decimal | number | null;
-    retailPriceAtSale?: Prisma.Decimal | number | null;
-    discountAmount?: Prisma.Decimal | number | null;
-    finalPrice?: Prisma.Decimal | number | null;
-  }) {
-    const lineTotal = Number(item.lineTotal ?? 0);
-    const finalPrice = Number(item.finalPrice ?? 0);
-    const hasFinalizedSnapshot =
-      Number(item.retailPriceAtSale ?? 0) > 0 ||
-      Number(item.discountAmount ?? 0) > 0 ||
-      finalPrice > 0;
-
-    // Legacy sale items have zero-filled snapshot columns. A finalized item
-    // can legitimately have finalPrice = 0 after a 100% discount, so the
-    // other snapshot fields are also used to distinguish that case.
-    return hasFinalizedSnapshot ? finalPrice : lineTotal;
-  }
 }

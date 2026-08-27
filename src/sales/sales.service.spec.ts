@@ -755,4 +755,195 @@ describe('SalesService money calculations', () => {
       expect(bonus).toBe(25);
     });
   });
+
+  describe('removeOrder cancellation safety', () => {
+    it('cancels a paid sale instead of physically deleting it', async () => {
+      const sale = {
+        id: 101,
+        number: 'S-101',
+        companyId: 'company-1',
+        branchCode: 'B1',
+        userId: 7,
+        isDraft: false,
+        saleType: 'sale',
+        status: 'paid',
+        items: [{ productId: 1, quantity: 1, salePrice: 100 }],
+      };
+      const saleDelete = jest.fn();
+      const saleUpdate = jest.fn();
+      const { service, prisma } = createService({
+        sale: {
+          findUnique: jest.fn().mockResolvedValue(sale),
+          count: jest.fn().mockResolvedValue(0),
+          update: saleUpdate,
+          delete: saleDelete,
+        },
+      });
+      jest.spyOn(service as any, 'restoreSaleStock').mockResolvedValue(undefined);
+
+      await service.removeOrder(String(sale.id));
+
+      expect((prisma.sale as any).count).toHaveBeenCalledWith({
+        where: {
+          parentSaleId: sale.id,
+          status: { not: 'cancelled' },
+        },
+      });
+      expect(saleUpdate).toHaveBeenCalledWith({
+        where: { id: sale.id },
+        data: expect.objectContaining({
+          status: 'cancelled',
+          isDraft: false,
+          cancelledAt: expect.any(Date),
+          cancelledById: null,
+          cancelReason: 'Cancelled sale document',
+        }),
+      });
+      expect(saleDelete).not.toHaveBeenCalled();
+    });
+
+    it('writes an audit log with cancellation reason for paid sales', async () => {
+      const sale = {
+        id: 102,
+        number: 'S-102',
+        companyId: 'company-1',
+        branchCode: 'B1',
+        userId: 7,
+        isDraft: false,
+        saleType: 'sale',
+        status: 'paid',
+        payableTotal: 1200,
+        total: 1500,
+        discountAmount: 300,
+        discountPercent: 0,
+        items: [{ productId: 1, name: 'Cable', quantity: 2, salePrice: 600 }],
+      };
+      const auditCreate = jest.fn();
+      const { service } = createService({
+        sale: {
+          findUnique: jest.fn().mockResolvedValue(sale),
+          count: jest.fn().mockResolvedValue(0),
+          update: jest.fn(),
+          delete: jest.fn(),
+        },
+        auditLog: {
+          create: auditCreate,
+        },
+      });
+      jest.spyOn(service as any, 'restoreSaleStock').mockResolvedValue(undefined);
+      jest.spyOn(service as any, 'getRequestContext').mockResolvedValue({
+        userId: 44,
+        userType: 'company',
+        companyId: 'company-1',
+        allowedBranchCodes: ['B1'],
+      });
+
+      await service.removeOrder(String(sale.id), 'Bearer token', {
+        cancel_reason: 'Ошибка кассира',
+      });
+
+      expect(auditCreate).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          companyId: 'company-1',
+          userId: 44,
+          action: 'sale.cancelled',
+          entity: 'sale',
+          entityId: '102',
+          meta: expect.objectContaining({
+            number: 'S-102',
+            saleType: 'sale',
+            previousStatus: 'paid',
+            branchCode: 'B1',
+            reason: 'Ошибка кассира',
+            total: 1200,
+            items: [
+              {
+                productId: 1,
+                name: 'Cable',
+                quantity: 2,
+                salePrice: 600,
+              },
+            ],
+          }),
+        }),
+      });
+    });
+
+    it('cancels return/exchange adjustment documents as a group', async () => {
+      const adjustment = {
+        id: 202,
+        number: 'R-202',
+        companyId: 'company-1',
+        branchCode: 'B1',
+        userId: 7,
+        parentSaleId: 101,
+        saleType: 'return',
+        status: 'paid',
+        isDraft: false,
+        items: [{ productId: 1, quantity: 1, salePrice: 100 }],
+      };
+      const groupedAdjustments = [
+        adjustment,
+        {
+          ...adjustment,
+          id: 203,
+          number: 'E-203',
+          saleType: 'exchange',
+        },
+      ];
+      const saleDeleteMany = jest.fn();
+      const saleUpdateMany = jest.fn();
+      const transaction = jest.fn(async (callback) =>
+        callback({
+          sale: {
+            updateMany: saleUpdateMany,
+            findUnique: jest.fn().mockResolvedValue({
+              id: 101,
+              saleType: 'sale',
+              isDraft: false,
+              items: [],
+            }),
+            count: jest.fn().mockResolvedValue(0),
+            update: jest.fn(),
+            findMany: jest.fn().mockResolvedValue([]),
+          },
+        }),
+      );
+      const { service } = createService({
+        $transaction: transaction,
+        sale: {
+          findUnique: jest.fn().mockResolvedValue(adjustment),
+          deleteMany: saleDeleteMany,
+        },
+      });
+      jest
+        .spyOn(service as any, 'resolveAdjustmentDeletionGroup')
+        .mockResolvedValue(groupedAdjustments);
+      jest.spyOn(service as any, 'applyStockDelta').mockResolvedValue(undefined);
+      jest
+        .spyOn(service as any, 'syncProductsQuantity')
+        .mockResolvedValue(undefined);
+
+      const result = await service.removeOrder(String(adjustment.id));
+
+      expect(saleUpdateMany).toHaveBeenCalledWith({
+        where: { id: { in: [202, 203] } },
+        data: expect.objectContaining({
+          status: 'cancelled',
+          isDraft: false,
+          cancelledAt: expect.any(Date),
+          cancelledById: null,
+          cancelReason: 'Cancelled adjustment document',
+        }),
+      });
+      expect(saleDeleteMany).not.toHaveBeenCalled();
+      expect(result).toEqual(
+        expect.objectContaining({
+          success: true,
+          cancelled_ids: [202, 203],
+          parent_order_id: '101',
+        }),
+      );
+    });
+  });
 });

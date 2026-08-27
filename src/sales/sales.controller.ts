@@ -59,6 +59,14 @@ export class SalesController {
     return this.salesService.findOrder(id, authorization);
   }
 
+  @Get(['order/:id/audit-logs', 'v2/order/:id/audit-logs'])
+  findOrderAuditLogs(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.salesService.findOrderAuditLogs(id, authorization);
+  }
+
   @Get(['order-draft-debt/:id', 'v1/order-draft-debt/:id'])
   findOrderDraftDebt(
     @Param('id') id: string,
@@ -273,8 +281,9 @@ export class SalesController {
   @Delete(['order/:id', 'v2/order/:id'])
   removeOrder(
     @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
   ) {
-    return this.salesService.removeOrder(id, authorization);
+    return this.salesService.removeOrder(id, authorization, body);
   }
 }

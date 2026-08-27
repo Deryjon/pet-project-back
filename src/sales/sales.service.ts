@@ -301,6 +301,81 @@ export class SalesService {
     return this.toV2OrderResponse(sale, context, shopLookup);
   }
 
+  async findOrderAuditLogs(id: string, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
+    const saleId = this.parseEntityId(id, 'order id');
+    const sale = await this.prisma.sale.findUnique({
+      where: { id: saleId },
+      select: {
+        id: true,
+        companyId: true,
+        branchCode: true,
+        parentSaleId: true,
+      },
+    });
+
+    if (!sale) {
+      throw new NotFoundException('Order not found');
+    }
+
+    this.assertSaleAccess(sale, context);
+
+    const relatedSales = await this.prisma.sale.findMany({
+      where: {
+        OR: [
+          { id: sale.id },
+          { parentSaleId: sale.id },
+          ...(sale.parentSaleId ? [{ id: sale.parentSaleId }] : []),
+          ...(sale.parentSaleId ? [{ parentSaleId: sale.parentSaleId }] : []),
+        ],
+      },
+      select: {
+        id: true,
+      },
+    });
+    const entityIds = [
+      ...new Set(relatedSales.map((relatedSale) => String(relatedSale.id))),
+    ];
+
+    const logs = await this.prisma.auditLog.findMany({
+      where: {
+        entity: 'sale',
+        entityId: {
+          in: entityIds.length ? entityIds : [String(sale.id)],
+        },
+        ...(sale.companyId ? { companyId: sale.companyId } : {}),
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+      take: 50,
+    });
+
+    return {
+      items: logs.map((log) => ({
+        id: log.id,
+        action: log.action,
+        entity: log.entity,
+        entity_id: log.entityId,
+        user_id: log.userId,
+        user_name: log.user
+          ? `${log.user.firstName} ${log.user.lastName}`.trim()
+          : `User ${log.userId}`,
+        meta: log.meta,
+        created_at: log.createdAt.toISOString(),
+      })),
+    };
+  }
+
   async findOrderDraftDebt(id: string, authorization?: string) {
     const context = await this.getRequestContext(authorization);
     const saleId = this.parseOptionalEntityId(id);
@@ -339,15 +414,7 @@ export class SalesService {
     const context = await this.getRequestContext(authorization);
     const safePage = Math.max(1, Number(query.page) || 1);
     const safeLimit = Math.min(Math.max(1, Number(query.limit) || 50), 100);
-    const onlyDeleted = query.only_deleted === 'true';
     const where = this.buildOrderSearchWhere(query, context);
-
-    if (onlyDeleted) {
-      return {
-        count: 0,
-        orders_sorted_by_date_list: [],
-      };
-    }
 
     const [count, sales] = await this.prisma.$transaction([
       this.prisma.sale.count({ where }),
@@ -406,12 +473,7 @@ export class SalesService {
     authorization?: string,
   ) {
     const context = await this.getRequestContext(authorization);
-    const onlyDeleted = query.only_deleted === 'true';
     const where = this.buildOrderSearchWhere(query, context);
-
-    if (onlyDeleted) {
-      return this.emptyOrderSearchStats();
-    }
 
     const sales = await this.prisma.sale.findMany({
       where,
@@ -1024,7 +1086,7 @@ export class SalesService {
       returnItems,
       context,
     );
-    const exchangeGroup = `exchange-group:${randomUUID()}`;
+    const exchangeGroup = randomUUID();
 
     const { returnSale, exchangeSale } = await this.prisma.$transaction(
       async (tx) => {
@@ -1034,7 +1096,7 @@ export class SalesService {
             saleType: 'return',
             status: 'returned',
             items: returnItems,
-            comment: exchangeGroup,
+            adjustmentGroupId: exchangeGroup,
             sellerId,
             paymentMethod:
               this.optionalString(body.return_payment_method) ??
@@ -1051,7 +1113,7 @@ export class SalesService {
             saleType: 'exchange',
             status: 'paid',
             items: exchangeItems,
-            comment: exchangeGroup,
+            adjustmentGroupId: exchangeGroup,
             sellerId,
             paymentMethod:
               this.optionalString(body.exchange_payment_method) ??
@@ -1620,8 +1682,16 @@ export class SalesService {
     };
   }
 
-  async removeOrder(id: string, authorization?: string) {
+  async removeOrder(
+    id: string,
+    authorization?: string,
+    body: Record<string, unknown> = {},
+  ) {
     const context = await this.getRequestContext(authorization);
+    const cancelReason =
+      this.optionalString(body.cancel_reason) ??
+      this.optionalString(body.cancelReason) ??
+      this.optionalString(body.reason);
     const saleId = this.parseEntityId(id, 'order id');
     const sale = (await this.prisma.sale.findUnique({
       where: { id: saleId },
@@ -1683,9 +1753,40 @@ export class SalesService {
           adjustmentSales.flatMap((adjustment) => adjustment.items),
           tx,
         );
-        await tx.sale.deleteMany({
-          where: { id: { in: adjustmentSales.map((adjustment) => adjustment.id) } },
+        await tx.sale.updateMany({
+          where: {
+            id: { in: adjustmentSales.map((adjustment) => adjustment.id) },
+          },
+          data: {
+            status: 'cancelled',
+            isDraft: false,
+            cancelledAt: new Date(),
+            cancelledById: context?.userId ?? null,
+            cancelReason: cancelReason ?? 'Cancelled adjustment document',
+          },
         });
+        await this.createSaleAuditLog(
+          tx,
+          context,
+          'sale.adjustment_cancelled',
+          sale,
+          {
+            reason: cancelReason ?? 'Cancelled adjustment document',
+            cancelledIds: adjustmentSales.map((adjustment) => adjustment.id),
+            adjustmentTypes: adjustmentSales.map((adjustment) => ({
+              id: adjustment.id,
+              number: adjustment.number,
+              saleType: adjustment.saleType,
+              total: this.getSalePayableAmount(adjustment),
+              items: adjustment.items.map((item: any) => ({
+                productId: item.productId,
+                name: item.name,
+                quantity: Number(item.quantity),
+                salePrice: Number(item.salePrice),
+              })),
+            })),
+          },
+        );
         await this.refreshBaseSaleStatus(sale.parentSaleId, tx);
       });
 
@@ -1693,7 +1794,7 @@ export class SalesService {
         success: true,
         id: sale.id,
         type: sale.saleType,
-        deleted_ids: adjustmentSales.map((adjustment) => adjustment.id),
+        cancelled_ids: adjustmentSales.map((adjustment) => adjustment.id),
         parent_order_id: String(sale.parentSaleId),
       };
     }
@@ -1701,6 +1802,9 @@ export class SalesService {
     const childSalesCount = await this.prisma.sale.count({
       where: {
         parentSaleId: sale.id,
+        status: {
+          not: 'cancelled',
+        },
       },
     });
 
@@ -1714,14 +1818,93 @@ export class SalesService {
       await this.restoreSaleStock(sale);
     }
 
-    await this.prisma.sale.delete({
+    if (sale.isDraft) {
+      await this.prisma.sale.delete({
+        where: { id: sale.id },
+      });
+
+      return {
+        success: true,
+        id: sale.id,
+        action: 'deleted',
+      };
+    }
+
+    await this.prisma.sale.update({
       where: { id: sale.id },
+      data: {
+        status: 'cancelled',
+        isDraft: false,
+        cancelledAt: new Date(),
+        cancelledById: context?.userId ?? null,
+        cancelReason: cancelReason ?? 'Cancelled sale document',
+      },
     });
+    await this.createSaleAuditLog(
+      this.prisma,
+      context,
+      'sale.cancelled',
+      sale,
+      {
+        reason: cancelReason ?? 'Cancelled sale document',
+        total: this.getSalePayableAmount(sale),
+        items: sale.items.map((item: any) => ({
+          productId: item.productId,
+          name: item.name,
+          quantity: Number(item.quantity),
+          salePrice: Number(item.salePrice),
+        })),
+      },
+    );
 
     return {
       success: true,
       id: sale.id,
+      action: 'cancelled',
     };
+  }
+
+  private async createSaleAuditLog(
+    tx: Pick<Prisma.TransactionClient, 'auditLog'> | PrismaService,
+    context: any,
+    action: string,
+    sale: {
+      id: number;
+      number?: string | null;
+      companyId?: string | null;
+      saleType?: string | null;
+      status?: string | null;
+      branchCode?: string | null;
+      parentSaleId?: number | null;
+      adjustmentGroupId?: string | null;
+    },
+    meta?: Record<string, unknown>,
+  ) {
+    const companyId = sale.companyId ?? context?.companyId ?? null;
+    const userId = context?.userId ?? null;
+
+    if (!companyId || typeof userId !== 'number') {
+      return;
+    }
+
+    await tx.auditLog.create({
+      data: {
+        companyId,
+        userId,
+        action,
+        entity: 'sale',
+        entityId: String(sale.id),
+        meta: {
+          number: sale.number ?? null,
+          saleType: sale.saleType ?? null,
+          previousStatus: sale.status ?? null,
+          branchCode: sale.branchCode ?? null,
+          parentSaleId: sale.parentSaleId ?? null,
+          adjustmentGroupId: sale.adjustmentGroupId ?? null,
+          ...meta,
+        },
+      },
+    });
   }
 
   private async resolveAdjustmentDeletionGroup(sale: any) {
@@ -1738,6 +1921,41 @@ export class SalesService {
       user: true,
     };
 
+    const adjustmentGroupId =
+      typeof sale.adjustmentGroupId === 'string'
+        ? sale.adjustmentGroupId.trim()
+        : '';
+
+    if (adjustmentGroupId) {
+      const groupedSales = await this.prisma.sale.findMany({
+        where: {
+          parentSaleId: sale.parentSaleId,
+          adjustmentGroupId,
+          saleType: {
+            in: ['return', 'exchange'],
+          },
+          status: {
+            not: 'cancelled',
+          },
+        },
+        include,
+        orderBy: {
+          id: 'asc',
+        },
+      });
+
+      const hasReturn = groupedSales.some(
+        (adjustment) => adjustment.saleType === 'return',
+      );
+      const hasExchange = groupedSales.some(
+        (adjustment) => adjustment.saleType === 'exchange',
+      );
+
+      if (hasReturn && hasExchange) {
+        return groupedSales as any[];
+      }
+    }
+
     const groupComment =
       typeof sale.comment === 'string' ? sale.comment.trim() : '';
 
@@ -1748,6 +1966,9 @@ export class SalesService {
           comment: groupComment,
           saleType: {
             in: ['return', 'exchange'],
+          },
+          status: {
+            not: 'cancelled',
           },
         },
         include,
@@ -1775,6 +1996,9 @@ export class SalesService {
         id: pairSaleId,
         parentSaleId: sale.parentSaleId,
         saleType: pairSaleType,
+        status: {
+          not: 'cancelled',
+        },
         ...(sale.userId != null ? { userId: sale.userId } : {}),
       },
       include,
@@ -2135,6 +2359,7 @@ export class SalesService {
       sellerId?: number;
       paymentMethod?: string;
       comment?: string;
+      adjustmentGroupId?: string;
     },
     tx: Prisma.TransactionClient | PrismaService = this.prisma,
   ) {
@@ -2169,6 +2394,7 @@ export class SalesService {
         userId: args.sellerId,
         parentSaleId: args.originalSale.id,
         comment: args.comment,
+        adjustmentGroupId: args.adjustmentGroupId,
         paidAt: new Date(),
         items: {
           create: args.items.map((item) => ({
@@ -2459,6 +2685,9 @@ export class SalesService {
       const childSalesCount = await tx.sale.count({
         where: {
           parentSaleId: saleId,
+          status: {
+            not: 'cancelled',
+          },
         },
       });
 
@@ -2476,6 +2705,9 @@ export class SalesService {
     const childSales = await tx.sale.findMany({
       where: {
         parentSaleId: saleId,
+        status: {
+          not: 'cancelled',
+        },
       },
       include: {
         items: true,
@@ -3372,6 +3604,10 @@ export class SalesService {
       number: string;
       saleType?: string;
       parentSaleId?: number | null;
+      adjustmentGroupId?: string | null;
+      cancelledAt?: Date | null;
+      cancelledById?: number | null;
+      cancelReason?: string | null;
       createdAt: Date;
       status: string;
       parkNote?: string | null;
@@ -3429,8 +3665,12 @@ export class SalesService {
       sale_number: sale.number,
       sale_type: sale.saleType ?? 'sale',
       parent_order_id: sale.parentSaleId ? String(sale.parentSaleId) : null,
+      adjustment_group_id: sale.adjustmentGroupId ?? null,
       created_at: sale.createdAt,
       status: sale.status,
+      cancelled_at: sale.cancelledAt ?? null,
+      cancelled_by_user_id: sale.cancelledById ?? null,
+      cancel_reason: sale.cancelReason ?? null,
       park_status: sale.status === 'parked' ? 'parked' : '',
       park_note: sale.parkNote ?? '',
       payable_total: payableTotal,
@@ -4261,6 +4501,13 @@ export class SalesService {
       }
 
       if (
+        ['deleted', 'cancelled', 'removed'].includes(statusValue) &&
+        status !== statusValue
+      ) {
+        return false;
+      }
+
+      if (
         search &&
         ![
           sale.number,
@@ -4656,6 +4903,21 @@ export class SalesService {
     context: any,
   ) {
     const andFilters: Record<string, unknown>[] = [{ isDraft: false }];
+    const onlyDeleted = query.only_deleted === 'true';
+
+    andFilters.push(
+      onlyDeleted
+        ? {
+            status: {
+              in: ['cancelled', 'deleted', 'removed'],
+            },
+          }
+        : {
+            status: {
+              notIn: ['cancelled', 'deleted', 'removed'],
+            },
+          },
+    );
     const scope = this.buildSaleScope(context);
 
     if (scope) {

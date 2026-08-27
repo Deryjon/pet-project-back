@@ -1105,6 +1105,10 @@ model Sale {
   clientName      String?
   parkNote        String?
   comment         String?
+  adjustmentGroupId String?
+  cancelledAt     DateTime?
+  cancelledById   Int?
+  cancelReason    String?
   branchCode      String?
   isDraft         Boolean    @default(true)
   userId          Int?
@@ -1128,6 +1132,8 @@ model Sale {
   @@index([userId])
   @@index([parentSaleId])
   @@index([saleType])
+  @@index([adjustmentGroupId])
+  @@index([cancelledAt])
 }
 
 model SaleItem {
