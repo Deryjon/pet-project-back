@@ -2,6 +2,7 @@ import {
   BadGatewayException,
   BadRequestException,
   Injectable,
+  Logger,
 } from '@nestjs/common';
 import { promises as fs } from 'fs';
 import { execFile } from 'child_process';
@@ -14,6 +15,8 @@ export const INVOICE_RECOGNITION_PROVIDER = Symbol(
 
 @Injectable()
 export class InvoiceRecognitionService {
+  private readonly logger = new Logger(InvoiceRecognitionService.name);
+
   async recognize(files: InvoiceFile[]): Promise<RecognizedInvoice> {
     if (
       (process.env.INVOICE_RECOGNITION_PROVIDER || 'paddle').toLowerCase() ===
@@ -40,12 +43,20 @@ export class InvoiceRecognitionService {
       process.env.PADDLE_OCR_PYTHON ||
       join(process.cwd(), '.venv-ocr', 'bin', 'python');
     const script = join(process.cwd(), 'ocr', 'recognize_invoice.py');
+    const timeout = Math.max(
+      60000,
+      Number(process.env.PADDLE_OCR_TIMEOUT_MS) || 600000,
+    );
+    const startedAt = Date.now();
+    this.logger.log(
+      `Starting local OCR for ${paths.length} file(s), timeout=${timeout}ms`,
+    );
     const stdout = await new Promise<string>((resolve, reject) => {
       execFile(
         python,
         [script, ...paths],
         {
-          timeout: 180000,
+          timeout,
           maxBuffer: 20 * 1024 * 1024,
           env: {
             ...process.env,
@@ -53,13 +64,18 @@ export class InvoiceRecognitionService {
           },
         },
         (error, output, stderr) => {
-          if (error)
+          if (error) {
+            this.logger.error(
+              `Local OCR failed after ${Date.now() - startedAt}ms: ${error.message}`,
+              stderr?.slice(-4000),
+            );
             return reject(
               new BadGatewayException(
-                stderr?.trim() ||
-                  'Local PaddleOCR failed. Run npm run ocr:install on the backend server.',
+                stderr?.trim() || `Local PaddleOCR failed: ${error.message}`,
               ),
             );
+          }
+          this.logger.log(`Local OCR completed in ${Date.now() - startedAt}ms`);
           resolve(output);
         },
       );
