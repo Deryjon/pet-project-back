@@ -373,6 +373,79 @@ export class SupplierInvoiceService {
       return updated;
     });
   }
+
+  async mergeItems(id: string, body: any, auth?: string) {
+    const ctx = await this.context(auth);
+    const invoice = await this.get(id, auth);
+    if (!['REVIEW', 'DRAFT'].includes(invoice.status)) {
+      throw new BadRequestException('Items can only be merged during review');
+    }
+    const itemIds = [
+      ...new Set(Array.isArray(body.itemIds) ? body.itemIds.map(String) : []),
+    ];
+    if (itemIds.length < 2)
+      throw new BadRequestException('Select at least two items');
+    const items = invoice.items.filter((item: any) =>
+      itemIds.includes(item.id),
+    );
+    if (items.length !== itemIds.length)
+      throw new BadRequestException('Some items do not belong to invoice');
+    const productId = items[0].matchedProductId;
+    const supplyPrice = Number(items[0].supplyPrice);
+    if (
+      !productId ||
+      items.some((item: any) => item.matchedProductId !== productId)
+    ) {
+      throw new BadRequestException(
+        'Only rows matched to the same product can be merged',
+      );
+    }
+    if (
+      items.some(
+        (item: any) => Math.abs(Number(item.supplyPrice) - supplyPrice) > 0.001,
+      )
+    ) {
+      throw new BadRequestException(
+        'Rows with different supply prices cannot be merged',
+      );
+    }
+    if (items.some((item: any) => item.allocations.length)) {
+      throw new BadRequestException('Remove allocations before merging items');
+    }
+    const [target, ...duplicates] = items;
+    const quantity = items.reduce(
+      (sum: number, item: any) => sum + Number(item.quantity),
+      0,
+    );
+    const totalPrice = items.reduce(
+      (sum: number, item: any) =>
+        sum + Number(item.totalPrice ?? Number(item.quantity) * supplyPrice),
+      0,
+    );
+    return this.prisma.$transaction(async (tx: any) => {
+      await tx.supplierInvoiceItem.update({
+        where: { id: target.id },
+        data: { quantity, totalPrice, userConfirmed: true, status: 'MATCHED' },
+      });
+      await tx.supplierInvoiceItem.deleteMany({
+        where: {
+          id: { in: duplicates.map((item: any) => item.id) },
+          invoiceId: id,
+        },
+      });
+      await this.audit(tx, ctx, 'ITEMS_MERGED', id, {
+        keptItemId: target.id,
+        removedItemIds: duplicates.map((item: any) => item.id),
+        productId,
+        quantity,
+        supplyPrice,
+      });
+      return tx.supplierInvoice.findUnique({
+        where: { id },
+        include: this.include(),
+      });
+    });
+  }
   async allocate(id: string, body: any, auth?: string) {
     const ctx = await this.context(auth);
     const invoice = await this.get(id, auth);

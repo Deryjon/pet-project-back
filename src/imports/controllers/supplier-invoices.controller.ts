@@ -122,6 +122,14 @@ export class SupplierInvoicesController {
   ) {
     return this.invoices.allocate(id, body, auth);
   }
+  @Post(':id/items/merge')
+  mergeItems(
+    @Param('id') id: string,
+    @Body() body: any,
+    @Headers('authorization') auth?: string,
+  ) {
+    return this.invoices.mergeItems(id, body, auth);
+  }
   @Post(':id/ready') ready(
     @Param('id') id: string,
     @Headers('authorization') auth?: string,
