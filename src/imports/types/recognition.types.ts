@@ -1,4 +1,9 @@
-export type InvoiceFile = { name: string; mimeType: string; url?: string };
+export type InvoiceFile = {
+  name: string;
+  mimeType: string;
+  url?: string;
+  path?: string;
+};
 export type RecognizedInvoice = {
   invoiceNumber?: string;
   invoiceDate?: string;

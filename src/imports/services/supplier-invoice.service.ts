@@ -10,6 +10,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { UsersService } from '../../users/users.service';
 import { ImportMatcherService } from './import-matcher.service';
 import { ImportNormalizerService } from './import-normalizer.service';
+import { InvoiceRecognitionService } from './invoice-recognition.service';
 
 @Injectable()
 export class SupplierInvoiceService {
@@ -18,12 +19,74 @@ export class SupplierInvoiceService {
     private readonly users: UsersService,
     private readonly matcher: ImportMatcherService,
     private readonly normalizer: ImportNormalizerService,
+    private readonly recognition: InvoiceRecognitionService,
   ) {}
   private async context(auth?: string) {
     const ctx = await this.users.getRequestContext(auth);
     if (!ctx.companyId)
       throw new ForbiddenException('Company context required');
     return { ...ctx, companyId: ctx.companyId };
+  }
+
+  async saveFiles(
+    id: string,
+    files: Array<{
+      originalname: string;
+      mimetype: string;
+      size: number;
+      path: string;
+      filename: string;
+    }>,
+    auth?: string,
+  ) {
+    const ctx = await this.context(auth);
+    const invoice = await this.get(id, auth);
+    if (!['DRAFT', 'PROCESSING', 'REVIEW'].includes(invoice.status))
+      throw new BadRequestException('Invoice files can no longer be changed');
+    if (!files.length) throw new BadRequestException('files are required');
+    const stored = files.map((file) => ({
+      name: file.originalname,
+      mimeType: file.mimetype,
+      size: file.size,
+      path: file.path,
+      url: `/uploads/invoices/${file.filename}`,
+    }));
+    return this.prisma.$transaction(async (tx: any) => {
+      await tx.supplierInvoice.update({
+        where: { id },
+        data: { originalFiles: stored, status: 'PROCESSING' },
+      });
+      await this.audit(tx, ctx, 'FILE_UPLOADED', id, {
+        files: stored.map(({ path: _path, ...file }) => file),
+      });
+      return { files: stored.map(({ path: _path, ...file }) => file) };
+    });
+  }
+
+  async recognize(id: string, auth?: string) {
+    const ctx = await this.context(auth);
+    const invoice = await this.get(id, auth);
+    const files = Array.isArray(invoice.originalFiles)
+      ? (invoice.originalFiles as any[])
+      : [];
+    const result = await this.recognition.recognize(files);
+    await (this.prisma as any).supplierInvoiceItem.deleteMany({
+      where: { invoiceId: id },
+    });
+    const updated = await this.addItems(id, { items: result.items }, auth);
+    await (this.prisma as any).supplierInvoice.update({
+      where: { id },
+      data: {
+        invoiceNumber: result.invoiceNumber || invoice.invoiceNumber,
+        invoiceDate: result.invoiceDate
+          ? new Date(result.invoiceDate)
+          : invoice.invoiceDate,
+      },
+    });
+    await this.audit(this.prisma, ctx, 'OCR_COMPLETED', id, {
+      itemCount: result.items.length,
+    });
+    return updated;
   }
   private include() {
     return {
