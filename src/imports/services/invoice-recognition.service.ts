@@ -4,6 +4,8 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { promises as fs } from 'fs';
+import { execFile } from 'child_process';
+import { join } from 'path';
 import { InvoiceFile, RecognizedInvoice } from '../types/recognition.types';
 
 export const INVOICE_RECOGNITION_PROVIDER = Symbol(
@@ -13,6 +15,77 @@ export const INVOICE_RECOGNITION_PROVIDER = Symbol(
 @Injectable()
 export class InvoiceRecognitionService {
   async recognize(files: InvoiceFile[]): Promise<RecognizedInvoice> {
+    if (
+      (process.env.INVOICE_RECOGNITION_PROVIDER || 'paddle').toLowerCase() ===
+      'openai'
+    ) {
+      return this.recognizeWithOpenAi(files);
+    }
+    return this.recognizeWithPaddle(files);
+  }
+
+  private async recognizeWithPaddle(
+    files: InvoiceFile[],
+  ): Promise<RecognizedInvoice> {
+    const paths = files
+      .map((file) => file.path)
+      .filter((path): path is string => Boolean(path));
+    if (!paths.length)
+      throw new BadRequestException('Upload at least one invoice file');
+    if (files.some((file) => /spreadsheet|excel/i.test(file.mimeType)))
+      throw new BadRequestException(
+        'Local OCR accepts images and PDF. Use the existing Excel import for XLS/XLSX files.',
+      );
+    const python =
+      process.env.PADDLE_OCR_PYTHON ||
+      join(process.cwd(), '.venv-ocr', 'bin', 'python');
+    const script = join(process.cwd(), 'ocr', 'recognize_invoice.py');
+    const stdout = await new Promise<string>((resolve, reject) => {
+      execFile(
+        python,
+        [script, ...paths],
+        {
+          timeout: 180000,
+          maxBuffer: 20 * 1024 * 1024,
+          env: {
+            ...process.env,
+            PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: 'True',
+          },
+        },
+        (error, output, stderr) => {
+          if (error)
+            return reject(
+              new BadGatewayException(
+                stderr?.trim() ||
+                  'Local PaddleOCR failed. Run npm run ocr:install on the backend server.',
+              ),
+            );
+          resolve(output);
+        },
+      );
+    });
+    const jsonLine = stdout
+      .trim()
+      .split('\n')
+      .reverse()
+      .find((line) => line.trim().startsWith('{'));
+    if (!jsonLine) throw new BadGatewayException('Local OCR returned no JSON');
+    try {
+      const result = JSON.parse(jsonLine) as RecognizedInvoice;
+      if (!result.items?.length)
+        throw new BadGatewayException(
+          'Не удалось найти товарные строки. Сделайте более чёткое фото или добавьте позиции вручную.',
+        );
+      return result;
+    } catch (error) {
+      if (error instanceof BadGatewayException) throw error;
+      throw new BadGatewayException('Local OCR returned invalid JSON');
+    }
+  }
+
+  private async recognizeWithOpenAi(
+    files: InvoiceFile[],
+  ): Promise<RecognizedInvoice> {
     const apiKey = process.env.OPENAI_API_KEY?.trim();
     if (!apiKey)
       throw new BadRequestException('OPENAI_API_KEY is not configured');
