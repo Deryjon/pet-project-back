@@ -21,6 +21,7 @@ import { TelegramModule } from './telegram/telegram.module';
 import { UsersModule } from './users/users.module';
 import { WarehouseModule } from './warehouse/warehouse.module';
 import { HealthController } from './health.controller';
+import { ImportsModule } from './imports/imports.module';
 
 @Module({
   imports: [
@@ -57,6 +58,7 @@ import { HealthController } from './health.controller';
     TelegramModule,
     UsersModule,
     WarehouseModule,
+    ImportsModule,
   ],
   controllers: [HealthController],
 })
@@ -65,4 +67,3 @@ export class AppModule implements NestModule {
     consumer.apply(RequestIdMiddleware).forRoutes('*');
   }
 }
-

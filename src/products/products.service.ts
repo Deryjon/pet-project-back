@@ -8787,6 +8787,12 @@ export class ProductsService {
       return where;
     }
 
+    const allowedBranchCodes = Array.isArray(context.allowedBranchCodes)
+      ? context.allowedBranchCodes
+          .map((branchCode) => String(branchCode ?? '').trim())
+          .filter(Boolean)
+      : [];
+
     const scopedFilters: Prisma.ProductWhereInput[] = [];
 
     if (where) {
@@ -8799,14 +8805,14 @@ export class ProductsService {
       });
     }
 
-    if (context.allowedBranchCodes.length > 0) {
+    if (allowedBranchCodes.length > 0) {
       scopedFilters.push({
         OR: [
           {
             stocks: {
               some: {
                 branchCode: {
-                  in: context.allowedBranchCodes,
+                  in: allowedBranchCodes,
                 },
               },
             },
@@ -8836,11 +8842,15 @@ export class ProductsService {
       return shopIds;
     }
 
+    const allowedShopIds = Array.isArray(context.allowedShopIds)
+      ? context.allowedShopIds
+      : [];
+
     if (!shopIds?.length) {
-      return context.allowedShopIds;
+      return allowedShopIds;
     }
 
-    return shopIds.filter((shopId) => context.allowedShopIds.includes(shopId));
+    return shopIds.filter((shopId) => allowedShopIds.includes(shopId));
   }
 
   private requireCatalogWriteContext(context: any): {
@@ -8901,6 +8911,12 @@ export class ProductsService {
     }
 
     const resolvedBranchCodes = new Set<string>();
+    const allowedShopIds = Array.isArray(context?.allowedShopIds)
+      ? context.allowedShopIds
+      : [];
+    const allowedBranchCodes = Array.isArray(context?.allowedBranchCodes)
+      ? context.allowedBranchCodes
+      : [];
     const normalizedIdentifiers = shopIds
       .map((shopId) => shopId.trim())
       .filter((shopId) => shopId.length > 0);
@@ -8910,7 +8926,7 @@ export class ProductsService {
     }
 
     for (const identifier of normalizedIdentifiers) {
-      if (context?.allowedBranchCodes?.includes(identifier)) {
+      if (allowedBranchCodes.includes(identifier)) {
         resolvedBranchCodes.add(identifier);
       }
     }
@@ -8945,8 +8961,8 @@ export class ProductsService {
       if (
         !context?.userType ||
         context.userType !== 'company' ||
-        context.allowedShopIds.includes(shop.id) ||
-        context.allowedBranchCodes.includes(shop.branchCode)
+        allowedShopIds.includes(shop.id) ||
+        allowedBranchCodes.includes(shop.branchCode)
       ) {
         resolvedBranchCodes.add(shop.branchCode);
       }
@@ -8959,7 +8975,7 @@ export class ProductsService {
         legacyBranchCode &&
         (!context?.userType ||
           context.userType !== 'company' ||
-          context.allowedBranchCodes.includes(legacyBranchCode))
+          allowedBranchCodes.includes(legacyBranchCode))
       ) {
         resolvedBranchCodes.add(legacyBranchCode);
       }

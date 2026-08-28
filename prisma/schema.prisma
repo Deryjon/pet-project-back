@@ -74,54 +74,80 @@ enum ProductTier {
   PREMIUM
 }
 
+enum SupplierInvoiceStatus {
+  DRAFT
+  PROCESSING
+  REVIEW
+  READY
+  COMMITTED
+  CANCELLED
+  ROLLED_BACK
+}
+
+enum SupplierInvoiceItemStatus {
+  MATCHED
+  NEEDS_REVIEW
+  NEW_PRODUCT
+  ERROR
+}
+
+enum SupplyPriceStrategy {
+  LAST_PURCHASE
+  WEIGHTED_AVERAGE
+  MANUAL
+}
+
 model Company {
-  id                 String              @id @default(uuid())
-  login              String              @unique
-  name               String
-  subdomain          String              @unique
-  ownerName          String?
-  ownerPhone         String?
-  ownerEmail         String?
-  status             String              @default("active")
-  blockReason        String?
-  isActive           Boolean             @default(true)
-  shops              Shop[]
-  products           Product[]
-  categories         Category[]
-  brands             Brand[]
-  suppliers          Supplier[]
-  roles              CompanyRole[]
-  users              User[]
-  crmRoles           Role[]
-  sales              Sale[]
-  cashboxes          Cashbox[]
-  paymentTypes       PaymentType[]
-  companyPaymentTypes CompanyPaymentType[]
-  companyProfile     CompanyProfileSetting?
-  companyTariff      CompanyTariffSetting?
-  companyCurrency    CompanyCurrencySetting?
-  loyaltyProgram     LoyaltyProgramSetting?
-  measurementUnits   MeasurementUnitSetting[]
-  priceTags          PriceTagSetting[]
-  receipts           Receipt[]
-  chequeSettings     ChequeSettings[]
-  orders             Order[]
-  stockMovements     StockMovement[]
-  auditLogs          AuditLog[]
-  subscriptions      Subscription[]
-  payments           Payment[]
-  platformActionLogs PlatformActionLog[]
-  clients            Client[]
-  clientGroups       ClientGroup[]
-  clientTags         ClientTag[]
-  clientNotes        ClientNote[]
-  clientDebts        ClientDebt[]
-  transfers          Transfer[]
-  clientDebtRepayments ClientDebtRepayment[]
-  clientCards        ClientCard[]
-  inventorySessions  InventorySession[]
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+  id                     String                   @id @default(uuid())
+  login                  String                   @unique
+  name                   String
+  subdomain              String                   @unique
+  ownerName              String?
+  ownerPhone             String?
+  ownerEmail             String?
+  status                 String                   @default("active")
+  blockReason            String?
+  isActive               Boolean                  @default(true)
+  shops                  Shop[]
+  products               Product[]
+  categories             Category[]
+  brands                 Brand[]
+  suppliers              Supplier[]
+  roles                  CompanyRole[]
+  users                  User[]
+  crmRoles               Role[]
+  sales                  Sale[]
+  cashboxes              Cashbox[]
+  paymentTypes           PaymentType[]
+  companyPaymentTypes    CompanyPaymentType[]
+  companyProfile         CompanyProfileSetting?
+  companyTariff          CompanyTariffSetting?
+  companyCurrency        CompanyCurrencySetting?
+  loyaltyProgram         LoyaltyProgramSetting?
+  measurementUnits       MeasurementUnitSetting[]
+  priceTags              PriceTagSetting[]
+  receipts               Receipt[]
+  chequeSettings         ChequeSettings[]
+  orders                 Order[]
+  stockMovements         StockMovement[]
+  auditLogs              AuditLog[]
+  subscriptions          Subscription[]
+  payments               Payment[]
+  platformActionLogs     PlatformActionLog[]
+  clients                Client[]
+  clientGroups           ClientGroup[]
+  clientTags             ClientTag[]
+  clientNotes            ClientNote[]
+  clientDebts            ClientDebt[]
+  transfers              Transfer[]
+  clientDebtRepayments   ClientDebtRepayment[]
+  clientCards            ClientCard[]
+  inventorySessions      InventorySession[]
+  supplierInvoices       SupplierInvoice[]
+  supplierProductAliases SupplierProductAlias[]
+  supplyPriceStrategy    SupplyPriceStrategy      @default(LAST_PURCHASE)
+  createdAt              DateTime                 @default(now())
+  updatedAt              DateTime                 @updatedAt
 
   @@index([status])
 }
@@ -142,98 +168,100 @@ model CompanyRole {
 }
 
 model Shop {
-  id             String           @id @default(uuid())
-  companyId      String
-  name           String
-  branchCode     String
-  address        String?
-  phoneNumbers   Json?
-  facebook       String?
-  instagram      String?
-  telegram       String?
-  website        String?
-  workingHours   Json?
-  isActive       Boolean          @default(true)
-  company        Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  currentUsers   User[]           @relation("CurrentShop")
-  userAccesses   UserShopAccess[]
-  cashboxes      Cashbox[]
-  orders         Order[]
-  registeredClients Client[]           @relation("ClientRegistrationShop")
-  clientDebts    ClientDebt[]
-  stockMovements StockMovement[]
+  id                 String                      @id @default(uuid())
+  companyId          String
+  name               String
+  branchCode         String
+  address            String?
+  phoneNumbers       Json?
+  facebook           String?
+  instagram          String?
+  telegram           String?
+  website            String?
+  workingHours       Json?
+  isActive           Boolean                     @default(true)
+  company            Company                     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  currentUsers       User[]                      @relation("CurrentShop")
+  userAccesses       UserShopAccess[]
+  cashboxes          Cashbox[]
+  orders             Order[]
+  registeredClients  Client[]                    @relation("ClientRegistrationShop")
+  clientDebts        ClientDebt[]
+  stockMovements     StockMovement[]
   supplyPriceHistory ProductSupplyPriceHistory[]
-  departureTransfers Transfer[]        @relation("TransferDepartureShop")
-  arrivalTransfers   Transfer[]        @relation("TransferArrivalShop")
+  departureTransfers Transfer[]                  @relation("TransferDepartureShop")
+  arrivalTransfers   Transfer[]                  @relation("TransferArrivalShop")
   inventorySessions  InventorySession[]
-  receipts       Receipt[]
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  receipts           Receipt[]
+  invoiceAllocations InvoiceAllocation[]
+  createdAt          DateTime                    @default(now())
+  updatedAt          DateTime                    @updatedAt
 
   @@unique([companyId, branchCode])
 }
 
 model User {
-  id                 Int                 @id @default(autoincrement())
-  firstName          String
-  lastName           String
-  birthDate          DateTime?
-  phoneNumber        String
-  email              String?
-  passwordHash       String
-  userType           UserType            @default(company)
-  platformRole       String?
-  companyId          String?
-  crmRoleId          String?
-  branchCode         String?
-  currentShopId      String?
-  canSwitchShops     Boolean             @default(false)
-  avatarUrl          String?
-  language           String              @default("ru")
-  theme              String              @default("auto")
-  status             String              @default("active")
-  isActive           Boolean             @default(true)
-  deletedAt          Int                 @default(0)
-  company            Company?            @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  crmRole            Role?               @relation(fields: [crmRoleId], references: [id], onDelete: SetNull)
-  currentShop        Shop?               @relation("CurrentShop", fields: [currentShopId], references: [id], onDelete: SetNull)
-  shopAccesses       UserShopAccess[]
-  sales              Sale[]
+  id                   Int                         @id @default(autoincrement())
+  firstName            String
+  lastName             String
+  birthDate            DateTime?
+  phoneNumber          String
+  email                String?
+  passwordHash         String
+  userType             UserType                    @default(company)
+  platformRole         String?
+  companyId            String?
+  crmRoleId            String?
+  branchCode           String?
+  currentShopId        String?
+  canSwitchShops       Boolean                     @default(false)
+  avatarUrl            String?
+  language             String                      @default("ru")
+  theme                String                      @default("auto")
+  status               String                      @default("active")
+  isActive             Boolean                     @default(true)
+  deletedAt            Int                         @default(0)
+  company              Company?                    @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  crmRole              Role?                       @relation(fields: [crmRoleId], references: [id], onDelete: SetNull)
+  currentShop          Shop?                       @relation("CurrentShop", fields: [currentShopId], references: [id], onDelete: SetNull)
+  shopAccesses         UserShopAccess[]
+  sales                Sale[]
   sellerSalarySettings SellerSalarySettings?
-  soldSaleItems      SaleItem[]           @relation("SaleItemSeller")
-  orders             Order[]
-  stockMovements     StockMovement[]
-  supplyPriceHistory ProductSupplyPriceHistory[]
-  auditLogs          AuditLog[]
-  createdPayments    Payment[]           @relation("PaymentCreatedBy")
-  platformActionLogs PlatformActionLog[]
-  clientNotes        ClientNote[]
+  soldSaleItems        SaleItem[]                  @relation("SaleItemSeller")
+  orders               Order[]
+  stockMovements       StockMovement[]
+  supplyPriceHistory   ProductSupplyPriceHistory[]
+  auditLogs            AuditLog[]
+  createdPayments      Payment[]                   @relation("PaymentCreatedBy")
+  platformActionLogs   PlatformActionLog[]
+  clientNotes          ClientNote[]
   clientDebtRepayments ClientDebtRepayment[]
-  createdTransfers   Transfer[]          @relation("TransferCreatedBy")
-  acceptedTransfers  Transfer[]          @relation("TransferAcceptedBy")
-  createdInventories InventorySession[]  @relation("InventoryCreatedBy")
-  closedInventories  InventorySession[]  @relation("InventoryClosedBy")
-  authSessions       AuthSession[]
-  telegramSubscriber TelegramSubscriber?
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+  createdTransfers     Transfer[]                  @relation("TransferCreatedBy")
+  acceptedTransfers    Transfer[]                  @relation("TransferAcceptedBy")
+  createdInventories   InventorySession[]          @relation("InventoryCreatedBy")
+  closedInventories    InventorySession[]          @relation("InventoryClosedBy")
+  authSessions         AuthSession[]
+  telegramSubscriber   TelegramSubscriber?
+  supplierInvoices     SupplierInvoice[]
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
 
   @@unique([companyId, phoneNumber])
   @@index([status])
 }
 
 model AuthSession {
-  id               String    @id
+  id               String        @id
   userId           Int
   refreshTokenHash String
   expiresAt        DateTime
   revokedAt        DateTime?
   replacedById     String?
-  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  replacedBy       AuthSession? @relation("AuthSessionReplacement", fields: [replacedById], references: [id], onDelete: SetNull)
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacedBy       AuthSession?  @relation("AuthSessionReplacement", fields: [replacedById], references: [id], onDelete: SetNull)
   previousSessions AuthSession[] @relation("AuthSessionReplacement")
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 
   @@index([userId, expiresAt])
   @@index([userId, revokedAt])
@@ -351,20 +379,26 @@ model Brand {
 }
 
 model Supplier {
-  id        Int               @id @default(autoincrement())
-  companyId String
-  name      String
-  company   Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  products  ProductSupplier[]
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
+  id             Int                    @id @default(autoincrement())
+  companyId      String
+  name           String
+  company        Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  products       ProductSupplier[]
+  phone          String?
+  telegram       String?
+  comment        String?
+  isActive       Boolean                @default(true)
+  invoices       SupplierInvoice[]
+  productAliases SupplierProductAlias[]
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
 
   @@unique([companyId, name])
   @@index([companyId])
 }
 
 model ProductImportSession {
-  id            String @id
+  id            String  @id
   jobId         String
   companyId     String
   shopId        String
@@ -389,42 +423,44 @@ model ProductImportSession {
 }
 
 model Product {
-  id               Int               @id @default(autoincrement())
-  publicId         String            @unique @default(uuid())
-  companyId        String?
-  photo            String?
-  name             String
-  sku              String?
-  barcode          String?
-  productType      String?
-  variantType      String?
-  unit             String?
-  purchasePrice    Float?
-  markupPercent    Float?
-  salePrice        Float?
-  discountPrice    Float?
-  quantity         Float             @default(0)
-  metadata         Json?
-  categoryId       Int?
-  brandId          Int?
-  productGroupId   String?
-  tier             ProductTier?
-  archivedAt       DateTime?
-  archivedByUserId Int?
-  archivedByName   String?
-  company          Company?          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  category         Category?         @relation(fields: [categoryId], references: [id])
-  brand            Brand?            @relation(fields: [brandId], references: [id])
-  suppliers        ProductSupplier[]
-  stocks           ProductStock[]
-  saleItems        SaleItem[]
-  orderItems       OrderItem[]
-  stockMovements   StockMovement[]
-  supplyPriceHistory ProductSupplyPriceHistory[]
-  transferItems    TransferItem[]
-  inventoryItems   InventoryItem[]
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
+  id                   Int                         @id @default(autoincrement())
+  publicId             String                      @unique @default(uuid())
+  companyId            String?
+  photo                String?
+  name                 String
+  sku                  String?
+  barcode              String?
+  productType          String?
+  variantType          String?
+  unit                 String?
+  purchasePrice        Float?
+  markupPercent        Float?
+  salePrice            Float?
+  discountPrice        Float?
+  quantity             Float                       @default(0)
+  metadata             Json?
+  categoryId           Int?
+  brandId              Int?
+  productGroupId       String?
+  tier                 ProductTier?
+  archivedAt           DateTime?
+  archivedByUserId     Int?
+  archivedByName       String?
+  company              Company?                    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  category             Category?                   @relation(fields: [categoryId], references: [id])
+  brand                Brand?                      @relation(fields: [brandId], references: [id])
+  suppliers            ProductSupplier[]
+  stocks               ProductStock[]
+  saleItems            SaleItem[]
+  orderItems           OrderItem[]
+  stockMovements       StockMovement[]
+  supplyPriceHistory   ProductSupplyPriceHistory[]
+  transferItems        TransferItem[]
+  inventoryItems       InventoryItem[]
+  supplierInvoiceItems SupplierInvoiceItem[]
+  supplierAliases      SupplierProductAlias[]
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
 
   @@unique([companyId, sku])
   @@unique([companyId, barcode])
@@ -495,32 +531,32 @@ model CountryReference {
 }
 
 model TimeZoneReference {
-  id         String            @id
-  countryId  String?
-  name       String
-  shortName  String
-  gmtOffset  String
-  country    CountryReference? @relation(fields: [countryId], references: [id], onDelete: SetNull)
-  createdAt  DateTime          @default(now())
-  updatedAt  DateTime          @updatedAt
+  id        String            @id
+  countryId String?
+  name      String
+  shortName String
+  gmtOffset String
+  country   CountryReference? @relation(fields: [countryId], references: [id], onDelete: SetNull)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
 
   @@index([countryId])
 }
 
 model CompanyProfileSetting {
-  companyId  String   @id
-  data       Json
-  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  companyId String   @id
+  data      Json
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model CompanyTariffSetting {
-  companyId  String   @id
-  data       Json
-  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  companyId String   @id
+  data      Json
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model CompanyCurrencySetting {
@@ -587,51 +623,51 @@ model PriceTagSetting {
 }
 
 model Receipt {
-  id             String    @id @default(uuid())
-  saleId         Int       @unique
-  companyId      String
-  shopId         String?
-  branchCode     String?
-  number         String
-  status         String    @default("CREATED") // CREATED | PRINTED | SENT
-  managerName    String?
-  managerPhone   String?
-  sellerName     String?
-  clientName     String?
-  clientPhone    String?
-  saleComment    String?
-  cashbackEarned Float     @default(0)
-  qrPayload      String?
-  printedAt      DateTime?
-  sentAt         DateTime?
+  id              String    @id @default(uuid())
+  saleId          Int       @unique
+  companyId       String
+  shopId          String?
+  branchCode      String?
+  number          String
+  status          String    @default("CREATED") // CREATED | PRINTED | SENT
+  managerName     String?
+  managerPhone    String?
+  sellerName      String?
+  clientName      String?
+  clientPhone     String?
+  saleComment     String?
+  cashbackEarned  Float     @default(0)
+  qrPayload       String?
+  printedAt       DateTime?
+  sentAt          DateTime?
   // snapshot fields — frozen at first print (sale completion), never recalculated
   // on reprint so a receipt printed today and reprinted in 6 months are identical
   // even if product prices/company payment-type config change later.
-  items          Json?
-  subtotal       Float     @default(0)
-  discount       Float     @default(0)
-  discountPercent Float    @default(0)
-  totalDue       Float     @default(0)
-  paidCash       Float     @default(0)
-  paidCard       Float     @default(0)
-  paidCashback   Float     @default(0)
-  debt           Float     @default(0)
+  items           Json?
+  subtotal        Float     @default(0)
+  discount        Float     @default(0)
+  discountPercent Float     @default(0)
+  totalDue        Float     @default(0)
+  paidCash        Float     @default(0)
+  paidCard        Float     @default(0)
+  paidCashback    Float     @default(0)
+  debt            Float     @default(0)
   // customer balance/debt breakdown — frozen at snapshot time same as the
   // money fields above, so a reprint never shows a balance/debt state that
   // no longer matches what the customer was told at sale time
-  balanceBefore   Float    @default(0)
-  balanceAdded    Float    @default(0)
-  balanceDeducted Float    @default(0)
-  balanceAfter    Float    @default(0)
-  debtBefore      Float    @default(0)
-  debtAdded       Float    @default(0)
-  debtPaid        Float    @default(0)
-  debtAfter       Float    @default(0)
-  sale           Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
-  company        Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  shop           Shop?     @relation(fields: [shopId], references: [id], onDelete: SetNull)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  balanceBefore   Float     @default(0)
+  balanceAdded    Float     @default(0)
+  balanceDeducted Float     @default(0)
+  balanceAfter    Float     @default(0)
+  debtBefore      Float     @default(0)
+  debtAdded       Float     @default(0)
+  debtPaid        Float     @default(0)
+  debtAfter       Float     @default(0)
+  sale            Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  shop            Shop?     @relation(fields: [shopId], references: [id], onDelete: SetNull)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   @@index([companyId])
   @@index([shopId])
@@ -648,63 +684,63 @@ model Receipt {
 // address/phone/socials, legal name, INN — is resolved live from Shop /
 // CompanyProfileSetting at render time).
 model ChequeSettings {
-  id                 String   @id @default(uuid())
-  companyId          String
-  name               String   @default("Стандартный")
-  isDefault          Boolean  @default(false)
-  hasInformationBlock Boolean @default(true)
-  hasLowerBlock      Boolean  @default(true)
+  id                  String   @id @default(uuid())
+  companyId           String
+  name                String   @default("Стандартный")
+  isDefault           Boolean  @default(false)
+  hasInformationBlock Boolean  @default(true)
+  hasLowerBlock       Boolean  @default(true)
   // layout
-  paperWidth         Int      @default(80)
-  fontSize           Int      @default(13)
-  dividerStyle       String   @default("single") // single | double | none
-  dividerGap         Int      @default(8)
-  sectionGap         Int      @default(12)
-  itemDividers       Boolean  @default(false)
+  paperWidth          Int      @default(80)
+  fontSize            Int      @default(13)
+  dividerStyle        String   @default("single") // single | double | none
+  dividerGap          Int      @default(8)
+  sectionGap          Int      @default(12)
+  itemDividers        Boolean  @default(false)
   // values with no other source
-  hasLogo            Boolean  @default(false)
-  logoUrl            String   @default("")
-  hasAdditionalImage Boolean  @default(false)
-  additionalImageUrl String   @default("")
-  footerMessage      String   @default("")
-  footerNote         String   @default("")
-  qrCodeUrl          String   @default("")
-  elementStyles      Json?    // [{id,label,fontSize,fontWeight,visible,order,marginBottom}]
-  blocks             Json     // ChequeBlockDefinition[] — key, block_type, name, sequence_number, is_active
-  company            Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  hasLogo             Boolean  @default(false)
+  logoUrl             String   @default("")
+  hasAdditionalImage  Boolean  @default(false)
+  additionalImageUrl  String   @default("")
+  footerMessage       String   @default("")
+  footerNote          String   @default("")
+  qrCodeUrl           String   @default("")
+  elementStyles       Json? // [{id,label,fontSize,fontWeight,visible,order,marginBottom}]
+  blocks              Json // ChequeBlockDefinition[] — key, block_type, name, sequence_number, is_active
+  company             Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   @@index([companyId])
 }
 
 model Client {
-  id                  String          @id @default(uuid())
+  id                  String                @id @default(uuid())
   companyId           String
   code                String
   firstName           String
   lastName            String?
   middleName          String?
   phone               String
-  gender              ClientGender    @default(unknown)
-  birthDate           DateTime?       @db.Date
+  gender              ClientGender          @default(unknown)
+  birthDate           DateTime?             @db.Date
   maritalStatus       String?
   address             String?
   socialLinks         Json?
   relatives           Json?
   registrationShopId  String?
-  registeredAt        DateTime        @default(now())
-  balanceUzs          Decimal         @default(0) @db.Decimal(12, 2)
-  debtUzs             Decimal         @default(0) @db.Decimal(12, 2)
-  totalPurchasesUzs   Decimal         @default(0) @db.Decimal(12, 2)
+  registeredAt        DateTime              @default(now())
+  balanceUzs          Decimal               @default(0) @db.Decimal(12, 2)
+  debtUzs             Decimal               @default(0) @db.Decimal(12, 2)
+  totalPurchasesUzs   Decimal               @default(0) @db.Decimal(12, 2)
   lastPurchaseAt      DateTime?
-  visitsCount         Int             @default(0)
-  smsNotifications    Boolean         @default(false)
-  phoneNotifications  Boolean         @default(false)
-  socialNotifications Boolean         @default(false)
-  emailNotifications  Boolean         @default(false)
-  company             Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  registrationShop    Shop?           @relation("ClientRegistrationShop", fields: [registrationShopId], references: [id], onDelete: SetNull)
+  visitsCount         Int                   @default(0)
+  smsNotifications    Boolean               @default(false)
+  phoneNotifications  Boolean               @default(false)
+  socialNotifications Boolean               @default(false)
+  emailNotifications  Boolean               @default(false)
+  company             Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  registrationShop    Shop?                 @relation("ClientRegistrationShop", fields: [registrationShopId], references: [id], onDelete: SetNull)
   groups              ClientGroupLink[]
   tags                ClientTagLink[]
   notes               ClientNote[]
@@ -713,8 +749,8 @@ model Client {
   debtRepayments      ClientDebtRepayment[]
   orders              Order[]
   sales               Sale[]
-  createdAt           DateTime        @default(now())
-  updatedAt           DateTime        @updatedAt
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
 
   @@unique([companyId, code])
   @@index([companyId])
@@ -737,11 +773,11 @@ model ClientGroup {
 }
 
 model ClientGroupLink {
-  clientId String
-  groupId  String
-  client   Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  group    ClientGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  createdAt DateTime   @default(now())
+  clientId  String
+  groupId   String
+  client    Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  group     ClientGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  createdAt DateTime    @default(now())
 
   @@id([clientId, groupId])
   @@index([groupId])
@@ -761,11 +797,11 @@ model ClientTag {
 }
 
 model ClientTagLink {
-  clientId String
-  tagId    String
-  client   Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  tag      ClientTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
+  clientId  String
+  tagId     String
+  client    Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  tag       ClientTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
 
   @@id([clientId, tagId])
   @@index([tagId])
@@ -788,25 +824,25 @@ model ClientNote {
 }
 
 model ClientDebt {
-  id                 String              @id @default(uuid())
+  id                 String                @id @default(uuid())
   companyId          String
   clientId           String
   saleId             Int?
   shopId             String?
-  amountUzs          Decimal             @db.Decimal(12, 2)
-  remainingAmountUzs Decimal             @db.Decimal(12, 2)
-  repaidAmountUzs    Decimal             @default(0) @db.Decimal(12, 2)
-  dueDate            DateTime?           @db.Date
-  status             ClientDebtStatus    @default(unpaid)
+  amountUzs          Decimal               @db.Decimal(12, 2)
+  remainingAmountUzs Decimal               @db.Decimal(12, 2)
+  repaidAmountUzs    Decimal               @default(0) @db.Decimal(12, 2)
+  dueDate            DateTime?             @db.Date
+  status             ClientDebtStatus      @default(unpaid)
   comment            String?
   receiptUrl         String?
-  company            Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  client             Client              @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  sale               Sale?               @relation(fields: [saleId], references: [id], onDelete: SetNull)
-  shop               Shop?               @relation(fields: [shopId], references: [id], onDelete: SetNull)
+  company            Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  client             Client                @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  sale               Sale?                 @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  shop               Shop?                 @relation(fields: [shopId], references: [id], onDelete: SetNull)
   repayments         ClientDebtRepayment[]
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
 
   @@index([companyId, clientId])
   @@index([saleId])
@@ -914,33 +950,33 @@ model OrderPayment {
 }
 
 model StockMovement {
-  id             String            @id @default(uuid())
-  companyId      String
-  shopId         String
-  productId      Int
-  orderId        String?
-  type           StockMovementType
-  displayTypeCode String           @default("")
-  displayTypeLabel String          @default("")
-  externalId     String            @default("")
-  quantity       Decimal           @db.Decimal(12, 3)
-  loadedMeasurementValue Decimal   @default(0) @db.Decimal(12, 3)
-  beforeQuantity Decimal           @db.Decimal(12, 3)
-  afterQuantity  Decimal           @db.Decimal(12, 3)
-  fromShopId     String            @default("")
-  toShopId       String            @default("")
-  supplyPrice    Decimal           @default(0) @db.Decimal(12, 2)
-  retailPrice    Decimal           @default(0) @db.Decimal(12, 2)
-  newRetailPrice Decimal           @default(0) @db.Decimal(12, 2)
-  fromRetailPrice Decimal          @default(0) @db.Decimal(12, 2)
-  fromSupplyPrice Decimal          @default(0) @db.Decimal(12, 2)
-  createdById    Int
-  company        Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  shop           Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  product        Product           @relation(fields: [productId], references: [id])
-  order          Order?            @relation(fields: [orderId], references: [id], onDelete: SetNull)
-  createdBy      User              @relation(fields: [createdById], references: [id])
-  createdAt      DateTime          @default(now())
+  id                     String            @id @default(uuid())
+  companyId              String
+  shopId                 String
+  productId              Int
+  orderId                String?
+  type                   StockMovementType
+  displayTypeCode        String            @default("")
+  displayTypeLabel       String            @default("")
+  externalId             String            @default("")
+  quantity               Decimal           @db.Decimal(12, 3)
+  loadedMeasurementValue Decimal           @default(0) @db.Decimal(12, 3)
+  beforeQuantity         Decimal           @db.Decimal(12, 3)
+  afterQuantity          Decimal           @db.Decimal(12, 3)
+  fromShopId             String            @default("")
+  toShopId               String            @default("")
+  supplyPrice            Decimal           @default(0) @db.Decimal(12, 2)
+  retailPrice            Decimal           @default(0) @db.Decimal(12, 2)
+  newRetailPrice         Decimal           @default(0) @db.Decimal(12, 2)
+  fromRetailPrice        Decimal           @default(0) @db.Decimal(12, 2)
+  fromSupplyPrice        Decimal           @default(0) @db.Decimal(12, 2)
+  createdById            Int
+  company                Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  shop                   Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  product                Product           @relation(fields: [productId], references: [id])
+  order                  Order?            @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  createdBy              User              @relation(fields: [createdById], references: [id])
+  createdAt              DateTime          @default(now())
 
   @@index([companyId])
   @@index([shopId])
@@ -948,8 +984,102 @@ model StockMovement {
   @@index([orderId])
 }
 
+model SupplierInvoice {
+  id             String                @id @default(uuid())
+  companyId      String
+  supplierId     Int
+  invoiceNumber  String?
+  invoiceDate    DateTime?
+  status         SupplierInvoiceStatus @default(DRAFT)
+  originalFiles  Json?
+  totalAmount    Decimal?              @db.Decimal(14, 2)
+  totalQuantity  Decimal?              @db.Decimal(14, 3)
+  idempotencyKey String?
+  createdById    Int
+  committedAt    DateTime?
+  rolledBackAt   DateTime?
+  company        Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  supplier       Supplier              @relation(fields: [supplierId], references: [id])
+  createdBy      User                  @relation(fields: [createdById], references: [id])
+  items          SupplierInvoiceItem[]
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  @@unique([companyId, idempotencyKey])
+  @@index([companyId, status, createdAt])
+  @@index([supplierId, invoiceNumber, invoiceDate])
+}
+
+model SupplierInvoiceItem {
+  id                  String                    @id @default(uuid())
+  invoiceId           String
+  rawName             String
+  rawSku              String?
+  rawBarcode          String?
+  correctedName       String?
+  correctedSku        String?
+  correctedBarcode    String?
+  originalQuantity    Decimal?                  @db.Decimal(14, 3)
+  originalSupplyPrice Decimal?                  @db.Decimal(14, 2)
+  quantity            Decimal                   @db.Decimal(14, 3)
+  supplyPrice         Decimal                   @db.Decimal(14, 2)
+  totalPrice          Decimal?                  @db.Decimal(14, 2)
+  matchedProductId    Int?
+  matchMethod         String?
+  matchConfidence     Int?
+  status              SupplierInvoiceItemStatus @default(NEEDS_REVIEW)
+  userConfirmed       Boolean                   @default(false)
+  warnings            Json?
+  invoice             SupplierInvoice           @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  matchedProduct      Product?                  @relation(fields: [matchedProductId], references: [id])
+  allocations         InvoiceAllocation[]
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+
+  @@index([invoiceId, status])
+  @@index([matchedProductId])
+}
+
+model InvoiceAllocation {
+  id            String              @id @default(uuid())
+  invoiceItemId String
+  shopId        String
+  quantity      Decimal             @db.Decimal(14, 3)
+  invoiceItem   SupplierInvoiceItem @relation(fields: [invoiceItemId], references: [id], onDelete: Cascade)
+  shop          Shop                @relation(fields: [shopId], references: [id])
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@unique([invoiceItemId, shopId])
+  @@index([shopId])
+}
+
+model SupplierProductAlias {
+  id              String    @id @default(uuid())
+  companyId       String
+  supplierId      Int
+  productId       Int
+  supplierName    String
+  normalizedName  String?
+  supplierSku     String?
+  supplierBarcode String?
+  lastSupplyPrice Decimal?  @db.Decimal(14, 2)
+  usageCount      Int       @default(0)
+  lastSeenAt      DateTime?
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  supplier        Supplier  @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  product         Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([companyId, supplierId, supplierSku])
+  @@unique([companyId, supplierId, supplierBarcode])
+  @@index([companyId, supplierId, normalizedName])
+  @@index([productId])
+}
+
 model ProductSupplyPriceHistory {
-  id            String   @id @default(uuid())
+  id             String   @id @default(uuid())
   productId      Int
   shopId         String
   supplyPrice    Decimal  @db.Decimal(12, 2)
@@ -1007,37 +1137,37 @@ model ProductStock {
 }
 
 model InventorySession {
-  id            String              @id @default(uuid())
-  companyId     String
-  shopId        String
-  name          String
-  status        String              @default("draft")
-  comment       String              @default("")
-  createdById   Int
-  closedById    Int?
-  closedAt      DateTime?
-  company       Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  shop          Shop                @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  createdBy     User                @relation("InventoryCreatedBy", fields: [createdById], references: [id])
-  closedBy      User?               @relation("InventoryClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
-  items         InventoryItem[]
-  createdAt     DateTime            @default(now())
-  updatedAt     DateTime            @updatedAt
+  id          String          @id @default(uuid())
+  companyId   String
+  shopId      String
+  name        String
+  status      String          @default("draft")
+  comment     String          @default("")
+  createdById Int
+  closedById  Int?
+  closedAt    DateTime?
+  company     Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  shop        Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdBy   User            @relation("InventoryCreatedBy", fields: [createdById], references: [id])
+  closedBy    User?           @relation("InventoryClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+  items       InventoryItem[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
 
   @@index([companyId, status])
   @@index([shopId])
 }
 
 model InventoryItem {
-  id                String            @id @default(uuid())
+  id                 String           @id @default(uuid())
   inventorySessionId String
-  productId         Int
-  expectedQuantity  Float             @default(0)
-  actualQuantity    Float             @default(0)
-  difference        Float             @default(0)
-  session           InventorySession  @relation(fields: [inventorySessionId], references: [id], onDelete: Cascade)
-  product           Product           @relation(fields: [productId], references: [id])
-  createdAt         DateTime          @default(now())
+  productId          Int
+  expectedQuantity   Float            @default(0)
+  actualQuantity     Float            @default(0)
+  difference         Float            @default(0)
+  session            InventorySession @relation(fields: [inventorySessionId], references: [id], onDelete: Cascade)
+  product            Product          @relation(fields: [productId], references: [id])
+  createdAt          DateTime         @default(now())
 
   @@unique([inventorySessionId, productId])
   @@index([inventorySessionId])
@@ -1045,27 +1175,27 @@ model InventoryItem {
 }
 
 model Transfer {
-  id                      String         @id @default(uuid())
-  externalId              Int?           @unique
-  companyId               String
-  name                    String
-  departureShopId         String
-  arrivalShopId           String
-  status                  TransferStatus @default(DRAFT)
-  createdById             Int
-  acceptedById            Int?
-  comment                 String         @default("")
-  useDepartureShopPrices  Boolean        @default(false)
-  sentAt                  DateTime?
-  acceptedAt              DateTime?
-  company                 Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  departureShop           Shop           @relation("TransferDepartureShop", fields: [departureShopId], references: [id], onDelete: Cascade)
-  arrivalShop             Shop           @relation("TransferArrivalShop", fields: [arrivalShopId], references: [id], onDelete: Cascade)
-  createdBy               User           @relation("TransferCreatedBy", fields: [createdById], references: [id])
-  acceptedBy              User?          @relation("TransferAcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull)
-  items                   TransferItem[]
-  createdAt               DateTime       @default(now())
-  updatedAt               DateTime       @updatedAt
+  id                     String         @id @default(uuid())
+  externalId             Int?           @unique
+  companyId              String
+  name                   String
+  departureShopId        String
+  arrivalShopId          String
+  status                 TransferStatus @default(DRAFT)
+  createdById            Int
+  acceptedById           Int?
+  comment                String         @default("")
+  useDepartureShopPrices Boolean        @default(false)
+  sentAt                 DateTime?
+  acceptedAt             DateTime?
+  company                Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  departureShop          Shop           @relation("TransferDepartureShop", fields: [departureShopId], references: [id], onDelete: Cascade)
+  arrivalShop            Shop           @relation("TransferArrivalShop", fields: [arrivalShopId], references: [id], onDelete: Cascade)
+  createdBy              User           @relation("TransferCreatedBy", fields: [createdById], references: [id])
+  acceptedBy             User?          @relation("TransferAcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull)
+  items                  TransferItem[]
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
 
   @@index([companyId, createdAt])
   @@index([departureShopId])
@@ -1074,15 +1204,15 @@ model Transfer {
 }
 
 model TransferItem {
-  id              String    @id @default(uuid())
+  id              String   @id @default(uuid())
   transferId      String
   productId       Int
-  quantity        Decimal   @db.Decimal(12, 3)
-  arrivedQuantity Decimal   @default(0) @db.Decimal(12, 3)
-  transfer        Transfer  @relation(fields: [transferId], references: [id], onDelete: Cascade)
-  product         Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  quantity        Decimal  @db.Decimal(12, 3)
+  arrivedQuantity Decimal  @default(0) @db.Decimal(12, 3)
+  transfer        Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  product         Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   @@unique([transferId, productId])
   @@index([transferId])
@@ -1090,40 +1220,40 @@ model TransferItem {
 }
 
 model Sale {
-  id              Int        @id @default(autoincrement())
-  companyId       String?
-  number          String     @unique
-  saleType        String     @default("sale")
-  status          String     @default("draft")
-  discountPercent Decimal    @default(0) @db.Decimal(12, 2)
-  discountAmount  Decimal    @default(0) @db.Decimal(12, 2)
-  payableTotal    Decimal    @default(0) @db.Decimal(12, 2)
-  total           Decimal    @default(0) @db.Decimal(12, 2)
-  paymentMethod   String?
-  extraPayments   Json?
-  clientId        String?
-  clientName      String?
-  parkNote        String?
-  comment         String?
+  id                Int          @id @default(autoincrement())
+  companyId         String?
+  number            String       @unique
+  saleType          String       @default("sale")
+  status            String       @default("draft")
+  discountPercent   Decimal      @default(0) @db.Decimal(12, 2)
+  discountAmount    Decimal      @default(0) @db.Decimal(12, 2)
+  payableTotal      Decimal      @default(0) @db.Decimal(12, 2)
+  total             Decimal      @default(0) @db.Decimal(12, 2)
+  paymentMethod     String?
+  extraPayments     Json?
+  clientId          String?
+  clientName        String?
+  parkNote          String?
+  comment           String?
   adjustmentGroupId String?
-  cancelledAt     DateTime?
-  cancelledById   Int?
-  cancelReason    String?
-  branchCode      String?
-  isDraft         Boolean    @default(true)
-  userId          Int?
-  parentSaleId    Int?
-  company         Company?   @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  client          Client?    @relation(fields: [clientId], references: [id], onDelete: SetNull)
-  user            User?      @relation(fields: [userId], references: [id])
-  parentSale      Sale?      @relation("SaleAdjustments", fields: [parentSaleId], references: [id], onDelete: SetNull)
-  childSales      Sale[]     @relation("SaleAdjustments")
-  clientDebts     ClientDebt[]
-  items           SaleItem[]
-  receipt         Receipt?
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
-  paidAt          DateTime?
+  cancelledAt       DateTime?
+  cancelledById     Int?
+  cancelReason      String?
+  branchCode        String?
+  isDraft           Boolean      @default(true)
+  userId            Int?
+  parentSaleId      Int?
+  company           Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  client            Client?      @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  user              User?        @relation(fields: [userId], references: [id])
+  parentSale        Sale?        @relation("SaleAdjustments", fields: [parentSaleId], references: [id], onDelete: SetNull)
+  childSales        Sale[]       @relation("SaleAdjustments")
+  clientDebts       ClientDebt[]
+  items             SaleItem[]
+  receipt           Receipt?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  paidAt            DateTime?
 
   @@index([companyId])
   @@index([createdAt])
@@ -1137,28 +1267,28 @@ model Sale {
 }
 
 model SaleItem {
-  id        Int      @id @default(autoincrement())
-  saleId    Int
-  productId Int?
-  sellerId  Int?
-  name      String
-  barcode   String?
-  sku       String?
-  quantity  Decimal  @db.Decimal(12, 3)
-  salePrice Decimal  @db.Decimal(12, 2)
-  lineTotal Decimal  @db.Decimal(12, 2)
-  retailPriceAtSale Decimal    @default(0) @db.Decimal(12, 2)
-  discountAmount    Decimal    @default(0) @db.Decimal(12, 2)
-  finalPrice        Decimal    @default(0) @db.Decimal(12, 2)
-  supplyPriceAtSale Decimal    @default(0) @db.Decimal(12, 2)
-  profitAtSale      Decimal    @default(0) @db.Decimal(12, 2)
-  markupAtSale      Decimal?   @db.Decimal(12, 2)
-  sellerBonusAmount Decimal    @default(0) @db.Decimal(12, 2)
-  sale      Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
-  product   Product? @relation(fields: [productId], references: [id])
-  seller    User?    @relation("SaleItemSeller", fields: [sellerId], references: [id], onDelete: SetNull)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                Int      @id @default(autoincrement())
+  saleId            Int
+  productId         Int?
+  sellerId          Int?
+  name              String
+  barcode           String?
+  sku               String?
+  quantity          Decimal  @db.Decimal(12, 3)
+  salePrice         Decimal  @db.Decimal(12, 2)
+  lineTotal         Decimal  @db.Decimal(12, 2)
+  retailPriceAtSale Decimal  @default(0) @db.Decimal(12, 2)
+  discountAmount    Decimal  @default(0) @db.Decimal(12, 2)
+  finalPrice        Decimal  @default(0) @db.Decimal(12, 2)
+  supplyPriceAtSale Decimal  @default(0) @db.Decimal(12, 2)
+  profitAtSale      Decimal  @default(0) @db.Decimal(12, 2)
+  markupAtSale      Decimal? @db.Decimal(12, 2)
+  sellerBonusAmount Decimal  @default(0) @db.Decimal(12, 2)
+  sale              Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product           Product? @relation(fields: [productId], references: [id])
+  seller            User?    @relation("SaleItemSeller", fields: [sellerId], references: [id], onDelete: SetNull)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   @@index([sellerId])
   @@index([saleId])
@@ -1212,17 +1342,17 @@ model RolePermission {
 }
 
 model TelegramSubscriber {
-  id             String   @id @default(uuid())
-  chatId         String   @unique
-  userId         Int      @unique
-  companyId      String
-  notifyOnSale   Boolean  @default(true)
-  notifySellerAnalytics Boolean @default(false)
-  notifyOnLogin  Boolean  @default(false)
-  notifyOnLowStock Boolean @default(false)
-  branchCode     String?
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  linkedAt       DateTime @default(now())
+  id                    String   @id @default(uuid())
+  chatId                String   @unique
+  userId                Int      @unique
+  companyId             String
+  notifyOnSale          Boolean  @default(true)
+  notifySellerAnalytics Boolean  @default(false)
+  notifyOnLogin         Boolean  @default(false)
+  notifyOnLowStock      Boolean  @default(false)
+  branchCode            String?
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  linkedAt              DateTime @default(now())
 
   @@index([companyId])
   @@index([companyId, notifyOnSale])
