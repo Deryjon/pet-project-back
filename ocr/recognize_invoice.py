@@ -3,11 +3,14 @@ import json
 import re
 import sys
 
-from paddleocr import PaddleOCR
-
-
 def number(value):
-    cleaned = re.sub(r"[^0-9,.-]", "", value).replace(" ", "")
+    # Do not turn digits embedded in product names (20W, T2510, 5A, 1M)
+    # into quantities or prices. Receipt quantities may have an X suffix.
+    value = str(value).strip()
+    if not re.fullmatch(r"[+-]?\d[\d\s]*(?:[.,]\d+)?(?:\s*[xх×])?", value, re.IGNORECASE):
+        return None
+    cleaned = re.sub(r"[xх×]\s*$", "", value, flags=re.IGNORECASE)
+    cleaned = cleaned.replace(" ", "")
     if cleaned.count(",") == 1 and "." not in cleaned:
         cleaned = cleaned.replace(",", ".")
     else:
@@ -49,35 +52,54 @@ def rows_from_result(result):
 
 def invoice_items(rows):
     items = []
+    blocks = []
+    current = None
     for cells in rows:
-        values = [cell["text"] for cell in cells]
-        numeric = [(index, number(value)) for index, value in enumerate(values)]
-        numeric = [(index, value) for index, value in numeric if value is not None]
+        row_text = " ".join(cell["text"] for cell in cells).strip()
+        if re.search(r"\b(ИТОГО|JAMI|TOTAL)\b", row_text, re.IGNORECASE):
+            if current:
+                blocks.append(current)
+                current = None
+            break
+        first = cells[0]["text"].strip() if cells else ""
+        starts_item = len(cells) > 1 and re.fullmatch(r"\d{1,3}[.)]?", first)
+        if starts_item:
+            if current:
+                blocks.append(current)
+            current = [cells]
+        elif current:
+            current.append(cells)
+    if current:
+        blocks.append(current)
+
+    for block in blocks:
+        cells = [cell for row in block for cell in row]
+        # The first number is the line index, not a product value.
+        cells = cells[1:]
+        numeric = [(cell, number(cell["text"])) for cell in cells]
+        numeric = [(cell, value) for cell, value in numeric if value is not None]
         if len(numeric) < 2:
             continue
-        # Typical right side: quantity, unit price, total. With only two numbers,
-        # total is derived and the row remains reviewable in CRM.
-        tail = numeric[-3:]
-        if len(tail) >= 3:
-            quantity, supply_price, total_price = tail[-3][1], tail[-2][1], tail[-1][1]
-            name_end = tail[-3][0]
-        else:
-            quantity, supply_price = tail[-2][1], tail[-1][1]
-            total_price = quantity * supply_price
-            name_end = tail[-2][0]
-        name_parts = values[:name_end]
-        if name_parts and re.fullmatch(r"\d+[.)]?", name_parts[0]):
-            name_parts = name_parts[1:]
+        quantity = numeric[-2][1]
+        supply_price = numeric[-1][1]
+        numeric_cells = {id(numeric[-2][0]), id(numeric[-1][0])}
+        name_parts = [
+            cell["text"]
+            for cell in cells
+            if id(cell) not in numeric_cells and number(cell["text"]) is None
+        ]
         raw_name = " ".join(name_parts).strip(" -|")
         if not raw_name or quantity <= 0 or supply_price < 0:
             continue
-        items.append({"rawName": raw_name, "sku": None, "barcode": None, "quantity": quantity, "supplyPrice": supply_price, "totalPrice": total_price})
+        items.append({"rawName": raw_name, "sku": None, "barcode": None, "quantity": quantity, "supplyPrice": supply_price, "totalPrice": quantity * supply_price})
     return items
 
 
 def main():
     if len(sys.argv) < 2:
         raise SystemExit("At least one file is required")
+    from paddleocr import PaddleOCR
+
     ocr = PaddleOCR(lang="ru", use_doc_orientation_classify=False, use_doc_unwarping=False, use_textline_orientation=False)
     rows = []
     for path in sys.argv[1:]:
