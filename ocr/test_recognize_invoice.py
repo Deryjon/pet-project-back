@@ -47,6 +47,23 @@ class InvoiceParserTest(unittest.TestCase):
         self.assertIn("N ORIGINAL", items[1]["rawName"])
         self.assertIn("BLACK", items[3]["rawName"])
 
+    def test_parses_first_item_when_line_number_is_missing(self):
+        rows = [
+            row("НАИМЕНОВАНИЕ", "КОЛ X", "ЦЕНА"),
+            row("USB CABLE IPHONE 15 KARO", "2 X", "77 220"),
+            row("BKA ORIGINAL"),
+            row("2", "ADAPTER 3PIN 20W", "2 X", "190 080"),
+            row("N ORIGINAL"),
+            row("ИТОГО:", "534 600"),
+        ]
+
+        items = invoice_items(rows)
+
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["quantity"], 2)
+        self.assertEqual(items[0]["supplyPrice"], 77220)
+        self.assertIn("IPHONE 15", items[0]["rawName"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -62,7 +62,18 @@ def invoice_items(rows):
                 current = None
             break
         first = cells[0]["text"].strip() if cells else ""
-        starts_item = len(cells) > 1 and re.fullmatch(r"\d{1,3}[.)]?", first)
+        row_numbers = [number(cell["text"]) for cell in cells]
+        row_numbers = [value for value in row_numbers if value is not None]
+        has_name = any(number(cell["text"]) is None for cell in cells)
+        # Some photos lose the small line number at the left edge. Quantity and
+        # price on the same row are sufficient to identify a product row.
+        starts_item = (
+            len(cells) > 1
+            and (
+                re.fullmatch(r"\d{1,3}[.)]?", first)
+                or (has_name and len(row_numbers) >= 2)
+            )
+        )
         if starts_item:
             if current:
                 blocks.append(current)
@@ -74,8 +85,15 @@ def invoice_items(rows):
 
     for block in blocks:
         cells = [cell for row in block for cell in row]
-        # The first number is the line index, not a product value.
-        cells = cells[1:]
+        # The first number is the line index when OCR has captured it. It may be
+        # absent, so remove it only when three numeric columns are present.
+        first_is_index = bool(
+            cells
+            and re.fullmatch(r"\d{1,3}[.)]?", cells[0]["text"].strip())
+            and len([cell for cell in cells if number(cell["text"]) is not None]) >= 3
+        )
+        if first_is_index:
+            cells = cells[1:]
         numeric = [(cell, number(cell["text"])) for cell in cells]
         numeric = [(cell, value) for cell, value in numeric if value is not None]
         if len(numeric) < 2:
