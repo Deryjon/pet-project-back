@@ -309,14 +309,15 @@ export class SupplierInvoiceService {
         invoice.supplierId,
         item,
       );
-      const reliable = found && found.confidence >= 95 && !found.conflict;
       const updated = await (this.prisma as any).supplierInvoiceItem.update({
         where: { id: item.id },
         data: {
-          matchedProductId: found?.product.id ?? null,
+          // Automatic matching is a suggestion only. A product is linked only
+          // after the user explicitly confirms it in matchItem().
+          matchedProductId: null,
           matchMethod: found?.method ?? null,
           matchConfidence: found?.confidence ?? null,
-          status: reliable ? 'MATCHED' : found ? 'NEEDS_REVIEW' : 'NEW_PRODUCT',
+          status: found ? 'NEEDS_REVIEW' : 'NEW_PRODUCT',
           userConfirmed: false,
         },
       });
