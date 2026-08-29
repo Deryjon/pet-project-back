@@ -107,6 +107,36 @@ export class SupplierInvoiceService {
       throw new BadRequestException(`${field} is invalid`);
     return result;
   }
+  private assertEditable(invoice: { status: string }) {
+    if (!['DRAFT', 'PROCESSING', 'REVIEW'].includes(invoice.status))
+      throw new ConflictException('Invoice can no longer be changed');
+  }
+  private async syncProductQuantity(
+    tx: any,
+    productId: number,
+    strategy?: string,
+    lastPurchasePrice?: number,
+  ) {
+    const stocks = await tx.productStock.findMany({
+      where: { productId },
+      select: { quantity: true, purchasePrice: true },
+    });
+    const quantity = stocks.reduce(
+      (sum: number, stock: any) => sum + Number(stock.quantity),
+      0,
+    );
+    const data: any = { quantity };
+    if (strategy === 'LAST_PURCHASE' && lastPurchasePrice !== undefined)
+      data.purchasePrice = lastPurchasePrice;
+    if (strategy === 'WEIGHTED_AVERAGE' && quantity > 0)
+      data.purchasePrice =
+        stocks.reduce(
+          (sum: number, stock: any) =>
+            sum + Number(stock.quantity) * Number(stock.purchasePrice ?? 0),
+          0,
+        ) / quantity;
+    await tx.product.update({ where: { id: productId }, data });
+  }
   private async audit(
     tx: any,
     ctx: any,
@@ -192,7 +222,8 @@ export class SupplierInvoiceService {
   }
   async addItems(id: string, body: any, auth?: string) {
     const ctx = await this.context(auth);
-    await this.get(id, auth);
+    const invoice = await this.get(id, auth);
+    this.assertEditable(invoice);
     const rows = Array.isArray(body.items) ? body.items : [];
     if (!rows.length) throw new BadRequestException('items are required');
     return this.prisma.$transaction(async (tx: any) => {
@@ -238,7 +269,8 @@ export class SupplierInvoiceService {
   }
   async updateItem(id: string, itemId: string, body: any, auth?: string) {
     const ctx = await this.context(auth);
-    await this.get(id, auth);
+    const invoice = await this.get(id, auth);
+    this.assertEditable(invoice);
     const existing = await (this.prisma as any).supplierInvoiceItem.findFirst({
       where: { id: itemId, invoiceId: id },
     });
@@ -269,6 +301,7 @@ export class SupplierInvoiceService {
   async autoMatch(id: string, auth?: string) {
     const ctx = await this.context(auth);
     const invoice = await this.get(id, auth);
+    this.assertEditable(invoice);
     const results: any[] = [];
     for (const item of invoice.items) {
       const found = await this.matcher.match(
@@ -308,6 +341,7 @@ export class SupplierInvoiceService {
   async matchItem(id: string, itemId: string, body: any, auth?: string) {
     const ctx = await this.context(auth);
     const invoice = await this.get(id, auth);
+    this.assertEditable(invoice);
     const item = invoice.items.find((entry: any) => entry.id === itemId);
     if (!item) throw new NotFoundException('Invoice item not found');
     const productId = this.num(body.productId, 'productId');
@@ -449,31 +483,38 @@ export class SupplierInvoiceService {
   async allocate(id: string, body: any, auth?: string) {
     const ctx = await this.context(auth);
     const invoice = await this.get(id, auth);
+    this.assertEditable(invoice);
     const allocations = Array.isArray(body.allocations) ? body.allocations : [];
+    if (!allocations.length)
+      throw new BadRequestException('allocations are required');
     const allowed = new Set(ctx.allowedShopIds);
-    return this.prisma.$transaction(async (tx: any) => {
-      for (const entry of allocations) {
-        const item = invoice.items.find(
-          (x: any) => x.id === entry.invoiceItemId,
+    const seen = new Set<string>();
+    const normalized = allocations.map((entry: any) => {
+      const item = invoice.items.find(
+        (candidate: any) => candidate.id === entry.invoiceItemId,
+      );
+      if (!item)
+        throw new BadRequestException(
+          'Allocation item does not belong to invoice',
         );
-        if (!item)
-          throw new BadRequestException(
-            'Allocation item does not belong to invoice',
-          );
-        if (!allowed.has(entry.shopId))
-          throw new ForbiddenException('Shop is not available');
-        const quantity = this.num(entry.quantity, 'allocation quantity', true);
-        await tx.invoiceAllocation.upsert({
-          where: {
-            invoiceItemId_shopId: {
-              invoiceItemId: item.id,
-              shopId: entry.shopId,
-            },
-          },
-          create: { invoiceItemId: item.id, shopId: entry.shopId, quantity },
-          update: { quantity },
-        });
-      }
+      if (!allowed.has(entry.shopId))
+        throw new ForbiddenException('Shop is not available');
+      const key = `${item.id}:${entry.shopId}`;
+      if (seen.has(key)) throw new BadRequestException('Duplicate allocation');
+      seen.add(key);
+      return {
+        invoiceItemId: item.id,
+        shopId: entry.shopId,
+        quantity: this.num(entry.quantity, 'allocation quantity'),
+      };
+    });
+    return this.prisma.$transaction(async (tx: any) => {
+      await tx.invoiceAllocation.deleteMany({
+        where: {
+          invoiceItemId: { in: invoice.items.map((item: any) => item.id) },
+        },
+      });
+      await tx.invoiceAllocation.createMany({ data: normalized });
       await this.audit(tx, ctx, 'ALLOCATION_CHANGED', id);
       return tx.supplierInvoice.findUnique({
         where: { id },
@@ -483,6 +524,9 @@ export class SupplierInvoiceService {
   }
   async markReady(id: string, auth?: string) {
     const invoice = await this.get(id, auth);
+    this.assertEditable(invoice);
+    if (!invoice.items.length)
+      throw new BadRequestException('Invoice has no items');
     for (const item of invoice.items) {
       if (!item.matchedProductId || item.status !== 'MATCHED')
         throw new BadRequestException('Every item must be matched');
@@ -511,6 +555,18 @@ export class SupplierInvoiceService {
           throw new ConflictException('Invoice already committed');
         if (invoice.status !== 'READY')
           throw new BadRequestException('Invoice is not ready');
+        const company = await tx.company.findUnique({
+          where: { id: ctx.companyId },
+          select: { supplyPriceStrategy: true },
+        });
+        const strategy =
+          body.supplyPriceStrategy ||
+          company?.supplyPriceStrategy ||
+          'LAST_PURCHASE';
+        if (!['LAST_PURCHASE', 'WEIGHTED_AVERAGE', 'MANUAL'].includes(strategy))
+          throw new BadRequestException('Invalid supply price strategy');
+        const affectedProductIds = new Set<number>();
+        const lastPurchasePrices = new Map<number, number>();
         for (const item of invoice.items) {
           const total = item.allocations.reduce(
             (sum: number, x: any) => sum + Number(x.quantity),
@@ -521,10 +577,14 @@ export class SupplierInvoiceService {
             Math.abs(total - Number(item.quantity)) > 0.0001
           )
             throw new BadRequestException('Invalid item allocation');
+          const product = await tx.product.findFirst({
+            where: { id: item.matchedProductId, companyId: ctx.companyId },
+          });
+          if (!product)
+            throw new NotFoundException('Matched product not found');
+          affectedProductIds.add(product.id);
+          lastPurchasePrices.set(product.id, Number(item.supplyPrice));
           for (const allocation of item.allocations) {
-            const product = await tx.product.findFirst({
-              where: { id: item.matchedProductId, companyId: ctx.companyId },
-            });
             const stock = await tx.productStock.findFirst({
               where: {
                 productId: item.matchedProductId,
@@ -534,15 +594,6 @@ export class SupplierInvoiceService {
             const before = Number(stock?.quantity ?? 0),
               incoming = Number(allocation.quantity),
               price = Number(item.supplyPrice);
-            const strategy =
-              body.supplyPriceStrategy ||
-              (
-                await tx.company.findUnique({
-                  where: { id: ctx.companyId },
-                  select: { supplyPriceStrategy: true },
-                })
-              )?.supplyPriceStrategy ||
-              'LAST_PURCHASE';
             const nextPrice =
               strategy === 'WEIGHTED_AVERAGE' && before + incoming > 0
                 ? (before *
@@ -584,7 +635,12 @@ export class SupplierInvoiceService {
                 quantity: incoming,
                 beforeQuantity: before,
                 afterQuantity: before + incoming,
+                fromShopId: allocation.shopId,
+                toShopId: allocation.shopId,
                 supplyPrice: price,
+                fromSupplyPrice: Number(
+                  stock?.purchasePrice ?? product.purchasePrice ?? 0,
+                ),
                 retailPrice: Number(product.salePrice ?? 0),
                 createdById: ctx.userId,
               },
@@ -602,6 +658,13 @@ export class SupplierInvoiceService {
             });
           }
         }
+        for (const productId of affectedProductIds)
+          await this.syncProductQuantity(
+            tx,
+            productId,
+            strategy,
+            lastPurchasePrices.get(productId),
+          );
         await tx.supplierInvoice.update({
           where: { id },
           data: {
@@ -650,10 +713,25 @@ export class SupplierInvoiceService {
           where: { companyId: ctx.companyId, externalId: id, type: 'PURCHASE' },
           orderBy: { createdAt: 'desc' },
         });
+        if (!movements.length)
+          throw new ConflictException('Invoice stock movements not found');
+        const grouped = new Map<string, any>();
         for (const movement of movements) {
+          const key = `${movement.productId}:${movement.shopId}`;
+          const current = grouped.get(key);
+          if (current) current.quantity += Number(movement.quantity);
+          else
+            grouped.set(key, {
+              ...movement,
+              quantity: Number(movement.quantity),
+            });
+        }
+        const prepared: any[] = [];
+        for (const movement of grouped.values()) {
           const shop = await tx.shop.findUnique({
             where: { id: movement.shopId },
           });
+          if (!shop) throw new NotFoundException('Movement shop not found');
           const stock = await tx.productStock.findFirst({
             where: {
               productId: movement.productId,
@@ -661,8 +739,12 @@ export class SupplierInvoiceService {
             },
           });
           const quantity = Number(movement.quantity);
-          if (!stock || Number(stock.quantity) < quantity)
+          if (!stock || Number(stock.quantity) + 0.0001 < quantity)
             throw new BadRequestException('Rollback would make stock negative');
+          prepared.push({ movement, stock, quantity });
+        }
+        const affectedProductIds = new Set<number>();
+        for (const { movement, stock, quantity } of prepared) {
           const before = Number(stock.quantity);
           await tx.productStock.update({
             where: { id: stock.id },
@@ -680,12 +762,17 @@ export class SupplierInvoiceService {
               quantity: -quantity,
               beforeQuantity: before,
               afterQuantity: before - quantity,
+              fromShopId: movement.shopId,
+              toShopId: movement.shopId,
               supplyPrice: movement.supplyPrice,
               retailPrice: movement.retailPrice,
               createdById: ctx.userId,
             },
           });
+          affectedProductIds.add(movement.productId);
         }
+        for (const productId of affectedProductIds)
+          await this.syncProductQuantity(tx, productId);
         await tx.supplierInvoice.update({
           where: { id },
           data: { status: 'ROLLED_BACK', rolledBackAt: new Date() },
