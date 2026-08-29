@@ -75,6 +75,8 @@ export class InvoiceRecognitionService {
               ),
             );
           }
+          if (process.env.OCR_DEBUG === '1' && stderr?.trim())
+            this.logger.debug(stderr.slice(-12000));
           this.logger.log(`Local OCR completed in ${Date.now() - startedAt}ms`);
           resolve(output);
         },

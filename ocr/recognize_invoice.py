@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import re
 import sys
 
@@ -42,7 +43,9 @@ def rows_from_result(result):
     cells.sort(key=lambda cell: (cell["y"], cell["x"]))
     rows = []
     for cell in cells:
-        row = next((candidate for candidate in reversed(rows[-4:]) if abs(candidate["y"] - cell["y"]) <= max(candidate["h"], cell["h"]) * 0.65), None)
+        # Receipt photos are often tilted: name, quantity and price from the
+        # same printed line can have noticeably different vertical centres.
+        row = next((candidate for candidate in reversed(rows[-5:]) if abs(candidate["y"] - cell["y"]) <= max(candidate["h"], cell["h"]) * 1.15), None)
         if row is None:
             row = {"y": cell["y"], "h": cell["h"], "cells": []}
             rows.append(row)
@@ -123,6 +126,14 @@ def main():
     for path in sys.argv[1:]:
         for result in ocr.predict(path):
             rows.extend(rows_from_result(result))
+    if os.environ.get("OCR_DEBUG") == "1":
+        print(
+            "OCR_ROWS=" + json.dumps(
+                [[cell["text"] for cell in row] for row in rows],
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
     print(json.dumps({"invoiceNumber": None, "invoiceDate": None, "items": invoice_items(rows)}, ensure_ascii=False))
 
 
