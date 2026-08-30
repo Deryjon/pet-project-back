@@ -108,7 +108,7 @@ export class SupplierInvoiceService {
     return result;
   }
   private assertEditable(invoice: { status: string }) {
-    if (!['DRAFT', 'PROCESSING', 'REVIEW'].includes(invoice.status))
+    if (!['DRAFT', 'PROCESSING', 'REVIEW', 'READY'].includes(invoice.status))
       throw new ConflictException('Invoice can no longer be changed');
   }
   private async syncProductQuantity(
