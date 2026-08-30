@@ -881,30 +881,150 @@ export class ProductsService {
   ) {
     const safePage = Math.max(1, query.page ?? 1);
     const safeLimit = Math.min(Math.max(1, query.limit ?? 10), 100);
+    const offset = (safePage - 1) * safeLimit;
+    const windowSize = offset + safeLimit;
     const context = await this.getRequestContext(authorization);
     const companyId =
       context?.userType === 'company' ? (context.companyId ?? undefined) : undefined;
-    const sessions = await this.listPersistedImportSessions(
-      (safePage - 1) * safeLimit,
-      safeLimit,
-      companyId,
-    );
+    const invoiceWhere = companyId ? { companyId } : {};
+    const [sessions, importCount, invoices, invoiceCount] = await Promise.all([
+      this.listPersistedImportSessions(0, windowSize, companyId),
+      this.countPersistedImportSessions(companyId),
+      (this.prisma as any).supplierInvoice.findMany({
+        where: invoiceWhere,
+        select: {
+          id: true,
+          invoiceNumber: true,
+          status: true,
+          totalAmount: true,
+          totalQuantity: true,
+          committedAt: true,
+          rolledBackAt: true,
+          createdAt: true,
+          updatedAt: true,
+          supplier: { select: { name: true } },
+          createdBy: { select: { firstName: true, lastName: true } },
+          items: {
+            select: {
+              quantity: true,
+              supplyPrice: true,
+              matchedProduct: { select: { salePrice: true } },
+              allocations: {
+                select: { shop: { select: { id: true, name: true } } },
+              },
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: windowSize,
+      }),
+      (this.prisma as any).supplierInvoice.count({ where: invoiceWhere }),
+    ]);
     const shopLookup = await this.buildShopLookupByBranchCodes(
       sessions.map((session) => session.branchCode),
       companyId,
     );
-    const imports = sessions.map((session, index) =>
-      this.toLegacyImportListItem(
-        session,
-        (safePage - 1) * safeLimit + index,
-        context,
-        shopLookup,
-      ),
+    const importRows = sessions.map((session, index) => ({
+      ...this.toLegacyImportListItem(session, index, context, shopLookup),
+      source: 'import',
+    }));
+    const receiptRows = invoices.map((invoice: any) =>
+      this.toSupplierInvoiceListItem(invoice),
     );
+    const imports = [...importRows, ...receiptRows]
+      .sort(
+        (left, right) =>
+          new Date(right.created_at).getTime() -
+          new Date(left.created_at).getTime(),
+      )
+      .slice(offset, offset + safeLimit);
 
     return {
       imports,
-      count: await this.countPersistedImportSessions(companyId),
+      count: importCount + invoiceCount,
+    };
+  }
+
+  private toSupplierInvoiceListItem(invoice: any) {
+    const statusCodeByInvoiceStatus: Record<string, ImportSession['status']> = {
+      DRAFT: 'draft',
+      PROCESSING: 'validating',
+      REVIEW: 'validating',
+      READY: 'preview_ready',
+      COMMITTED: 'completed',
+      CANCELLED: 'cancelled',
+      ROLLED_BACK: 'rolled_back',
+    };
+    const statusLabelByInvoiceStatus: Record<string, string> = {
+      DRAFT: 'Черновик',
+      PROCESSING: 'Распознавание',
+      REVIEW: 'Проверка',
+      READY: 'Готов',
+      COMMITTED: 'Оприходован',
+      CANCELLED: 'Отменён',
+      ROLLED_BACK: 'Возвращён',
+    };
+    const items = Array.isArray(invoice.items) ? invoice.items : [];
+    const shops = new Map<string, string>();
+
+    for (const item of items) {
+      for (const allocation of item.allocations ?? []) {
+        const shop = allocation?.shop;
+        if (shop?.id && shop?.name) shops.set(String(shop.id), String(shop.name));
+      }
+    }
+
+    const totalQuantity =
+      invoice.totalQuantity != null
+        ? Number(invoice.totalQuantity)
+        : items.reduce((sum: number, item: any) => sum + Number(item.quantity), 0);
+    const totalSupplyPrice =
+      invoice.totalAmount != null
+        ? Number(invoice.totalAmount)
+        : items.reduce(
+            (sum: number, item: any) =>
+              sum + Number(item.quantity) * Number(item.supplyPrice),
+            0,
+          );
+    const totalRetailPrice = items.reduce(
+      (sum: number, item: any) =>
+        sum + Number(item.quantity) * Number(item.matchedProduct?.salePrice ?? 0),
+      0,
+    );
+    const rawStatus = String(invoice.status ?? 'DRAFT');
+    const statusCode = statusCodeByInvoiceStatus[rawStatus] ?? 'draft';
+    const createdBy = [invoice.createdBy?.firstName, invoice.createdBy?.lastName]
+      .filter(Boolean)
+      .join(' ');
+    const shopEntries = [...shops.entries()];
+    const finishedAt = invoice.committedAt ?? invoice.rolledBackAt ?? null;
+
+    return {
+      id: String(invoice.id),
+      external_id: String(invoice.id),
+      name: invoice.invoiceNumber
+        ? `Приход №${invoice.invoiceNumber}`
+        : `Приход от ${invoice.supplier?.name ?? 'поставщика'}`,
+      status: statusLabelByInvoiceStatus[rawStatus] ?? rawStatus,
+      status_code: statusCode,
+      shop_id: shopEntries.map(([id]) => id).join(', '),
+      shop_name: shopEntries.map(([, name]) => name).join(', '),
+      total_loaded_measurement_value: totalQuantity,
+      total_arrived_measurement_value:
+        rawStatus === 'COMMITTED' ? totalQuantity : 0,
+      total_supply_price: totalSupplyPrice,
+      total_retail_price: totalRetailPrice || undefined,
+      created_at: new Date(invoice.createdAt).toISOString(),
+      created_by: { name: createdBy },
+      finished_at: finishedAt ? new Date(finishedAt).toISOString() : '',
+      finished_by: { name: rawStatus === 'COMMITTED' ? createdBy : '' },
+      import_type: { name: 'Приход от поставщика' },
+      int_id: invoice.invoiceNumber || String(invoice.id).slice(0, 8),
+      requires_approval: rawStatus === 'READY',
+      can_commit: rawStatus === 'READY',
+      is_finished: ['COMMITTED', 'CANCELLED', 'ROLLED_BACK'].includes(rawStatus),
+      mode: 'with_check',
+      source: 'receipt',
     };
   }
 
