@@ -41,7 +41,7 @@ export class SupplierInvoiceService {
   ) {
     const ctx = await this.context(auth);
     const invoice = await this.get(id, auth);
-    if (!['DRAFT', 'PROCESSING', 'REVIEW'].includes(invoice.status))
+    if (!['DRAFT', 'PROCESSING', 'REVIEW', 'READY'].includes(invoice.status))
       throw new BadRequestException('Invoice files can no longer be changed');
     if (!files.length) throw new BadRequestException('files are required');
     const stored = files.map((file) => ({
@@ -438,7 +438,7 @@ export class SupplierInvoiceService {
   async mergeItems(id: string, body: any, auth?: string) {
     const ctx = await this.context(auth);
     const invoice = await this.get(id, auth);
-    if (!['REVIEW', 'DRAFT'].includes(invoice.status)) {
+    if (!['REVIEW', 'DRAFT', 'READY'].includes(invoice.status)) {
       throw new BadRequestException('Items can only be merged during review');
     }
     const itemIds = [
