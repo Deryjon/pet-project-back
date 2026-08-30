@@ -298,6 +298,32 @@ export class SupplierInvoiceService {
       return item;
     });
   }
+  async deleteItem(id: string, itemId: string, auth?: string) {
+    const ctx = await this.context(auth);
+    const invoice = await this.get(id, auth);
+    this.assertEditable(invoice);
+    const item = invoice.items.find((entry: any) => entry.id === itemId);
+    if (!item) throw new NotFoundException('Invoice item not found');
+
+    return this.prisma.$transaction(async (tx: any) => {
+      const deleted = await tx.supplierInvoiceItem.deleteMany({
+        where: { id: itemId, invoiceId: id },
+      });
+      if (!deleted.count) throw new NotFoundException('Invoice item not found');
+
+      await this.audit(tx, ctx, 'ITEM_DELETED', id, {
+        itemId,
+        rawName: item.rawName,
+        quantity: Number(item.quantity),
+        supplyPrice: Number(item.supplyPrice),
+      });
+
+      return tx.supplierInvoice.findUnique({
+        where: { id },
+        include: this.include(),
+      });
+    });
+  }
   async autoMatch(id: string, auth?: string) {
     const ctx = await this.context(auth);
     const invoice = await this.get(id, auth);

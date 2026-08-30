@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   Param,
@@ -100,6 +101,13 @@ export class SupplierInvoicesController {
     @Headers('authorization') auth?: string,
   ) {
     return this.invoices.updateItem(id, itemId, body, auth);
+  }
+  @Delete(':id/items/:itemId') deleteItem(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Headers('authorization') auth?: string,
+  ) {
+    return this.invoices.deleteItem(id, itemId, auth);
   }
   @Post(':id/auto-match') autoMatch(
     @Param('id') id: string,
