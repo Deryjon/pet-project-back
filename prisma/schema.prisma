@@ -986,6 +986,7 @@ model StockMovement {
 
 model SupplierInvoice {
   id             String                @id @default(uuid())
+  intId          Int                   @unique @default(autoincrement())
   companyId      String
   supplierId     Int
   invoiceNumber  String?

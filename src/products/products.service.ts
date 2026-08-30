@@ -894,6 +894,7 @@ export class ProductsService {
         where: invoiceWhere,
         select: {
           id: true,
+          intId: true,
           invoiceNumber: true,
           status: true,
           totalAmount: true,
@@ -1019,7 +1020,7 @@ export class ProductsService {
       finished_at: finishedAt ? new Date(finishedAt).toISOString() : '',
       finished_by: { name: rawStatus === 'COMMITTED' ? createdBy : '' },
       import_type: { name: 'Приход от поставщика' },
-      int_id: invoice.invoiceNumber || String(invoice.id).slice(0, 8),
+      int_id: String(invoice.intId),
       requires_approval: rawStatus === 'READY',
       can_commit: rawStatus === 'READY',
       is_finished: ['COMMITTED', 'CANCELLED', 'ROLLED_BACK'].includes(rawStatus),
