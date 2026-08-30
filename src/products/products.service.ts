@@ -6617,22 +6617,13 @@ export class ProductsService {
 
     if (resolvedShopIds.length) {
       and.push({
-        OR: [
-          {
-            stocks: {
-              some: {
-                branchCode: {
-                  in: resolvedShopIds,
-                },
-              },
+        stocks: {
+          some: {
+            branchCode: {
+              in: resolvedShopIds,
             },
           },
-          {
-            stocks: {
-              none: {},
-            },
-          },
-        ],
+        },
       });
     }
 
