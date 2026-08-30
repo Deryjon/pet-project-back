@@ -452,22 +452,12 @@ export class SupplierInvoiceService {
     if (items.length !== itemIds.length)
       throw new BadRequestException('Some items do not belong to invoice');
     const productId = items[0].matchedProductId;
-    const supplyPrice = Number(items[0].supplyPrice);
     if (
       !productId ||
       items.some((item: any) => item.matchedProductId !== productId)
     ) {
       throw new BadRequestException(
         'Only rows matched to the same product can be merged',
-      );
-    }
-    if (
-      items.some(
-        (item: any) => Math.abs(Number(item.supplyPrice) - supplyPrice) > 0.001,
-      )
-    ) {
-      throw new BadRequestException(
-        'Rows with different supply prices cannot be merged',
       );
     }
     if (items.some((item: any) => item.allocations.length)) {
@@ -480,13 +470,21 @@ export class SupplierInvoiceService {
     );
     const totalPrice = items.reduce(
       (sum: number, item: any) =>
-        sum + Number(item.totalPrice ?? Number(item.quantity) * supplyPrice),
+        sum + Number(item.quantity) * Number(item.supplyPrice),
       0,
     );
+    const supplyPrice = Number((totalPrice / quantity).toFixed(2));
+    const roundedTotalPrice = Number(totalPrice.toFixed(2));
     return this.prisma.$transaction(async (tx: any) => {
       await tx.supplierInvoiceItem.update({
         where: { id: target.id },
-        data: { quantity, totalPrice, userConfirmed: true, status: 'MATCHED' },
+        data: {
+          quantity,
+          supplyPrice,
+          totalPrice: roundedTotalPrice,
+          userConfirmed: true,
+          status: 'MATCHED',
+        },
       });
       await tx.supplierInvoiceItem.deleteMany({
         where: {
@@ -500,6 +498,7 @@ export class SupplierInvoiceService {
         productId,
         quantity,
         supplyPrice,
+        totalPrice: roundedTotalPrice,
       });
       return tx.supplierInvoice.findUnique({
         where: { id },
