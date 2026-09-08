@@ -2,6 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ImportNormalizerService } from './import-normalizer.service';
 
+// Minimum name similarity required to suggest an existing product.
+const MIN_FUZZY_CONFIDENCE = 50;
+const PRODUCT_BATCH_SIZE = 500;
+
 @Injectable()
 export class ImportMatcherService {
   constructor(
@@ -64,16 +68,29 @@ export class ImportMatcherService {
     }
 
     const normalized = this.normalizer.normalize(name);
-    const products = await db.product.findMany({
-      where: { companyId, archivedAt: null },
-      take: 500,
-    });
     const sourceFeatures = this.normalizer.importantFeatures(name);
-    const scored = products
-      .map((product: any) => {
+    const a = new Set(normalized.split(' ').filter(Boolean));
+    let lastProductId: number | undefined;
+    let bestMatch: {
+      product: any;
+      method: string;
+      confidence: number;
+      conflict: boolean;
+    } | null = null;
+
+    while (true) {
+      const products = await db.product.findMany({
+        where: {
+          companyId,
+          archivedAt: null,
+          ...(lastProductId === undefined ? {} : { id: { gt: lastProductId } }),
+        },
+        orderBy: { id: 'asc' },
+        take: PRODUCT_BATCH_SIZE,
+      });
+      for (const product of products) {
         const target = this.normalizer.normalize(product.name);
-        const a = new Set(normalized.split(' '));
-        const b = new Set(target.split(' '));
+        const b = new Set(target.split(' ').filter(Boolean));
         const common = [...a].filter((token) => b.has(token)).length;
         let confidence = Math.round(
           ((2 * common) / Math.max(1, a.size + b.size)) * 100,
@@ -86,9 +103,15 @@ export class ImportMatcherService {
             sourceFeatures[key] !== targetFeatures[key],
         );
         if (conflict) confidence = Math.min(confidence, 60);
-        return { product, method: 'FUZZY_NAME', confidence, conflict };
-      })
-      .sort((a: any, b: any) => b.confidence - a.confidence);
-    return scored[0] ?? null;
+        if (!bestMatch || confidence > bestMatch.confidence) {
+          bestMatch = { product, method: 'FUZZY_NAME', confidence, conflict };
+        }
+      }
+      if (products.length < PRODUCT_BATCH_SIZE) break;
+      lastProductId = products[products.length - 1].id;
+    }
+    return bestMatch && bestMatch.confidence >= MIN_FUZZY_CONFIDENCE
+      ? bestMatch
+      : null;
   }
 }
