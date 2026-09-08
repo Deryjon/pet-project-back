@@ -10,6 +10,7 @@ import * as bcrypt from 'bcrypt';
 import { randomUUID, createHash } from 'crypto';
 import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
 import { PrismaService } from '../prisma/prisma.service';
+import { runSerializableTransaction } from '../common/serializable-transaction';
 import { TelegramService } from '../telegram/telegram.service';
 import { UsersService } from '../users/users.service';
 import { extractAccessToken } from './access-token.util';
@@ -95,7 +96,11 @@ export class AuthService {
     const authProfile = await this.usersService.toAuthProfile(user);
     const tokens = await this.issueSessionTokens(
       user.id,
-      this.buildAccessTokenPayload(user, authProfile, authProfile.platform_role),
+      this.buildAccessTokenPayload(
+        user,
+        authProfile,
+        authProfile.platform_role,
+      ),
     );
 
     return {
@@ -196,16 +201,25 @@ export class AuthService {
         ? preparedUser.platformRole
         : preparedUser.crmRoleId,
     );
-    const tokens = await this.issueSessionTokens(preparedUser.id, nextPayload);
-
-    await this.db.authSession.update({
-      where: {
-        id: session.id,
-      },
-      data: {
-        revokedAt: new Date(),
-        replacedById: tokens.sessionId,
-      },
+    const tokens = await this.buildSessionTokens(preparedUser.id, nextPayload);
+    await runSerializableTransaction(this.db, async (tx) => {
+      await tx.authSession.create({ data: tokens.session });
+      const consumed = await tx.authSession.updateMany({
+        where: {
+          id: session.id,
+          userId: payload.sub,
+          refreshTokenHash: this.hashToken(refreshToken),
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+        data: {
+          revokedAt: new Date(),
+          replacedById: tokens.sessionId,
+        },
+      });
+      if (consumed.count !== 1) {
+        throw new UnauthorizedException('Refresh token was already used');
+      }
     });
 
     return {
@@ -237,10 +251,7 @@ export class AuthService {
     return profile;
   }
 
-  async logout(
-    authorization?: string,
-    body?: Record<string, unknown> | null,
-  ) {
+  async logout(authorization?: string, body?: Record<string, unknown> | null) {
     const refreshToken =
       body && typeof body.refresh_token === 'string'
         ? body.refresh_token
@@ -299,6 +310,15 @@ export class AuthService {
     userId: number,
     payload: Omit<AccessTokenPayload, 'sessionId'>,
   ) {
+    const tokens = await this.buildSessionTokens(userId, payload);
+    await this.db.authSession.create({ data: tokens.session });
+    return tokens;
+  }
+
+  private async buildSessionTokens(
+    userId: number,
+    payload: Omit<AccessTokenPayload, 'sessionId'>,
+  ) {
     const sessionId = randomUUID();
     const refreshToken = await this.signRefreshToken({
       sub: userId,
@@ -311,14 +331,12 @@ export class AuthService {
       throw new UnauthorizedException('Failed to issue refresh token');
     }
 
-    await this.db.authSession.create({
-      data: {
-        id: sessionId,
-        userId,
-        refreshTokenHash: this.hashToken(refreshToken),
-        expiresAt: new Date(refreshPayload.exp * 1000),
-      },
-    });
+    const session = {
+      id: sessionId,
+      userId,
+      refreshTokenHash: this.hashToken(refreshToken),
+      expiresAt: new Date(refreshPayload.exp * 1000),
+    };
 
     const accessToken = await this.jwtService.signAsync({
       ...payload,
@@ -329,6 +347,7 @@ export class AuthService {
       sessionId,
       accessToken,
       refreshToken,
+      session,
     };
   }
 
@@ -336,9 +355,8 @@ export class AuthService {
     const token = extractAccessToken(authorization);
 
     try {
-      const payload = await this.jwtService.verifyAsync<AccessTokenPayload>(
-        token,
-      );
+      const payload =
+        await this.jwtService.verifyAsync<AccessTokenPayload>(token);
 
       if (payload.sessionId) {
         await this.usersService.assertAuthSessionIsActive(
