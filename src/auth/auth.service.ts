@@ -11,6 +11,7 @@ import { randomUUID, createHash } from 'crypto';
 import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
 import { PrismaService } from '../prisma/prisma.service';
 import { runSerializableTransaction } from '../common/serializable-transaction';
+import { readPlatformSecurityPolicy } from '../common/platform-security-policy';
 import { TelegramService } from '../telegram/telegram.service';
 import { UsersService } from '../users/users.service';
 import { extractAccessToken } from './access-token.util';
@@ -320,11 +321,15 @@ export class AuthService {
     payload: Omit<AccessTokenPayload, 'sessionId'>,
   ) {
     const sessionId = randomUUID();
-    const refreshToken = await this.signRefreshToken({
-      sub: userId,
-      sessionId,
-      type: 'refresh',
-    });
+    const { sessionTimeoutMinutes } = await readPlatformSecurityPolicy(this.db);
+    const refreshToken = await this.signRefreshToken(
+      {
+        sub: userId,
+        sessionId,
+        type: 'refresh',
+      },
+      sessionTimeoutMinutes,
+    );
     const refreshPayload = this.decodeTokenPayload(refreshToken);
 
     if (!refreshPayload?.exp) {
@@ -338,10 +343,15 @@ export class AuthService {
       expiresAt: new Date(refreshPayload.exp * 1000),
     };
 
-    const accessToken = await this.jwtService.signAsync({
-      ...payload,
-      sessionId,
-    });
+    const accessToken = await this.jwtService.signAsync(
+      {
+        ...payload,
+        sessionId,
+      },
+      sessionTimeoutMinutes
+        ? { expiresIn: `${sessionTimeoutMinutes}m` as never }
+        : undefined,
+    );
 
     return {
       sessionId,
@@ -406,10 +416,15 @@ export class AuthService {
     }
   }
 
-  private async signRefreshToken(payload: RefreshTokenPayload) {
+  private async signRefreshToken(
+    payload: RefreshTokenPayload,
+    sessionTimeoutMinutes: number | null = null,
+  ) {
     return this.jwtService.signAsync(payload, {
       secret: this.getRefreshSecret(),
-      expiresIn: this.getRefreshExpiresIn() as never,
+      expiresIn: (sessionTimeoutMinutes
+        ? `${sessionTimeoutMinutes}m`
+        : this.getRefreshExpiresIn()) as never,
     });
   }
 

@@ -24,6 +24,7 @@ import { CreateShopDto } from './dto/create-shop.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { UpdateEntityStatusDto } from './dto/update-entity-status.dto';
 import { UpdateShopDto } from './dto/update-shop.dto';
+import { UpdatePlatformSettingsDto } from './dto/update-platform-settings.dto';
 import { PlatformService } from './platform.service';
 
 @UseGuards(PlatformAdminGuard)
@@ -100,10 +101,7 @@ export class PlatformController {
   }
 
   @Post('platform/companies/:companyId/unblock')
-  unblockCompany(
-    @Param('companyId') companyId: string,
-    @Req() req: Request,
-  ) {
+  unblockCompany(@Param('companyId') companyId: string, @Req() req: Request) {
     return this.platformService.unblockCompany(
       companyId,
       (req.user as { id: number }).id,
@@ -221,7 +219,11 @@ export class PlatformController {
     @Param('id', ParseIntPipe) id: number,
     @Req() req: Request,
   ) {
-    return this.usersService.update(id, { is_active: false }, req.user as never);
+    return this.usersService.update(
+      id,
+      { is_active: false },
+      req.user as never,
+    );
   }
 
   @Post('platform/users/:id/unblock')
@@ -246,7 +248,7 @@ export class PlatformController {
   }
 
   @Patch('platform/settings')
-  updateSettings(@Body() body: Record<string, unknown>) {
+  updateSettings(@Body() body: UpdatePlatformSettingsDto) {
     return this.platformService.updateSettings(body);
   }
 
@@ -474,7 +476,11 @@ export class PlatformController {
       req.headers.authorization,
     );
 
-    return this.usersService.updateStatus(id, { is_active: true }, req.user as never);
+    return this.usersService.updateStatus(
+      id,
+      { is_active: true },
+      req.user as never,
+    );
   }
 
   @Delete('platform/companies/:companyId/users/:id')

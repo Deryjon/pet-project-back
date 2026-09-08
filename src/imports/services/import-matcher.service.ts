@@ -26,44 +26,70 @@ export class ImportMatcherService {
       if (product)
         return { product, method: 'BARCODE', confidence: 100, conflict: false };
     }
-    const aliases = await db.supplierProductAlias.findMany({
-      where: {
-        companyId,
-        supplierId,
-        product: { companyId },
-        OR: [
-          ...(sku ? [{ supplierSku: sku }] : []),
-          ...(barcode ? [{ supplierBarcode: barcode }] : []),
-          { supplierName: { equals: name, mode: 'insensitive' } },
-          { normalizedName: this.normalizer.normalize(name) },
-        ],
+    const aliasMatchers = [
+      ...(sku
+        ? [
+            {
+              where: { supplierSku: sku },
+              method: 'SUPPLIER_SKU',
+              confidence: 100,
+            },
+          ]
+        : []),
+      ...(barcode
+        ? [
+            {
+              where: { supplierBarcode: barcode },
+              method: 'SUPPLIER_BARCODE',
+              confidence: 100,
+            },
+          ]
+        : []),
+      {
+        where: { supplierName: { equals: name, mode: 'insensitive' } },
+        method: 'SUPPLIER_NAME',
+        confidence: 98,
       },
-      include: { product: true },
-      take: 5,
-    });
-    const alias = aliases[0];
-    if (alias) {
+      {
+        where: { normalizedName: this.normalizer.normalize(name) },
+        method: 'NORMALIZED_NAME',
+        confidence: 94,
+      },
+    ];
+    for (const candidate of aliasMatchers) {
+      const aliases = await db.supplierProductAlias.findMany({
+        where: {
+          companyId,
+          supplierId,
+          product: { companyId },
+          ...candidate.where,
+        },
+        include: { product: true },
+        orderBy: { id: 'asc' },
+      });
+      if (!aliases.length) continue;
+
+      const productIds = new Set(
+        aliases.map((alias: any) => alias.productId ?? alias.product?.id),
+      );
+      if (productIds.size > 1) {
+        return {
+          product: null,
+          method: 'ALIAS_CONFLICT',
+          confidence: candidate.confidence,
+          conflict: true,
+        };
+      }
+
+      const alias = aliases[0];
       await db.supplierProductAlias.update({
         where: { id: alias.id },
         data: { usageCount: { increment: 1 }, lastSeenAt: new Date() },
       });
-      const method =
-        sku && alias.supplierSku === sku
-          ? 'SUPPLIER_SKU'
-          : barcode && alias.supplierBarcode === barcode
-            ? 'SUPPLIER_BARCODE'
-            : alias.supplierName.toLowerCase() === name.toLowerCase()
-              ? 'SUPPLIER_NAME'
-              : 'NORMALIZED_NAME';
       return {
         product: alias.product,
-        method,
-        confidence:
-          method === 'SUPPLIER_NAME'
-            ? 98
-            : method === 'NORMALIZED_NAME'
-              ? 94
-              : 100,
+        method: candidate.method,
+        confidence: candidate.confidence,
         conflict: false,
       };
     }

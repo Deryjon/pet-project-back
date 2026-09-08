@@ -1,6 +1,7 @@
 import { PermissionsGuard } from '../../auth/guards/permissions.guard';
 import { Permissions } from '../../auth/permissions.decorator';
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -59,18 +60,22 @@ export class SupplierInvoicesController {
           ),
       }),
       limits: { fileSize: 20 * 1024 * 1024 },
-      fileFilter: (_req, file, callback) =>
+      fileFilter: (_req, file, callback) => {
+        const allowed = [
+          'image/jpeg',
+          'image/png',
+          'image/webp',
+          'application/pdf',
+        ].includes(file.mimetype);
         callback(
-          null,
-          [
-            'image/jpeg',
-            'image/png',
-            'image/webp',
-            'application/pdf',
-            'application/vnd.ms-excel',
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          ].includes(file.mimetype),
-        ),
+          allowed
+            ? null
+            : new BadRequestException(
+                'OCR accepts JPG, PNG, WEBP and PDF files only',
+              ),
+          allowed,
+        );
+      },
     }),
   )
   @Permissions('import-create')

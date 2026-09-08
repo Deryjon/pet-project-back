@@ -14,6 +14,7 @@ import { promises as fs } from 'fs';
 import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
 import { extname, join } from 'path';
 import { extractAccessToken } from '../auth/access-token.util';
+import { assertPasswordMeetsPlatformPolicy } from '../common/platform-security-policy';
 import { PrismaService } from '../prisma/prisma.service';
 import { ROLE_PERMISSION_SECTIONS } from '../roles/roles.permissions';
 import { ROLE_DEFINITIONS } from './constants/role-definitions';
@@ -681,6 +682,7 @@ export class UsersService {
       this.requireString(body.phone_number, 'phone_number'),
     );
     const password = this.requireString(body.password, 'password');
+    await assertPasswordMeetsPlatformPolicy(this.db, password);
     const userType = this.parseUserType(body.user_type);
     const birthDate = this.parseBirthDate(this.optionalString(body.birth_date));
     const normalizedPlatformRoleInput = this.optionalString(body.platform_role);
@@ -744,7 +746,7 @@ export class UsersService {
       this.optionalString(body.crm_role_id),
       companyId,
     );
-        const allowedShops = await this.resolveAllowedShopsForWrite(
+    const allowedShops = await this.resolveAllowedShopsForWrite(
       companyId,
       body.allowed_shop_ids,
       this.optionalString(body.current_shop_id) ??
@@ -908,10 +910,9 @@ export class UsersService {
     }
 
     if (body.password !== undefined) {
-      const passwordHash = await bcrypt.hash(
-        this.requireString(body.password, 'password'),
-        10,
-      );
+      const password = this.requireString(body.password, 'password');
+      await assertPasswordMeetsPlatformPolicy(this.db, password);
+      const passwordHash = await bcrypt.hash(password, 10);
       data.passwordHash = passwordHash;
     }
 
@@ -971,9 +972,10 @@ export class UsersService {
                 (companyChanged
                   ? undefined
                   : targetUser.shopAccesses.map((access) => access.shopId)),
-              (this.optionalString(body.current_shop_id) ??
+              this.optionalString(body.current_shop_id) ??
                 this.optionalString(body.branch_location) ??
-                (companyChanged ? undefined : targetUser.currentShopId)) ?? undefined,
+                (companyChanged ? undefined : targetUser.currentShopId) ??
+                undefined,
             )
           : targetUser.shopAccesses.map((access) => access.shop);
 
@@ -984,9 +986,10 @@ export class UsersService {
         companyChanged
           ? await this.resolveCurrentShopForWrite(
               companyId,
-              (this.optionalString(body.current_shop_id) ??
+              this.optionalString(body.current_shop_id) ??
                 this.optionalString(body.branch_location) ??
-                (companyChanged ? undefined : targetUser.currentShopId)) ?? undefined,
+                (companyChanged ? undefined : targetUser.currentShopId) ??
+                undefined,
               allowedShops,
             )
           : targetUser.currentShop;
@@ -1024,7 +1027,8 @@ export class UsersService {
           id: {
             not: id,
           },
-          phoneNumber: typeof data.phoneNumber === 'string' ? data.phoneNumber : undefined,
+          phoneNumber:
+            typeof data.phoneNumber === 'string' ? data.phoneNumber : undefined,
           userType: targetUser.userType,
           companyId,
         },
@@ -1172,6 +1176,7 @@ export class UsersService {
       'current_password',
     );
     const newPassword = this.requireString(body.new_password, 'new_password');
+    await assertPasswordMeetsPlatformPolicy(this.db, newPassword);
 
     const isPasswordValid = await bcrypt.compare(
       currentPassword,
@@ -1531,10 +1536,11 @@ export class UsersService {
       throw new ForbiddenException('You cannot view users');
     }
 
-    const shopIds = query.shop_ids
-      ?.split(',')
-      .map((s) => s.trim())
-      .filter(Boolean) ?? [];
+    const shopIds =
+      query.shop_ids
+        ?.split(',')
+        .map((s) => s.trim())
+        .filter(Boolean) ?? [];
 
     const search = query.search?.trim();
 
@@ -1751,7 +1757,9 @@ export class UsersService {
     return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
   }
 
-  private buildUserVisibilityWhere(actor: UserWithRelations): Prisma.UserWhereInput {
+  private buildUserVisibilityWhere(
+    actor: UserWithRelations,
+  ): Prisma.UserWhereInput {
     if (this.isPlatformAdmin(actor)) {
       return {
         deletedAt: 0,
@@ -1942,20 +1950,14 @@ export class UsersService {
   }
 
   private isPlatformAdmin(user: UserWithRelations) {
-    const platformRole = (user.platformRole ?? '')
-      .trim()
-      .toLowerCase();
+    const platformRole = (user.platformRole ?? '').trim().toLowerCase();
     return (
-      user.userType === 'platform' &&
-      PLATFORM_ADMIN_ROLES.has(platformRole)
+      user.userType === 'platform' && PLATFORM_ADMIN_ROLES.has(platformRole)
     );
   }
 
   private isCompanyAdmin(user: UserWithRelations) {
-    return (
-      user.userType === 'company' &&
-      Boolean(user.crmRole?.isAdmin)
-    );
+    return user.userType === 'company' && Boolean(user.crmRole?.isAdmin);
   }
 
   private canManageUser(
@@ -2830,8 +2832,7 @@ export class UsersService {
       role: crmRolePayload?.role ?? null,
       role_code: crmRolePayload?.roleCode ?? null,
       role_name: crmRolePayload?.roleName ?? null,
-      platform_role:
-        user.userType === 'platform' ? (user.platformRole) : null,
+      platform_role: user.userType === 'platform' ? user.platformRole : null,
       crm_role_id: user.crmRoleId,
       crm_role: user.crmRole
         ? {

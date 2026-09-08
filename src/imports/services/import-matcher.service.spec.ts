@@ -114,6 +114,65 @@ describe('Import matching', () => {
       await matcher.match('company', 1, { rawName: 'unique', rawSku: 'sku' }),
     ).toMatchObject({ method: 'SUPPLIER_SKU', confidence: 100 });
   });
+  it('prefers an exact supplier SKU over a conflicting name alias', async () => {
+    db.supplierProductAlias.findMany.mockImplementation(async ({ where }) => {
+      if (where.supplierSku === 'sku-1') {
+        return [
+          {
+            id: 2,
+            productId: 20,
+            supplierSku: 'sku-1',
+            product: { id: 20, name: 'SKU product' },
+          },
+        ];
+      }
+      if (where.supplierName) {
+        return [
+          {
+            id: 1,
+            productId: 10,
+            supplierName: 'Same name',
+            product: { id: 10, name: 'Name product' },
+          },
+        ];
+      }
+      return [];
+    });
+
+    await expect(
+      matcher.match('company', 1, {
+        rawName: 'Same name',
+        rawSku: 'sku-1',
+      }),
+    ).resolves.toMatchObject({
+      product: { id: 20 },
+      method: 'SUPPLIER_SKU',
+      conflict: false,
+    });
+    expect(db.supplierProductAlias.findMany).toHaveBeenCalledTimes(1);
+  });
+  it('reports ambiguous aliases independently of database row order', async () => {
+    for (const aliases of [
+      [
+        { id: 1, productId: 10, product: { id: 10 } },
+        { id: 2, productId: 20, product: { id: 20 } },
+      ],
+      [
+        { id: 2, productId: 20, product: { id: 20 } },
+        { id: 1, productId: 10, product: { id: 10 } },
+      ],
+    ]) {
+      db.supplierProductAlias.findMany.mockResolvedValueOnce(aliases);
+      await expect(
+        matcher.match('company', 1, { rawName: 'Ambiguous' }),
+      ).resolves.toMatchObject({
+        product: null,
+        method: 'ALIAS_CONFLICT',
+        conflict: true,
+      });
+    }
+    expect(db.supplierProductAlias.update).not.toHaveBeenCalled();
+  });
   it('keeps feature conflicts for review', async () => {
     db.product.findMany.mockResolvedValue([
       { id: 1, name: 'phone alpha black' },

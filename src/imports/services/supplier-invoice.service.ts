@@ -356,8 +356,9 @@ export class SupplierInvoiceService {
     });
     if (!existing) throw new NotFoundException('Invoice item not found');
     const data: any = {};
-    if (body.rawName !== undefined)
-      data.correctedName = String(body.rawName).trim();
+    const correctedName = body.correctedName ?? body.rawName;
+    if (correctedName !== undefined)
+      data.correctedName = String(correctedName).trim();
     if (body.sku !== undefined) data.correctedSku = body.sku || null;
     if (body.barcode !== undefined)
       data.correctedBarcode = body.barcode || null;

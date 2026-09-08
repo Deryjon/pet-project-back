@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { createDefaultCrmRolesForCompany } from '../roles/default-crm-roles';
+import { UpdatePlatformSettingsDto } from './dto/update-platform-settings.dto';
 
 const DEFAULT_COMPANY_ROLES = [
   { code: 'owner', name: 'Owner', isSystem: true },
@@ -391,9 +392,15 @@ export class PlatformService {
         ).map((o: { id: string }) => o.id);
 
         if (orderIds.length) {
-          await tx.orderItem.deleteMany({ where: { orderId: { in: orderIds } } });
-          await tx.orderPayment.deleteMany({ where: { orderId: { in: orderIds } } });
-          await tx.stockMovement.deleteMany({ where: { orderId: { in: orderIds } } });
+          await tx.orderItem.deleteMany({
+            where: { orderId: { in: orderIds } },
+          });
+          await tx.orderPayment.deleteMany({
+            where: { orderId: { in: orderIds } },
+          });
+          await tx.stockMovement.deleteMany({
+            where: { orderId: { in: orderIds } },
+          });
           await tx.order.deleteMany({ where: { id: { in: orderIds } } });
         }
 
@@ -760,11 +767,7 @@ export class PlatformService {
     );
   }
 
-  async changePlan(
-    subscriptionId: string,
-    planId: string,
-    adminId: number,
-  ) {
+  async changePlan(subscriptionId: string, planId: string, adminId: number) {
     const subscription = await this.findSubscriptionOrThrow(subscriptionId);
 
     const plan = await this.db.plan.findUnique({ where: { id: planId } });
@@ -1041,14 +1044,26 @@ export class PlatformService {
       where: { id: 'default' },
     });
 
-    return settings?.data ?? {};
+    return {
+      language: 'ru',
+      timezone: 'Asia/Tashkent',
+      minPasswordLength: 8,
+      sessionTimeout: 30,
+      notificationsEnabled: true,
+      ...((settings?.data as Record<string, unknown> | null) ?? {}),
+    };
   }
 
-  async updateSettings(body: Record<string, unknown>) {
+  async updateSettings(body: UpdatePlatformSettingsDto) {
+    const current = await this.db.platformSetting.findUnique({
+      where: { id: 'default' },
+    });
+    const currentData = (current?.data as Record<string, unknown> | null) ?? {};
+    const data = { ...currentData, ...body };
     const settings = await this.db.platformSetting.upsert({
       where: { id: 'default' },
-      update: { data: body as any },
-      create: { id: 'default', data: body as any },
+      update: { data: data as any },
+      create: { id: 'default', data: data as any },
     });
 
     return settings.data;
@@ -1108,8 +1123,7 @@ export class PlatformService {
     if (params.entityFilter) where.entity = params.entityFilter;
     if (params.dateFrom || params.dateTo) {
       where.createdAt = {};
-      if (params.dateFrom)
-        where.createdAt.gte = new Date(params.dateFrom);
+      if (params.dateFrom) where.createdAt.gte = new Date(params.dateFrom);
       if (params.dateTo) {
         const end = new Date(params.dateTo);
         end.setDate(end.getDate() + 1);
@@ -1454,7 +1468,11 @@ export class PlatformService {
     };
   }
 
-  async deleteCompanyProduct(companyId: string, productId: string, adminId: number) {
+  async deleteCompanyProduct(
+    companyId: string,
+    productId: string,
+    adminId: number,
+  ) {
     await this.findCompany(companyId);
 
     const product = await this.db.product.findFirst({
