@@ -11,7 +11,7 @@ import { ReportsRepository } from './reports.repository';
 import { SalaryService } from './salary.service';
 import { SellerReportsService } from './seller-reports.service';
 
-const MAX_REPORT_RECORDS = 10_000;
+const REPORT_PAGE_SIZE = 2_000;
 
 @Injectable()
 export class ReportsService {
@@ -170,10 +170,8 @@ export class ReportsService {
 
     return {
       shop_stats: shopStats,
-      shop_plot: this.buildGeneralShopPlot(
-        sales,
-        shops,
-        (bucket) => this.resolveGeneralSalesField(this.buildSummaryMetrics(bucket), field),
+      shop_plot: this.buildGeneralShopPlot(sales, shops, (bucket) =>
+        this.resolveGeneralSalesField(this.buildSummaryMetrics(bucket), field),
       ),
       value: shopStats.reduce((sum, item) => sum + item.value, 0),
       record_date: '',
@@ -244,10 +242,8 @@ export class ReportsService {
 
     return {
       shop_stats: shopStats,
-      shop_plot: this.buildGeneralShopPlot(
-        sales,
-        plotShops,
-        (bucket) => this.calculateProductMetric(bucket, field),
+      shop_plot: this.buildGeneralShopPlot(sales, plotShops, (bucket) =>
+        this.calculateProductMetric(bucket, field),
       ),
       value: this.calculateProductMetric(sales, field),
       current_left_products: null,
@@ -355,7 +351,9 @@ export class ReportsService {
       const purchaseDate = sale.paidAt ?? sale.createdAt;
       existing.count += 1;
       existing.amount += this.getSaleNetAmount(sale);
-      if (purchaseDate.getTime() < existing.first_selected_purchase_at.getTime()) {
+      if (
+        purchaseDate.getTime() < existing.first_selected_purchase_at.getTime()
+      ) {
         existing.first_selected_purchase_at = purchaseDate;
       }
       customerAggregates.set(customerKey, existing);
@@ -383,16 +381,18 @@ export class ReportsService {
       const purchaseDate = sale.paidAt ?? sale.createdAt;
       const customerType = customerTypes.get(customerKey) ?? 'new';
       const branchCode = sale.branchCode ?? '';
-      const shopBucket =
-        shopCustomerBuckets.get(branchCode) ??
-        { new: new Set<string>(), returned: new Set<string>() };
+      const shopBucket = shopCustomerBuckets.get(branchCode) ?? {
+        new: new Set<string>(),
+        returned: new Set<string>(),
+      };
       shopBucket[customerType].add(customerKey);
       shopCustomerBuckets.set(branchCode, shopBucket);
 
       const plotKey = `${this.toPlotDate(purchaseDate)}__${branchCode}`;
-      const plotBucket =
-        plotBuckets.get(plotKey) ??
-        { new: new Set<string>(), returned: new Set<string>() };
+      const plotBucket = plotBuckets.get(plotKey) ?? {
+        new: new Set<string>(),
+        returned: new Set<string>(),
+      };
       plotBucket[customerType].add(customerKey);
       plotBuckets.set(plotKey, plotBucket);
     }
@@ -420,8 +420,9 @@ export class ReportsService {
         customerSales,
         plotShops,
         (_bucket, day, shop) =>
-          plotBuckets.get(`${day}__${shop.branchCode}`)?.[field === 'returned' ? 'returned' : 'new']
-            ?.size ?? 0,
+          plotBuckets.get(`${day}__${shop.branchCode}`)?.[
+            field === 'returned' ? 'returned' : 'new'
+          ]?.size ?? 0,
       ),
       top_client: topClientEntry
         ? {
@@ -447,9 +448,10 @@ export class ReportsService {
           },
       record_date: '',
       shop_stats: shops.map((shop) => {
-        const bucket =
-          shopCustomerBuckets.get(shop.branchCode) ??
-          { new: new Set<string>(), returned: new Set<string>() };
+        const bucket = shopCustomerBuckets.get(shop.branchCode) ?? {
+          new: new Set<string>(),
+          returned: new Set<string>(),
+        };
         return {
           shop_id: shop.id,
           shop_name: shop.name,
@@ -568,7 +570,9 @@ export class ReportsService {
       slow_moving_products: [...items]
         .sort((a, b) => a.quantity_sold - b.quantity_sold)
         .slice(0, 10),
-      low_stock_products: items.filter((item) => item.stock_left <= 5).slice(0, 10),
+      low_stock_products: items
+        .filter((item) => item.stock_left <= 5)
+        .slice(0, 10),
     };
   }
 
@@ -632,7 +636,8 @@ export class ReportsService {
       const bucket = daily.get(day) ?? {};
       const groupValue = this.resolveProductReportGroupValue(row, groupBy);
       const resolvedKey = topNames.has(groupValue) ? groupValue : 'others';
-      bucket[resolvedKey] = (bucket[resolvedKey] ?? 0) +
+      bucket[resolvedKey] =
+        (bucket[resolvedKey] ?? 0) +
         this.resolveProductReportMetricValue(row, field);
       daily.set(day, bucket);
     }
@@ -644,7 +649,13 @@ export class ReportsService {
             ...bucket,
             start_date: day,
           }))
-      : [{ start_date: this.toPlotDate(this.parseDate(undefined) ?? new Date()) }];
+      : [
+          {
+            start_date: this.toPlotDate(
+              this.parseDate(undefined) ?? new Date(),
+            ),
+          },
+        ];
 
     return {
       product_plot: productPlot,
@@ -670,14 +681,20 @@ export class ReportsService {
     const stockRows = await this.buildStockReportRows(query, context);
 
     return {
-      product_sold: rows.reduce((sum, row) => sum + row.sold_measurement_value, 0),
+      product_sold: rows.reduce(
+        (sum, row) => sum + row.sold_measurement_value,
+        0,
+      ),
       product_returned: rows.reduce(
         (sum, row) => sum + row.returned_measurement_value,
         0,
       ),
       net_gross_sales: rows.reduce((sum, row) => sum + row.net_sales, 0),
       net_gross_profit: rows.reduce((sum, row) => sum + row.net_profit, 0),
-      products_left: stockRows.reduce((sum, row) => sum + row.measurement_value, 0),
+      products_left: stockRows.reduce(
+        (sum, row) => sum + row.measurement_value,
+        0,
+      ),
       products_left_supply_price: stockRows.reduce(
         (sum, row) => sum + row.measurement_value * row.supply_price,
         0,
@@ -721,7 +738,9 @@ export class ReportsService {
     const context = await this.getContext(authorization);
     const sales = await this.loadReportSales(query, context);
     const items = this.aggregateProductsDetailed(sales);
-    const sorted = [...items].sort((a, b) => b.net_gross_sales - a.net_gross_sales);
+    const sorted = [...items].sort(
+      (a, b) => b.net_gross_sales - a.net_gross_sales,
+    );
     const topItems = sorted.slice(0, 10);
     const otherItems = sorted.slice(10);
 
@@ -738,8 +757,14 @@ export class ReportsService {
       other_products_performance: {
         product_field: '',
         main_image_url: '',
-        net_sales: otherItems.reduce((sum, item) => sum + item.net_gross_sales, 0),
-        net_profit: otherItems.reduce((sum, item) => sum + item.gross_profit, 0),
+        net_sales: otherItems.reduce(
+          (sum, item) => sum + item.net_gross_sales,
+          0,
+        ),
+        net_profit: otherItems.reduce(
+          (sum, item) => sum + item.gross_profit,
+          0,
+        ),
         total_sold_measurement_value: otherItems.reduce(
           (sum, item) => sum + item.sold_quantity,
           0,
@@ -767,9 +792,18 @@ export class ReportsService {
       summary: {
         products_count: rows.length,
         sales_quantity: rows.reduce((sum, item) => sum + item.sold_quantity, 0),
-        returns_quantity: rows.reduce((sum, item) => sum + item.returned_quantity, 0),
-        write_off_quantity: rows.reduce((sum, item) => sum + item.write_off_quantity, 0),
-        transfer_quantity: rows.reduce((sum, item) => sum + item.transfer_quantity, 0),
+        returns_quantity: rows.reduce(
+          (sum, item) => sum + item.returned_quantity,
+          0,
+        ),
+        write_off_quantity: rows.reduce(
+          (sum, item) => sum + item.write_off_quantity,
+          0,
+        ),
+        transfer_quantity: rows.reduce(
+          (sum, item) => sum + item.transfer_quantity,
+          0,
+        ),
         ending_stock_quantity: rows.reduce(
           (sum, item) => sum + item.ending_stock,
           0,
@@ -806,7 +840,10 @@ export class ReportsService {
 
     return {
       table_data: {
-        stock_amount_begin: rows.reduce((sum, row) => sum + row.stock_amount_begin, 0),
+        stock_amount_begin: rows.reduce(
+          (sum, row) => sum + row.stock_amount_begin,
+          0,
+        ),
         stock_supply_sum_begin: rows.reduce(
           (sum, row) => sum + row.stock_supply_sum_begin,
           0,
@@ -815,7 +852,10 @@ export class ReportsService {
           (sum, row) => sum + row.stock_retail_sum_begin,
           0,
         ),
-        stock_amount_end: rows.reduce((sum, row) => sum + row.stock_amount_end, 0),
+        stock_amount_end: rows.reduce(
+          (sum, row) => sum + row.stock_amount_end,
+          0,
+        ),
         stock_supply_sum_end: rows.reduce(
           (sum, row) => sum + row.stock_supply_sum_end,
           0,
@@ -826,8 +866,14 @@ export class ReportsService {
         ),
         import_amount: rows.reduce((sum, row) => sum + row.import_amount, 0),
         sold_amount: rows.reduce((sum, row) => sum + row.sold_amount, 0),
-        returned_amount: rows.reduce((sum, row) => sum + row.returned_amount, 0),
-        write_off_amount: rows.reduce((sum, row) => sum + row.write_off_amount, 0),
+        returned_amount: rows.reduce(
+          (sum, row) => sum + row.returned_amount,
+          0,
+        ),
+        write_off_amount: rows.reduce(
+          (sum, row) => sum + row.write_off_amount,
+          0,
+        ),
       },
       count: rows.length,
     };
@@ -851,7 +897,8 @@ export class ReportsService {
         const currentStock = this.resolveStockLeft(item.product);
         const soldQuantity = Math.max(0, quantity - currentStock);
         const grossRevenue = soldQuantity * retailPrice;
-        const grossProfit = soldQuantity * Math.max(0, retailPrice - supplyPrice);
+        const grossProfit =
+          soldQuantity * Math.max(0, retailPrice - supplyPrice);
         return {
           import_date: item.createdAt,
           supplier: item.product?.suppliers?.[0]?.supplier?.name ?? '',
@@ -865,7 +912,8 @@ export class ReportsService {
           stock_left: currentStock,
           revenue: grossRevenue,
           gross_profit: grossProfit,
-          margin_percent: grossRevenue > 0 ? (grossProfit / grossRevenue) * 100 : 0,
+          margin_percent:
+            grossRevenue > 0 ? (grossProfit / grossRevenue) * 100 : 0,
         };
       });
     const paginated = this.paginate(rows, query);
@@ -1047,10 +1095,22 @@ export class ReportsService {
     return {
       summary: {
         sku_count: rows.length,
-        total_quantity: rows.reduce((sum, item) => sum + item.stock_quantity, 0),
-        stock_supply_total: rows.reduce((sum, item) => sum + item.stock_supply_total, 0),
-        stock_retail_total: rows.reduce((sum, item) => sum + item.stock_retail_total, 0),
-        potential_profit: rows.reduce((sum, item) => sum + item.potential_profit, 0),
+        total_quantity: rows.reduce(
+          (sum, item) => sum + item.stock_quantity,
+          0,
+        ),
+        stock_supply_total: rows.reduce(
+          (sum, item) => sum + item.stock_supply_total,
+          0,
+        ),
+        stock_retail_total: rows.reduce(
+          (sum, item) => sum + item.stock_retail_total,
+          0,
+        ),
+        potential_profit: rows.reduce(
+          (sum, item) => sum + item.potential_profit,
+          0,
+        ),
       },
       count: rows.length,
       ...paginated,
@@ -1088,7 +1148,8 @@ export class ReportsService {
         sku: item.product?.sku ?? '',
         expected_quantity: Number(item.beforeQuantity ?? 0),
         actual_quantity: Number(item.afterQuantity ?? 0),
-        difference: Number(item.afterQuantity ?? 0) - Number(item.beforeQuantity ?? 0),
+        difference:
+          Number(item.afterQuantity ?? 0) - Number(item.beforeQuantity ?? 0),
         difference_cost:
           (Number(item.afterQuantity ?? 0) - Number(item.beforeQuantity ?? 0)) *
           Number(item.product?.purchasePrice ?? 0),
@@ -1294,7 +1355,11 @@ export class ReportsService {
     authorization?: string,
   ) {
     const parsedSellerId = this.parseSellerId(sellerId);
-    const salesReport = await this.getSellerSales(sellerId, query, authorization);
+    const salesReport = await this.getSellerSales(
+      sellerId,
+      query,
+      authorization,
+    );
     const salaryReport = await this.getSellerSalaryReport(
       sellerId,
       query,
@@ -1338,7 +1403,7 @@ export class ReportsService {
       existing.last_purchase =
         existing.last_purchase > (sale.paidAt ?? sale.createdAt)
           ? existing.last_purchase
-          : sale.paidAt ?? sale.createdAt;
+          : (sale.paidAt ?? sale.createdAt);
       for (const item of sale.items) {
         existing.purchased_products.add(item.name);
       }
@@ -1370,10 +1435,7 @@ export class ReportsService {
     };
   }
 
-  async getSellerSalarySettings(
-    sellerId: string,
-    authorization?: string,
-  ) {
+  async getSellerSalarySettings(sellerId: string, authorization?: string) {
     return this.sellerReportsService.getSellerSalarySettings(
       sellerId,
       authorization,
@@ -1415,33 +1477,30 @@ export class ReportsService {
     context: any,
   ) {
     const where = await this.buildReportWhere(query, context);
-    return this.db.sale.findMany({
-      where,
-      take: MAX_REPORT_RECORDS,
-      include: {
-        user: true,
-        items: {
-          include: {
-            product: {
-              include: {
-                category: true,
-                brand: true,
-                stocks: true,
-                suppliers: {
-                  include: {
-                    supplier: true,
-                  },
+    return this.loadAllReportPages((skip, take) =>
+      this.db.sale.findMany({
+        where,
+        skip,
+        take,
+        include: {
+          user: true,
+          items: {
+            include: {
+              product: {
+                include: {
+                  category: true,
+                  brand: true,
+                  stocks: true,
+                  suppliers: { include: { supplier: true } },
                 },
               },
+              seller: true,
             },
-            seller: true,
           },
         },
-      },
-      orderBy: {
-        paidAt: 'desc',
-      },
-    });
+        orderBy: [{ paidAt: 'desc' }, { id: 'desc' }],
+      }),
+    );
   }
 
   private async loadReportShops(
@@ -1472,11 +1531,7 @@ export class ReportsService {
       return shops;
     }
 
-    return requestedShopIds.map((shopId) => ({
-      id: shopId,
-      name: shopId,
-      branchCode: shopId,
-    }));
+    return [];
   }
 
   private async loadReportProducts(
@@ -1484,23 +1539,20 @@ export class ReportsService {
     context: any,
   ) {
     const where = await this.buildProductWhere(query, context);
-    return this.db.product.findMany({
-      where,
-      take: MAX_REPORT_RECORDS,
-      include: {
-        category: true,
-        brand: true,
-        stocks: true,
-        suppliers: {
-          include: {
-            supplier: true,
-          },
+    return this.loadAllReportPages((skip, take) =>
+      this.db.product.findMany({
+        where,
+        skip,
+        take,
+        include: {
+          category: true,
+          brand: true,
+          stocks: true,
+          suppliers: { include: { supplier: true } },
         },
-      },
-      orderBy: {
-        name: 'asc',
-      },
-    });
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      }),
+    );
   }
 
   private async loadProductMovements(
@@ -1508,29 +1560,37 @@ export class ReportsService {
     context: any,
   ) {
     const where = await this.buildStockMovementWhere(query, context);
-    return this.db.stockMovement.findMany({
-      where,
-      take: MAX_REPORT_RECORDS,
-      include: {
-        shop: true,
-        product: {
-          include: {
-            category: true,
-            brand: true,
-            stocks: true,
-            suppliers: {
-              include: {
-                supplier: true,
-              },
+    return this.loadAllReportPages((skip, take) =>
+      this.db.stockMovement.findMany({
+        where,
+        skip,
+        take,
+        include: {
+          shop: true,
+          product: {
+            include: {
+              category: true,
+              brand: true,
+              stocks: true,
+              suppliers: { include: { supplier: true } },
             },
           },
+          createdBy: true,
         },
-        createdBy: true,
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      }),
+    );
+  }
+
+  private async loadAllReportPages<T>(
+    loadPage: (skip: number, take: number) => Promise<T[]>,
+  ): Promise<T[]> {
+    const records: T[] = [];
+    for (let skip = 0; ; skip += REPORT_PAGE_SIZE) {
+      const page = await loadPage(skip, REPORT_PAGE_SIZE);
+      records.push(...page);
+      if (page.length < REPORT_PAGE_SIZE) return records;
+    }
   }
 
   private async buildReportWhere(
@@ -1553,12 +1613,30 @@ export class ReportsService {
     if (context?.companyId) {
       and.push({ companyId: context.companyId });
     }
-    if (context?.allowedBranchCodes?.length) {
+    if (context?.companyId && Array.isArray(context.allowedBranchCodes)) {
       and.push({ branchCode: { in: context.allowedBranchCodes } });
     }
 
-    const from = this.parseDate(this.firstQueryValue(query, 'from', 'date_from', 'dateFrom', 'start_date', 'startDate'));
-    const to = this.parseDate(this.firstQueryValue(query, 'to', 'date_to', 'dateTo', 'end_date', 'endDate'));
+    const from = this.parseDate(
+      this.firstQueryValue(
+        query,
+        'from',
+        'date_from',
+        'dateFrom',
+        'start_date',
+        'startDate',
+      ),
+    );
+    const to = this.parseDate(
+      this.firstQueryValue(
+        query,
+        'to',
+        'date_to',
+        'dateTo',
+        'end_date',
+        'endDate',
+      ),
+    );
     if (from || to) {
       and.push({
         paidAt: {
@@ -1568,24 +1646,34 @@ export class ReportsService {
       });
     }
 
-    const branchCodes = await this.resolveShopBranchCodesFromQuery(query, context, [
-      'shop_ids',
-      'shopId',
-      'shop_id',
-    ]);
-    if (branchCodes.length) {
+    const branchCodes = await this.resolveShopBranchCodesFromQuery(
+      query,
+      context,
+      ['shop_ids', 'shopId', 'shop_id'],
+    );
+    if (branchCodes !== null) {
       and.push({ branchCode: { in: branchCodes } });
     }
 
-    const sellerId = this.toInt(this.firstQueryValue(query, 'sellerId', 'seller_id'));
+    const sellerId = this.toInt(
+      this.firstQueryValue(query, 'sellerId', 'seller_id'),
+    );
     if (sellerId) {
       and.push({ userId: sellerId });
     }
 
-    const productId = this.toInt(this.firstQueryValue(query, 'productId', 'product_id'));
-    const categoryId = this.toInt(this.firstQueryValue(query, 'categoryId', 'category_id'));
-    const brandId = this.toInt(this.firstQueryValue(query, 'brandId', 'brand_id'));
-    const supplierId = this.toInt(this.firstQueryValue(query, 'supplierId', 'supplier_id'));
+    const productId = this.toInt(
+      this.firstQueryValue(query, 'productId', 'product_id'),
+    );
+    const categoryId = this.toInt(
+      this.firstQueryValue(query, 'categoryId', 'category_id'),
+    );
+    const brandId = this.toInt(
+      this.firstQueryValue(query, 'brandId', 'brand_id'),
+    );
+    const supplierId = this.toInt(
+      this.firstQueryValue(query, 'supplierId', 'supplier_id'),
+    );
     if (productId || categoryId || brandId || supplierId) {
       const productWhere: Record<string, unknown> = {};
       if (categoryId) {
@@ -1633,22 +1721,30 @@ export class ReportsService {
       and.push({ companyId: context.companyId });
     }
 
-    const productId = this.toInt(this.firstQueryValue(query, 'productId', 'product_id'));
+    const productId = this.toInt(
+      this.firstQueryValue(query, 'productId', 'product_id'),
+    );
     if (productId) {
       and.push({ id: productId });
     }
 
-    const categoryId = this.toInt(this.firstQueryValue(query, 'categoryId', 'category_id'));
+    const categoryId = this.toInt(
+      this.firstQueryValue(query, 'categoryId', 'category_id'),
+    );
     if (categoryId) {
       and.push({ categoryId });
     }
 
-    const brandId = this.toInt(this.firstQueryValue(query, 'brandId', 'brand_id'));
+    const brandId = this.toInt(
+      this.firstQueryValue(query, 'brandId', 'brand_id'),
+    );
     if (brandId) {
       and.push({ brandId });
     }
 
-    const supplierId = this.toInt(this.firstQueryValue(query, 'supplierId', 'supplier_id'));
+    const supplierId = this.toInt(
+      this.firstQueryValue(query, 'supplierId', 'supplier_id'),
+    );
     if (supplierId) {
       and.push({
         suppliers: {
@@ -1659,12 +1755,12 @@ export class ReportsService {
       });
     }
 
-    const branchCodes = await this.resolveShopBranchCodesFromQuery(query, context, [
-      'shop_ids',
-      'shopId',
-      'shop_id',
-    ]);
-    if (branchCodes.length) {
+    const branchCodes = await this.resolveShopBranchCodesFromQuery(
+      query,
+      context,
+      ['shop_ids', 'shopId', 'shop_id'],
+    );
+    if (branchCodes !== null) {
       and.push({
         stocks: {
           some: {
@@ -1688,8 +1784,26 @@ export class ReportsService {
       and.push({ companyId: context.companyId });
     }
 
-    const from = this.parseDate(this.firstQueryValue(query, 'from', 'date_from', 'dateFrom', 'start_date', 'startDate'));
-    const to = this.parseDate(this.firstQueryValue(query, 'to', 'date_to', 'dateTo', 'end_date', 'endDate'));
+    const from = this.parseDate(
+      this.firstQueryValue(
+        query,
+        'from',
+        'date_from',
+        'dateFrom',
+        'start_date',
+        'startDate',
+      ),
+    );
+    const to = this.parseDate(
+      this.firstQueryValue(
+        query,
+        'to',
+        'date_to',
+        'dateTo',
+        'end_date',
+        'endDate',
+      ),
+    );
     if (from || to) {
       and.push({
         createdAt: {
@@ -1699,12 +1813,16 @@ export class ReportsService {
       });
     }
 
-    const movementType = this.optionalString(this.firstQueryValue(query, 'movementType', 'movement_type'));
+    const movementType = this.optionalString(
+      this.firstQueryValue(query, 'movementType', 'movement_type'),
+    );
     if (movementType) {
       and.push({ type: movementType });
     }
 
-    const productId = this.toInt(this.firstQueryValue(query, 'productId', 'product_id'));
+    const productId = this.toInt(
+      this.firstQueryValue(query, 'productId', 'product_id'),
+    );
     if (productId) {
       and.push({ productId });
     }
@@ -1714,13 +1832,19 @@ export class ReportsService {
       'shopId',
       'shop_id',
     ]);
-    if (shopIds.length) {
+    if (shopIds !== null) {
       and.push({ shopId: { in: shopIds } });
     }
 
-    const categoryId = this.toInt(this.firstQueryValue(query, 'categoryId', 'category_id'));
-    const brandId = this.toInt(this.firstQueryValue(query, 'brandId', 'brand_id'));
-    const supplierId = this.toInt(this.firstQueryValue(query, 'supplierId', 'supplier_id'));
+    const categoryId = this.toInt(
+      this.firstQueryValue(query, 'categoryId', 'category_id'),
+    );
+    const brandId = this.toInt(
+      this.firstQueryValue(query, 'brandId', 'brand_id'),
+    );
+    const supplierId = this.toInt(
+      this.firstQueryValue(query, 'supplierId', 'supplier_id'),
+    );
     if (categoryId || brandId || supplierId) {
       and.push({
         product: {
@@ -1958,7 +2082,8 @@ export class ReportsService {
           current._markup_count += 1;
         } else {
           const supply = this.getItemSupplyPrice(item);
-          current.average_markup += supply > 0 ? this.getItemFinalPrice(item) / supply : 0;
+          current.average_markup +=
+            supply > 0 ? this.getItemFinalPrice(item) / supply : 0;
           current._markup_count += 1;
         }
         current._count += 1;
@@ -1968,7 +2093,8 @@ export class ReportsService {
 
     return [...products.values()].map((item) => ({
       ...item,
-      average_discount: item._count > 0 ? item.average_discount / item._count : 0,
+      average_discount:
+        item._count > 0 ? item.average_discount / item._count : 0,
       average_price: item._count > 0 ? item.average_price / item._count : 0,
       average_markup:
         item._markup_count > 0 ? item.average_markup / item._markup_count : 0,
@@ -2006,10 +2132,14 @@ export class ReportsService {
               : 0,
           discount:
             this.getItemRetailPrice(item) > 0
-              ? (this.getItemDiscount(item) / this.getItemRetailPrice(item)) * 100
+              ? (this.getItemDiscount(item) / this.getItemRetailPrice(item)) *
+                100
               : 0,
           sold_with_discount: this.getItemFinalPrice(item) * sign,
-          sold_without_discount: this.getItemDiscount(item) > 0 ? 0 : this.getItemFinalPrice(item) * sign,
+          sold_without_discount:
+            this.getItemDiscount(item) > 0
+              ? 0
+              : this.getItemFinalPrice(item) * sign,
           color: metadata.color ?? '',
           size: metadata.size ?? '',
           characteristics: metadata.characteristics ?? [],
@@ -2038,7 +2168,9 @@ export class ReportsService {
   private resolveProductReportGroupValue(row: any, groupBy: string) {
     switch (groupBy) {
       case 'category':
-        return this.optionalString(row.product?.category?.name) ?? row.item.name;
+        return (
+          this.optionalString(row.product?.category?.name) ?? row.item.name
+        );
       case 'brand':
         return this.optionalString(row.product?.brand?.name) ?? row.item.name;
       case 'color':
@@ -2129,21 +2261,29 @@ export class ReportsService {
         (sum, row) => sum + Number(row.net_sold_measurement_value ?? 0),
         0,
       ),
-      gross_sales: rows.reduce((sum, row) => sum + Number(row.gross_sales ?? 0), 0),
+      gross_sales: rows.reduce(
+        (sum, row) => sum + Number(row.gross_sales ?? 0),
+        0,
+      ),
       returned_sales_sum: rows.reduce(
         (sum, row) => sum + Number(row.returned_sales_sum ?? 0),
         0,
       ),
       net_sales: rows.reduce((sum, row) => sum + Number(row.net_sales ?? 0), 0),
-      net_profit: rows.reduce((sum, row) => sum + Number(row.net_profit ?? 0), 0),
+      net_profit: rows.reduce(
+        (sum, row) => sum + Number(row.net_profit ?? 0),
+        0,
+      ),
       sold_supply_sum: rows.reduce(
         (sum, row) => sum + Number(row.sold_supply_sum ?? 0),
         0,
       ),
       average_margin:
         rows.length > 0
-          ? rows.reduce((sum, row) => sum + Number(row.average_margin ?? 0), 0) /
-            rows.length
+          ? rows.reduce(
+              (sum, row) => sum + Number(row.average_margin ?? 0),
+              0,
+            ) / rows.length
           : 0,
       discount:
         rows.length > 0
@@ -2182,7 +2322,10 @@ export class ReportsService {
 
     for (const row of this.flattenSaleItems(sales)) {
       const key = `${row.branchCode}__${row.product?.id ?? row.item.productId ?? ''}`;
-      soldMap.set(key, (soldMap.get(key) ?? 0) + Number(row.sold_measurement_value ?? 0));
+      soldMap.set(
+        key,
+        (soldMap.get(key) ?? 0) + Number(row.sold_measurement_value ?? 0),
+      );
     }
 
     const importsByKey = new Map<string, number>();
@@ -2190,28 +2333,40 @@ export class ReportsService {
     for (const movement of movements) {
       const key = `${movement.shop?.branchCode ?? movement.shop?.id ?? ''}__${movement.productId ?? ''}`;
       if (movement.type === 'PURCHASE') {
-        importsByKey.set(key, (importsByKey.get(key) ?? 0) + Math.abs(Number(movement.quantity ?? 0)));
+        importsByKey.set(
+          key,
+          (importsByKey.get(key) ?? 0) +
+            Math.abs(Number(movement.quantity ?? 0)),
+        );
       }
       if (movement.type === 'WRITE_OFF') {
-        writeOffsByKey.set(key, (writeOffsByKey.get(key) ?? 0) + Math.abs(Number(movement.quantity ?? 0)));
+        writeOffsByKey.set(
+          key,
+          (writeOffsByKey.get(key) ?? 0) +
+            Math.abs(Number(movement.quantity ?? 0)),
+        );
       }
     }
 
     return products.flatMap((product: any) => {
-      const stocks = Array.isArray(product.stocks) && product.stocks.length
-        ? product.stocks
-        : [{ branchCode: '', quantity: product.quantity ?? 0 }];
+      const stocks =
+        Array.isArray(product.stocks) && product.stocks.length
+          ? product.stocks
+          : [{ branchCode: '', quantity: product.quantity ?? 0 }];
       return stocks.map((stock: any) => {
         const branchCode = stock.branchCode ?? '';
         const shop = shopByBranchCode.get(branchCode);
         const key = `${branchCode}__${product.id}`;
-        const supplyPrice = Number(stock.purchasePrice ?? product.purchasePrice ?? 0);
+        const supplyPrice = Number(
+          stock.purchasePrice ?? product.purchasePrice ?? 0,
+        );
         const retailPrice = Number(stock.salePrice ?? product.salePrice ?? 0);
         const stockEnd = Number(stock.quantity ?? 0);
         const importAmount = importsByKey.get(key) ?? 0;
         const soldAmount = soldMap.get(key) ?? 0;
         const writeOffAmount = writeOffsByKey.get(key) ?? 0;
-        const stockBegin = stockEnd + soldAmount + writeOffAmount - importAmount;
+        const stockBegin =
+          stockEnd + soldAmount + writeOffAmount - importAmount;
         const supplier = product?.suppliers?.[0]?.supplier;
 
         return {
@@ -2237,7 +2392,9 @@ export class ReportsService {
           supply_price: 0,
           supply_currency: '',
           category: product?.category ? [product.category] : [],
-          categories_path: product?.category?.name ? [product.category.name] : [],
+          categories_path: product?.category?.name
+            ? [product.category.name]
+            : [],
           level_1: product?.category?.name ? [product.category.name] : [],
           level_2: [],
           level_3: [],
@@ -2335,7 +2492,9 @@ export class ReportsService {
       { ...query, movementType: 'PURCHASE' },
       context,
     );
-    const purchaseMovements = movements.filter((movement: any) => movement.type === 'PURCHASE');
+    const purchaseMovements = movements.filter(
+      (movement: any) => movement.type === 'PURCHASE',
+    );
     return purchaseMovements.map((item: any) => {
       const quantity = Math.abs(Number(item.quantity ?? 0));
       const supplyPrice = Number(item.product?.purchasePrice ?? 0);
@@ -2348,7 +2507,9 @@ export class ReportsService {
         shop_name: item.shop?.name ?? '',
         external_import_id: item.externalId ?? item.id ?? 0,
         external_supplier_order_id: 0,
-        import_name: item.externalId ? `Product Import ${item.externalId}` : `Product Import ${item.id}`,
+        import_name: item.externalId
+          ? `Product Import ${item.externalId}`
+          : `Product Import ${item.id}`,
         supplier_name: supplier?.name ?? '',
         import_type: 'import',
         is_import: false,
@@ -2398,9 +2559,15 @@ export class ReportsService {
         is_archived: Boolean(item.product?.archivedAt),
         product_brand_id: JSON.stringify(item.product?.brand?.id ?? ''),
         product_brand_name: item.product?.brand?.name ?? '',
-        product_categories: item.product?.category ? [item.product.category] : null,
-        categories_path: item.product?.category?.name ? [item.product.category.name] : [],
-        level_1: item.product?.category?.name ? [item.product.category.name] : [],
+        product_categories: item.product?.category
+          ? [item.product.category]
+          : null,
+        categories_path: item.product?.category?.name
+          ? [item.product.category.name]
+          : [],
+        level_1: item.product?.category?.name
+          ? [item.product.category.name]
+          : [],
         level_2: [],
         level_3: [],
         level_4: [],
@@ -2440,7 +2607,9 @@ export class ReportsService {
         supplier_id: supplier?.id ?? '00000000-0000-0000-0000-000000000000',
         supplier_external_id: 0,
         product_categories: row.product?.category ? [row.product.category] : [],
-        categories_path: row.product?.category?.name ? [row.product.category.name] : [],
+        categories_path: row.product?.category?.name
+          ? [row.product.category.name]
+          : [],
         level_1: row.product?.category?.name ? [row.product.category.name] : [],
         level_2: [],
         level_3: [],
@@ -2454,7 +2623,9 @@ export class ReportsService {
         product_suppliers: supplier?.name ?? '',
         customer_full_name: row.sale?.clientName ?? '',
         customer_phone_number: '',
-        seller_full_name: this.buildUserName(row.item?.seller ?? row.sale?.user),
+        seller_full_name: this.buildUserName(
+          row.item?.seller ?? row.sale?.user,
+        ),
         cashier_full_name: this.buildUserName(row.sale?.user),
         transaction_type: row.sale?.saleType ?? '',
         order_id: String(row.sale?.id ?? ''),
@@ -2518,72 +2689,85 @@ export class ReportsService {
       ['shop_ids', 'shopId', 'shop_id'],
     );
 
-    return products.flatMap((product: any) => {
-      const stocks = Array.isArray(product.stocks) && product.stocks.length
-        ? product.stocks
-        : [
-            {
-              branchCode: '',
-              quantity: product.quantity ?? 0,
-              purchasePrice: product.purchasePrice,
-              salePrice: product.salePrice,
-              createdAt: product.createdAt,
-            },
-          ];
+    return products
+      .flatMap((product: any) => {
+        const stocks =
+          Array.isArray(product.stocks) && product.stocks.length
+            ? product.stocks
+            : [
+                {
+                  branchCode: '',
+                  quantity: product.quantity ?? 0,
+                  purchasePrice: product.purchasePrice,
+                  salePrice: product.salePrice,
+                  createdAt: product.createdAt,
+                },
+              ];
 
-      return stocks
-        .filter((stock: any) =>
-          !requestedBranchCodes.length ||
-          requestedBranchCodes.includes(stock.branchCode ?? ''),
-        )
-        .map((stock: any) => {
-          const shop = shopByBranchCode.get(stock.branchCode ?? '');
-          const quantity = Number(stock.quantity ?? 0);
-          const supplyPrice = Number(stock.purchasePrice ?? product.purchasePrice ?? 0);
-          const retailPrice = Number(stock.salePrice ?? product.salePrice ?? 0);
-          const estimatedIncome = quantity * Math.max(0, retailPrice - supplyPrice);
-          const estimatedMargin =
-            retailPrice > 0 ? Math.round(((retailPrice - supplyPrice) / retailPrice) * 100) : 0;
-          return {
-            shop_id: shop?.id ?? '',
-            shop_name: shop?.name ?? stock.branchCode ?? '',
-            product_id: product.publicId ?? product.id ?? '',
-            supplier_id:
-              product?.suppliers?.[0]?.supplier?.id ??
-              '00000000-0000-0000-0000-000000000000',
-            supplier_name: product?.suppliers?.[0]?.supplier?.name ?? '',
-            supply_price: supplyPrice,
-            retail_price: retailPrice,
-            measurement_value: quantity,
-            last_import: this.formatDateTime(
-              product.updatedAt ?? product.createdAt ?? new Date(),
-              product.companyId,
-            ),
-            estimated_income: estimatedIncome,
-            estimated_margin: estimatedMargin,
-            rows_count: 0,
-            product_name: product.name,
-            product_base_name: '',
-            product_barcode: product.barcode ?? '',
-            product_brand_name: product?.brand?.name ?? '',
-            product_categories: product?.category ? [product.category] : [],
-            categories_path: product?.category?.name ? [product.category.name] : [],
-            level_1: product?.category?.name ? [product.category.name] : [],
-            level_2: [],
-            level_3: [],
-            level_4: [],
-            level_5: [],
-            product_sku: product.sku ?? '',
-            product_attributes: [],
-            product_custom_fields: [],
-            product_measurement_unit_short_name: 'шт',
-            product_is_archived: Boolean(product.archivedAt),
-          };
-        });
-    }).map((row, index, allRows) => ({
-      ...row,
-      rows_count: allRows.length,
-    }));
+        return stocks
+          .filter(
+            (stock: any) =>
+              requestedBranchCodes === null ||
+              requestedBranchCodes.includes(stock.branchCode ?? ''),
+          )
+          .map((stock: any) => {
+            const shop = shopByBranchCode.get(stock.branchCode ?? '');
+            const quantity = Number(stock.quantity ?? 0);
+            const supplyPrice = Number(
+              stock.purchasePrice ?? product.purchasePrice ?? 0,
+            );
+            const retailPrice = Number(
+              stock.salePrice ?? product.salePrice ?? 0,
+            );
+            const estimatedIncome =
+              quantity * Math.max(0, retailPrice - supplyPrice);
+            const estimatedMargin =
+              retailPrice > 0
+                ? Math.round(((retailPrice - supplyPrice) / retailPrice) * 100)
+                : 0;
+            return {
+              shop_id: shop?.id ?? '',
+              shop_name: shop?.name ?? stock.branchCode ?? '',
+              product_id: product.publicId ?? product.id ?? '',
+              supplier_id:
+                product?.suppliers?.[0]?.supplier?.id ??
+                '00000000-0000-0000-0000-000000000000',
+              supplier_name: product?.suppliers?.[0]?.supplier?.name ?? '',
+              supply_price: supplyPrice,
+              retail_price: retailPrice,
+              measurement_value: quantity,
+              last_import: this.formatDateTime(
+                product.updatedAt ?? product.createdAt ?? new Date(),
+                product.companyId,
+              ),
+              estimated_income: estimatedIncome,
+              estimated_margin: estimatedMargin,
+              rows_count: 0,
+              product_name: product.name,
+              product_base_name: '',
+              product_barcode: product.barcode ?? '',
+              product_brand_name: product?.brand?.name ?? '',
+              product_categories: product?.category ? [product.category] : [],
+              categories_path: product?.category?.name
+                ? [product.category.name]
+                : [],
+              level_1: product?.category?.name ? [product.category.name] : [],
+              level_2: [],
+              level_3: [],
+              level_4: [],
+              level_5: [],
+              product_sku: product.sku ?? '',
+              product_attributes: [],
+              product_custom_fields: [],
+              product_measurement_unit_short_name: 'шт',
+              product_is_archived: Boolean(product.archivedAt),
+            };
+          });
+      })
+      .map((row, index, allRows) => ({
+        ...row,
+        rows_count: allRows.length,
+      }));
   }
 
   private buildProductBreakdown(items: any[]) {
@@ -2600,7 +2784,10 @@ export class ReportsService {
     const grouped = new Map<string, number>();
     for (const item of items) {
       const groupKey = this.optionalString(item[key]) ?? 'Без значения';
-      grouped.set(groupKey, (grouped.get(groupKey) ?? 0) + Number(item[metricKey] ?? 0));
+      grouped.set(
+        groupKey,
+        (grouped.get(groupKey) ?? 0) + Number(item[metricKey] ?? 0),
+      );
     }
     return [...grouped.entries()]
       .map(([name, value]) => ({ name, value }))
@@ -2615,7 +2802,10 @@ export class ReportsService {
         : [];
       for (const characteristic of characteristics) {
         const key = this.optionalString(characteristic) ?? 'Без значения';
-        grouped.set(key, (grouped.get(key) ?? 0) + Number(item.sold_quantity ?? 0));
+        grouped.set(
+          key,
+          (grouped.get(key) ?? 0) + Number(item.sold_quantity ?? 0),
+        );
       }
     }
     return [...grouped.entries()]
@@ -2623,7 +2813,11 @@ export class ReportsService {
       .sort((a, b) => b.value - a.value);
   }
 
-  private buildProductEffectiveness(products: any[], sales: any[], movements: any[]) {
+  private buildProductEffectiveness(
+    products: any[],
+    sales: any[],
+    movements: any[],
+  ) {
     const soldByProduct = new Map<number, number>();
     const returnedByProduct = new Map<number, number>();
 
@@ -2636,7 +2830,8 @@ export class ReportsService {
         if (sign < 0) {
           returnedByProduct.set(
             item.productId,
-            (returnedByProduct.get(item.productId) ?? 0) + Number(item.quantity),
+            (returnedByProduct.get(item.productId) ?? 0) +
+              Number(item.quantity),
           );
         } else {
           soldByProduct.set(
@@ -2648,8 +2843,14 @@ export class ReportsService {
     }
 
     const importsByProduct = this.sumMovementsByProduct(movements, 'PURCHASE');
-    const writeOffsByProduct = this.sumMovementsByProduct(movements, 'WRITE_OFF');
-    const transfersByProduct = this.sumMovementsByProduct(movements, 'TRANSFER');
+    const writeOffsByProduct = this.sumMovementsByProduct(
+      movements,
+      'WRITE_OFF',
+    );
+    const transfersByProduct = this.sumMovementsByProduct(
+      movements,
+      'TRANSFER',
+    );
 
     return products.map((product: any) => {
       const endingStock = this.resolveStockLeft(product);
@@ -2680,10 +2881,11 @@ export class ReportsService {
         ending_stock: endingStock,
         stock_cost: endingStock * Number(product.purchasePrice ?? 0),
         stock_retail_value: endingStock * Number(product.salePrice ?? 0),
-        inventory_turnover:
-          averageStock > 0 ? soldQuantity / averageStock : 0,
+        inventory_turnover: averageStock > 0 ? soldQuantity / averageStock : 0,
         days_storage:
-          soldQuantity > 0 && averageStock > 0 ? (averageStock / soldQuantity) * 30 : 0,
+          soldQuantity > 0 && averageStock > 0
+            ? (averageStock / soldQuantity) * 30
+            : 0,
       };
     });
   }
@@ -2756,35 +2958,38 @@ export class ReportsService {
     query: Record<string, string | undefined>,
   ) {
     return products.flatMap((product: any) => {
-      const stocks = Array.isArray(product.stocks) && product.stocks.length
-        ? product.stocks
-        : [
-            {
-              branchCode: '',
-              quantity: product.quantity ?? 0,
-              purchasePrice: product.purchasePrice,
-              salePrice: product.salePrice,
-            },
-          ];
+      const stocks =
+        Array.isArray(product.stocks) && product.stocks.length
+          ? product.stocks
+          : [
+              {
+                branchCode: '',
+                quantity: product.quantity ?? 0,
+                purchasePrice: product.purchasePrice,
+                salePrice: product.salePrice,
+              },
+            ];
 
       return stocks.map((stock: any) => {
-          const quantity = Number(stock.quantity ?? 0);
-          const supplyPrice = Number(stock.purchasePrice ?? product.purchasePrice ?? 0);
-          const retailPrice = Number(stock.salePrice ?? product.salePrice ?? 0);
-          return {
-            product_id: product.id,
-            product_name: product.name,
-            sku: product.sku ?? '',
-            category: product.category?.name ?? '',
-            shop_name: stock.branchCode ?? '',
-            stock_quantity: quantity,
-            supply_price: supplyPrice,
-            retail_price: retailPrice,
-            stock_supply_total: quantity * supplyPrice,
-            stock_retail_total: quantity * retailPrice,
-            potential_profit: quantity * (retailPrice - supplyPrice),
-          };
-        });
+        const quantity = Number(stock.quantity ?? 0);
+        const supplyPrice = Number(
+          stock.purchasePrice ?? product.purchasePrice ?? 0,
+        );
+        const retailPrice = Number(stock.salePrice ?? product.salePrice ?? 0);
+        return {
+          product_id: product.id,
+          product_name: product.name,
+          sku: product.sku ?? '',
+          category: product.category?.name ?? '',
+          shop_name: stock.branchCode ?? '',
+          stock_quantity: quantity,
+          supply_price: supplyPrice,
+          retail_price: retailPrice,
+          stock_supply_total: quantity * supplyPrice,
+          stock_retail_total: quantity * retailPrice,
+          potential_profit: quantity * (retailPrice - supplyPrice),
+        };
+      });
     });
   }
 
@@ -2793,7 +2998,8 @@ export class ReportsService {
     for (const item of movements.filter((movement) => movement.type === type)) {
       grouped.set(
         item.productId,
-        (grouped.get(item.productId) ?? 0) + Math.abs(this.toNumber(item.quantity) ?? 0),
+        (grouped.get(item.productId) ?? 0) +
+          Math.abs(this.toNumber(item.quantity) ?? 0),
       );
     }
     return grouped;
@@ -2807,8 +3013,14 @@ export class ReportsService {
         const summary = this.buildSummaryMetrics(seller._sales);
         const bonusAmount = seller._sales
           .flatMap((sale: any) => sale.items)
-          .filter((item: any) => (item.sellerId ?? seller.seller_id) === seller.seller_id)
-          .reduce((sum: number, item: any) => sum + this.getItemBonus(item, settings), 0);
+          .filter(
+            (item: any) =>
+              (item.sellerId ?? seller.seller_id) === seller.seller_id,
+          )
+          .reduce(
+            (sum: number, item: any) => sum + this.getItemBonus(item, settings),
+            0,
+          );
 
         return {
           seller_id: seller.seller_id,
@@ -2828,7 +3040,11 @@ export class ReportsService {
           fixed_salary: settings.fixedSalary,
           salary_percent: settings.salaryPercent,
           bonus: bonusAmount,
-          salary_total: this.calculateSalaryTotal(settings, summary, bonusAmount),
+          salary_total: this.calculateSalaryTotal(
+            settings,
+            summary,
+            bonusAmount,
+          ),
         };
       }),
     );
@@ -2858,7 +3074,10 @@ export class ReportsService {
   private groupSalesByDay(sales: any[]) {
     const byDay = new Map<string, number>();
     for (const sale of sales) {
-      const key = this.formatDate(sale.paidAt ?? sale.createdAt, sale.companyId);
+      const key = this.formatDate(
+        sale.paidAt ?? sale.createdAt,
+        sale.companyId,
+      );
       byDay.set(key, (byDay.get(key) ?? 0) + this.getSaleNetAmount(sale));
     }
     return [...byDay.entries()].map(([date, amount]) => ({ date, amount }));
@@ -2867,9 +3086,13 @@ export class ReportsService {
   private groupProfitByDay(sales: any[]) {
     const byDay = new Map<string, number>();
     for (const sale of sales) {
-      const key = this.formatDate(sale.paidAt ?? sale.createdAt, sale.companyId);
+      const key = this.formatDate(
+        sale.paidAt ?? sale.createdAt,
+        sale.companyId,
+      );
       const profit = sale.items.reduce(
-        (sum: number, item: any) => sum + this.getItemProfit(item) * this.getSaleSign(sale),
+        (sum: number, item: any) =>
+          sum + this.getItemProfit(item) * this.getSaleSign(sale),
         0,
       );
       byDay.set(key, (byDay.get(key) ?? 0) + profit);
@@ -2940,15 +3163,19 @@ export class ReportsService {
   }
 
   private getSaleNetAmount(sale: any) {
-    return sale.items.reduce(
-      (sum: number, item: any) => sum + this.getItemFinalPrice(item),
-      0,
-    ) * this.getSaleSign(sale);
+    return (
+      sale.items.reduce(
+        (sum: number, item: any) => sum + this.getItemFinalPrice(item),
+        0,
+      ) * this.getSaleSign(sale)
+    );
   }
 
   private getItemRetailPrice(item: any) {
     return Number(
-      item.retailPriceAtSale ?? item.lineTotal ?? ((item.salePrice ?? 0) * (item.quantity ?? 0)),
+      item.retailPriceAtSale ??
+        item.lineTotal ??
+        (item.salePrice ?? 0) * (item.quantity ?? 0),
     );
   }
 
@@ -2958,26 +3185,31 @@ export class ReportsService {
 
   private getItemFinalPrice(item: any) {
     return Number(
-      item.finalPrice ?? item.lineTotal ?? ((item.salePrice ?? 0) * (item.quantity ?? 0)),
+      item.finalPrice ??
+        item.lineTotal ??
+        (item.salePrice ?? 0) * (item.quantity ?? 0),
     );
   }
 
   private getItemSupplyPrice(item: any) {
     return Number(
       item.supplyPriceAtSale ??
-        ((item.product?.purchasePrice ?? 0) * (item.quantity ?? 0)),
+        (item.product?.purchasePrice ?? 0) * (item.quantity ?? 0),
     );
   }
 
   private getItemProfit(item: any) {
     return Number(
       item.profitAtSale ??
-        (this.getItemFinalPrice(item) - this.getItemSupplyPrice(item)),
+        this.getItemFinalPrice(item) - this.getItemSupplyPrice(item),
     );
   }
 
   private getItemBonus(item: any, settings?: any) {
-    if (item.sellerBonusAmount !== undefined && item.sellerBonusAmount !== null) {
+    if (
+      item.sellerBonusAmount !== undefined &&
+      item.sellerBonusAmount !== null
+    ) {
       return Number(item.sellerBonusAmount);
     }
 
@@ -3058,7 +3290,8 @@ export class ReportsService {
   ) {
     const averageMeasurementValue =
       Number(summary.transactions_count ?? 0) > 0
-        ? Number(summary.products_sold ?? 0) / Number(summary.transactions_count ?? 0)
+        ? Number(summary.products_sold ?? 0) /
+          Number(summary.transactions_count ?? 0)
         : 0;
     const salesSupplyPrice = Math.max(
       0,
@@ -3089,7 +3322,8 @@ export class ReportsService {
       average_cheque: this.roundMetric(summary.average_cheque, 2),
       average_price: this.roundMetric(
         Number(summary.products_sold ?? 0) > 0
-          ? Number(summary.net_gross_sales ?? 0) / Number(summary.products_sold ?? 0)
+          ? Number(summary.net_gross_sales ?? 0) /
+              Number(summary.products_sold ?? 0)
           : 0,
         2,
       ),
@@ -3146,7 +3380,8 @@ export class ReportsService {
           continue;
         }
         if (field === 'sold_with_discount') {
-          value += this.getItemDiscount(item) > 0 ? Number(item.quantity ?? 0) : 0;
+          value +=
+            this.getItemDiscount(item) > 0 ? Number(item.quantity ?? 0) : 0;
           continue;
         }
         if (field === 'sold_qty') {
@@ -3206,7 +3441,9 @@ export class ReportsService {
     }
 
     if (!dayMap.size) {
-      const startDate = this.toPlotDate(this.parseDate(undefined) ?? new Date());
+      const startDate = this.toPlotDate(
+        this.parseDate(undefined) ?? new Date(),
+      );
       const empty: Record<string, number | string> = {
         start_date: startDate,
       };
@@ -3260,11 +3497,13 @@ export class ReportsService {
 
   private async loadCustomerFirstPurchaseDates(sales: any[], context: any) {
     const firstPurchaseByCustomer = new Map<string, Date>();
-    const clientIds = [...new Set(
-      sales
-        .map((sale) => this.optionalString(sale.clientId))
-        .filter((value): value is string => Boolean(value)),
-    )];
+    const clientIds = [
+      ...new Set(
+        sales
+          .map((sale) => this.optionalString(sale.clientId))
+          .filter((value): value is string => Boolean(value)),
+      ),
+    ];
 
     if (clientIds.length) {
       const historicalSales = await this.db.sale.findMany({
@@ -3382,7 +3621,7 @@ export class ReportsService {
   ) {
     const shopKeys = this.extractQueryStringArray(query, ...keys);
     if (!shopKeys.length) {
-      return [];
+      return null;
     }
     const shops = await this.db.shop.findMany({
       where: {
@@ -3393,9 +3632,7 @@ export class ReportsService {
         branchCode: true,
       },
     });
-    return shops.length
-      ? shops.map((shop: any) => shop.branchCode).filter(Boolean)
-      : shopKeys;
+    return shops.map((shop: any) => shop.branchCode).filter(Boolean);
   }
 
   private async resolveShopIdsFromQuery(
@@ -3405,7 +3642,7 @@ export class ReportsService {
   ) {
     const shopKeys = this.extractQueryStringArray(query, ...keys);
     if (!shopKeys.length) {
-      return [];
+      return null;
     }
     const shops = await this.db.shop.findMany({
       where: {
@@ -3416,7 +3653,7 @@ export class ReportsService {
         id: true,
       },
     });
-    return shops.length ? shops.map((shop: any) => shop.id) : shopKeys;
+    return shops.map((shop: any) => shop.id);
   }
 
   private buildAppliedFilters(query: Record<string, string | undefined>) {
@@ -3453,7 +3690,13 @@ export class ReportsService {
       Math.min(
         200,
         this.toInt(
-          this.firstQueryValue(query, 'perPage', 'per_page', 'limit', 'page_size'),
+          this.firstQueryValue(
+            query,
+            'perPage',
+            'per_page',
+            'limit',
+            'page_size',
+          ),
         ) ?? 50,
       ),
     );
