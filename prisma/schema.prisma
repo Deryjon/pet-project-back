@@ -194,6 +194,7 @@ model Shop {
   inventorySessions  InventorySession[]
   receipts           Receipt[]
   invoiceAllocations InvoiceAllocation[]
+  productStocks      ProductStock[]
   createdAt          DateTime                    @default(now())
   updatedAt          DateTime                    @updatedAt
 
@@ -851,18 +852,20 @@ model ClientDebt {
 }
 
 model ClientDebtRepayment {
-  id          String     @id @default(uuid())
-  companyId   String
-  clientId    String
-  debtId      String
-  createdById Int?
-  amountUzs   Decimal    @db.Decimal(12, 2)
-  company     Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  client      Client     @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  debt        ClientDebt @relation(fields: [debtId], references: [id], onDelete: Cascade)
-  createdBy   User?      @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt   DateTime   @default(now())
+  id             String     @id @default(uuid())
+  companyId      String
+  clientId       String
+  debtId         String
+  createdById    Int?
+  amountUzs      Decimal    @db.Decimal(12, 2)
+  idempotencyKey String?
+  company        Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  client         Client     @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  debt           ClientDebt @relation(fields: [debtId], references: [id], onDelete: Cascade)
+  createdBy      User?      @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt      DateTime   @default(now())
 
+  @@unique([companyId, debtId, idempotencyKey])
   @@index([companyId, clientId])
   @@index([debtId])
   @@index([createdById])
@@ -1127,14 +1130,20 @@ model ProductSupplier {
 model ProductStock {
   id                 Int       @id @default(autoincrement())
   productId          Int
+  shopId             String
   branchCode         String
   quantity           Float     @default(0)
   purchasePrice      Float?
   salePrice          Float?
   lowStockNotifiedAt DateTime?
   product            Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  shop               Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
+
+  @@unique([productId, shopId])
+  @@unique([productId, branchCode])
+  @@index([shopId])
 }
 
 model InventorySession {

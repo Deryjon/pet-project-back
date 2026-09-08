@@ -2460,6 +2460,11 @@ export class SalesService {
       branchCode,
       meta?.companyId ?? null,
     );
+    if (!shopId) {
+      throw new ConflictException(
+        `Филиал со складским кодом ${branchCode} не найден`,
+      );
+    }
 
     for (const item of items) {
       const stock = await tx.productStock.findFirst({
@@ -2533,6 +2538,7 @@ export class SalesService {
         await tx.productStock.create({
           data: {
             productId: item.productId,
+            shopId,
             branchCode,
             quantity: item.quantity * multiplier,
             purchasePrice: product?.purchasePrice ?? 0,
@@ -2962,6 +2968,7 @@ export class SalesService {
         const stock = await tx.productStock.findFirst({
           where: {
             productId: item.productId,
+            shopId,
             branchCode,
           },
         });
@@ -3036,6 +3043,7 @@ export class SalesService {
         await tx.productStock.create({
           data: {
             productId: item.productId,
+            shopId,
             branchCode,
             quantity: -item.quantity,
             purchasePrice: product?.purchasePrice ?? 0,
@@ -3214,6 +3222,7 @@ export class SalesService {
         await tx.productStock.create({
           data: {
             productId: item.productId,
+            shopId,
             branchCode,
             quantity: item.quantity,
             purchasePrice:

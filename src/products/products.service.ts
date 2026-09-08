@@ -3278,9 +3278,26 @@ export class ProductsService {
     const salePrice = this.toNumber(body.sale_price);
     const quantity = this.toNumber(body.quantity) ?? 0;
     const metadataInput = this.toJsonFieldValue(body.metadata);
-    const stocks = Array.isArray(body.stocks)
+    const stockPayload = Array.isArray(body.stocks)
       ? this.filterStockPayloadByContext(body.stocks, context)
       : [];
+    const stocks = await this.attachBranchCodesToShipments(
+      stockPayload
+        .filter(
+          (stock): stock is Record<string, unknown> =>
+            !!stock && typeof stock === 'object',
+        )
+        .map((stock) => ({
+          shopId: this.extractShopIdentifier(stock),
+          quantity: this.toNumber(stock.quantity) ?? 0,
+          supplyPrice:
+            this.toNumber(stock.purchase_price) ?? purchasePrice ?? 0,
+          retailPrice: this.toNumber(stock.sale_price) ?? salePrice ?? 0,
+          hasTrigger: false,
+          smallLeftMeasurementValue: 0,
+        })),
+      context,
+    );
     const supplierIds = Array.isArray(body.supplier_ids)
       ? body.supplier_ids
       : [];
@@ -3314,15 +3331,10 @@ export class ProductsService {
       supplierNames.add(metadataSupplier);
     }
 
-    const totalQuantityFromStocks = stocks.reduce<number>((sum, stock) => {
-      if (!stock || typeof stock !== 'object') {
-        return sum;
-      }
-
-      return (
-        sum + (this.toNumber((stock as Record<string, unknown>).quantity) ?? 0)
-      );
-    }, 0);
+    const totalQuantityFromStocks = stocks.reduce<number>(
+      (sum, stock) => sum + stock.quantity,
+      0,
+    );
 
     const createdProduct = await this.prisma.product.create({
       data: {
@@ -3409,19 +3421,13 @@ export class ProductsService {
           : undefined,
         stocks: stocks.length
           ? {
-              create: stocks
-                .filter(
-                  (stock): stock is Record<string, unknown> =>
-                    !!stock && typeof stock === 'object',
-                )
-                .map((stock) => ({
-                  branchCode:
-                    this.optionalString(stock.branch_code) ?? 'default_branch',
-                  quantity: this.toNumber(stock.quantity) ?? 0,
-                  purchasePrice:
-                    this.toNumber(stock.purchase_price) ?? purchasePrice ?? 0,
-                  salePrice: this.toNumber(stock.sale_price) ?? salePrice ?? 0,
-                })),
+              create: stocks.map((stock) => ({
+                shopId: stock.shopId,
+                branchCode: stock.branchCode,
+                quantity: stock.quantity,
+                purchasePrice: stock.supplyPrice,
+                salePrice: stock.retailPrice,
+              })),
             }
           : undefined,
       },
@@ -3587,6 +3593,7 @@ export class ProductsService {
           supportsStock && shipmentsWithBranchCodes.length
             ? {
                 create: shipmentsWithBranchCodes.map((shipment) => ({
+                  shopId: shipment.shopId,
                   branchCode: shipment.branchCode,
                   quantity: shipment.quantity,
                   purchasePrice: shipment.supplyPrice,
@@ -3905,6 +3912,7 @@ export class ProductsService {
                   ...(shipmentsWithBranchCodes.length
                     ? {
                         create: shipmentsWithBranchCodes.map((shipment) => ({
+                          shopId: shipment.shopId,
                           branchCode: shipment.branchCode,
                           quantity: shipment.quantity,
                           purchasePrice: shipment.supplyPrice,
@@ -5042,6 +5050,7 @@ export class ProductsService {
           await tx.productStock.create({
             data: {
               productId: item.productId,
+              shopId: transfer.arrivalShop.id,
               branchCode: transfer.arrivalShop.branchCode,
               quantity,
               purchasePrice: supplyPrice,
@@ -5147,6 +5156,7 @@ export class ProductsService {
           await tx.productStock.create({
             data: {
               productId: item.productId,
+              shopId: transfer.arrivalShop.id,
               branchCode: transfer.arrivalShop.branchCode,
               quantity: arrivedQty,
               purchasePrice: supplyPrice,
@@ -5223,6 +5233,7 @@ export class ProductsService {
             await tx.productStock.create({
               data: {
                 productId: item.productId,
+                shopId: transfer.departureShop.id,
                 branchCode: transfer.departureShop.branchCode,
                 quantity,
                 purchasePrice: item.product.purchasePrice ?? 0,
@@ -7826,6 +7837,7 @@ export class ProductsService {
             : undefined,
           stocks: {
             create: {
+              shopId,
               branchCode,
               quantity: row.quantity,
               purchasePrice: row.supplyPrice,
@@ -7931,6 +7943,7 @@ export class ProductsService {
         await tx.productStock.create({
           data: {
             productId,
+            shopId,
             branchCode,
             quantity: afterQuantity,
             purchasePrice: appliedSupplyPrice,
@@ -9142,7 +9155,7 @@ export class ProductsService {
       ),
     ];
 
-    const resolvedBranchCodes = new Map<string, string>();
+    const resolvedShops = new Map<string, { id: string; branchCode: string }>();
 
     if (context?.userType === 'company') {
       const matchingShops = normalizedIdentifiers.length
@@ -9174,28 +9187,55 @@ export class ProductsService {
           context.allowedShopIds.includes(shop.id) ||
           context.allowedBranchCodes.includes(shop.branchCode)
         ) {
-          resolvedBranchCodes.set(shop.id, shop.branchCode);
-          resolvedBranchCodes.set(shop.branchCode, shop.branchCode);
+          const resolved = { id: shop.id, branchCode: shop.branchCode };
+          resolvedShops.set(shop.id, resolved);
+          resolvedShops.set(shop.branchCode, resolved);
+        }
+      }
+    }
+
+    const legacyBranchCodes = normalizedIdentifiers
+      .filter((identifier) => !resolvedShops.has(identifier))
+      .map((identifier) => this.resolveBranchCodeByShopId(identifier))
+      .filter((value): value is string => !!value);
+    if (context?.userType === 'company' && legacyBranchCodes.length) {
+      const legacyShops = await this.prisma.shop.findMany({
+        where: {
+          companyId: context.companyId,
+          branchCode: { in: legacyBranchCodes },
+        },
+        select: { id: true, branchCode: true },
+      });
+      for (const shop of legacyShops) {
+        if (
+          context.allowedShopIds.includes(shop.id) ||
+          context.allowedBranchCodes.includes(shop.branchCode)
+        ) {
+          const resolved = { id: shop.id, branchCode: shop.branchCode };
+          resolvedShops.set(shop.branchCode, resolved);
         }
       }
     }
 
     for (const identifier of normalizedIdentifiers) {
-      if (resolvedBranchCodes.has(identifier)) {
+      if (resolvedShops.has(identifier)) {
         continue;
       }
 
       const legacyBranchCode = this.resolveBranchCodeByShopId(identifier);
-      if (legacyBranchCode) {
-        resolvedBranchCodes.set(identifier, legacyBranchCode);
+      const resolved = legacyBranchCode
+        ? resolvedShops.get(legacyBranchCode)
+        : undefined;
+      if (resolved) {
+        resolvedShops.set(identifier, resolved);
       }
     }
 
     return shipments.map((shipment) => {
       const normalizedIdentifier = shipment.shopId.trim();
-      const branchCode = resolvedBranchCodes.get(normalizedIdentifier);
+      const resolved = resolvedShops.get(normalizedIdentifier);
 
-      if (!branchCode) {
+      if (!resolved) {
         throw new BadRequestException(
           `Unable to resolve branch for shop identifier "${normalizedIdentifier}"`,
         );
@@ -9203,7 +9243,7 @@ export class ProductsService {
 
       if (
         context?.userType === 'company' &&
-        !context.allowedBranchCodes.includes(branchCode)
+        !context.allowedBranchCodes.includes(resolved.branchCode)
       ) {
         throw new BadRequestException(
           'This user does not have access to the requested shop',
@@ -9212,7 +9252,8 @@ export class ProductsService {
 
       return {
         ...shipment,
-        branchCode,
+        shopId: resolved.id,
+        branchCode: resolved.branchCode,
       };
     });
   }

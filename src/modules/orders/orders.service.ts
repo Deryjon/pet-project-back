@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { runSerializableTransaction } from '../../common/serializable-transaction';
 import { UsersService } from '../../users/users.service';
 import { AddOrderItemDto } from './dto/add-order-item.dto';
 import { AddPaymentDto } from './dto/add-payment.dto';
@@ -386,237 +387,250 @@ export class OrdersService {
     return this.toOrderResponse(updatedOrder);
   }
 
-  async complete(
-    id: string,
-    dto: CompleteOrderDto,
-    authorization?: string,
-  ) {
+  async complete(id: string, dto: CompleteOrderDto, authorization?: string) {
     const context = await this.getCompanyContext(authorization);
 
-    const completedOrder = await this.prisma.$transaction(async (tx) => {
-      const order = await tx.order.findFirst({
-        where: {
-          id,
-          companyId: context.companyId,
-        },
-        include: {
-          items: true,
-          payments: true,
-          shop: true,
-          customer: true,
-        },
-      });
-
-      if (!order || !context.allowedShopIds.includes(order.shopId)) {
-        throw new NotFoundException('Order not found');
-      }
-
-      if (order.status !== 'DRAFT') {
-        throw new BadRequestException('Only draft orders can be completed');
-      }
-
-      if (!order.items.length) {
-        throw new BadRequestException('Order must contain at least one item');
-      }
-
-      const paidAmount = this.sumOrderPayments(order.payments);
-      const remainingDebtAmount = order.totalPrice.minus(paidAmount);
-      const shouldCreateDebt = remainingDebtAmount.gt(0);
-
-      if (shouldCreateDebt && !order.customerId) {
-        throw new BadRequestException(
-          'Customer must be attached before completing an order with debt',
-        );
-      }
-
-      if (shouldCreateDebt && !dto.allowDebt) {
-        throw new BadRequestException(
-          'Order is not fully paid. Pass allowDebt=true to complete with client debt',
-        );
-      }
-
-      for (const item of order.items) {
-        const quantity = this.toStockQuantity(item.quantity);
-        const stock = await tx.productStock.findFirst({
+    const completedOrder = await runSerializableTransaction(
+      this.prisma,
+      async (tx) => {
+        const order = await tx.order.findFirst({
           where: {
-            productId: item.productId,
-            branchCode: order.shop.branchCode,
+            id,
+            companyId: context.companyId,
+          },
+          include: {
+            items: true,
+            payments: true,
+            shop: true,
+            customer: true,
           },
         });
 
-        if (!stock || stock.quantity < quantity) {
-          throw new BadRequestException('Недостаточно товара на складе');
+        if (!order || !context.allowedShopIds.includes(order.shopId)) {
+          throw new NotFoundException('Order not found');
         }
 
-        const beforeQuantity = new Prisma.Decimal(stock.quantity);
-        const afterQuantity = beforeQuantity.minus(quantity);
-        const supplyPrice = stock.purchasePrice ?? 0;
-        const retailPrice = Number(item.price ?? stock.salePrice ?? 0);
-        const fromRetailPrice = stock.salePrice ?? 0;
+        if (order.status !== 'DRAFT') {
+          throw new BadRequestException('Only draft orders can be completed');
+        }
 
-        await tx.productStock.update({
+        if (!order.items.length) {
+          throw new BadRequestException('Order must contain at least one item');
+        }
+
+        const claimed = await tx.order.updateMany({
           where: {
-            id: stock.id,
+            id: order.id,
+            companyId: context.companyId,
+            status: 'DRAFT',
+            versionNumber: order.versionNumber,
           },
           data: {
-            quantity: {
-              decrement: quantity,
+            status: 'COMPLETED',
+            completedAt: new Date(),
+            versionNumber: { increment: 1 },
+          },
+        });
+        if (claimed.count !== 1) {
+          throw new BadRequestException(
+            'Order was already changed or completed',
+          );
+        }
+
+        const paidAmount = this.sumOrderPayments(order.payments);
+        const remainingDebtAmount = order.totalPrice.minus(paidAmount);
+        const shouldCreateDebt = remainingDebtAmount.gt(0);
+
+        if (shouldCreateDebt && !order.customerId) {
+          throw new BadRequestException(
+            'Customer must be attached before completing an order with debt',
+          );
+        }
+
+        if (shouldCreateDebt && !dto.allowDebt) {
+          throw new BadRequestException(
+            'Order is not fully paid. Pass allowDebt=true to complete with client debt',
+          );
+        }
+
+        for (const item of order.items) {
+          const quantity = this.toStockQuantity(item.quantity);
+          const stock = await tx.productStock.findFirst({
+            where: {
+              productId: item.productId,
+              branchCode: order.shop.branchCode,
             },
-          },
-        });
+          });
 
-        const stockMovement = await tx.stockMovement.create({
-          data: {
-            companyId: order.companyId,
-            shopId: order.shopId,
-            productId: item.productId,
-            orderId: order.id,
-            type: 'SALE',
-            displayTypeCode: 'sale',
-            displayTypeLabel: 'Продажа',
-            externalId: order.orderNumber,
-            quantity: item.quantity,
-            loadedMeasurementValue: afterQuantity,
-            beforeQuantity,
-            afterQuantity,
-            fromShopId: order.shopId,
-            toShopId: order.shopId,
-            supplyPrice,
-            retailPrice,
-            newRetailPrice: retailPrice,
-            fromRetailPrice,
-            fromSupplyPrice: supplyPrice,
-            createdById: context.userId,
-          },
-        });
-
-        await this.createAuditLog(
-          tx,
-          context,
-          'stock.movement_created',
-          'StockMovement',
-          stockMovement.id,
-          {
-            orderId: order.id,
-            productId: item.productId,
-            type: 'SALE',
-            quantity: item.quantity.toString(),
-            beforeQuantity: beforeQuantity.toString(),
-            afterQuantity: afterQuantity.toString(),
-          },
-        );
-
-        const totalStock = await tx.productStock.aggregate({
-          where: {
-            productId: item.productId,
-          },
-          _sum: {
-            quantity: true,
-          },
-        });
-
-        await tx.product.update({
-          where: {
-            id: item.productId,
-          },
-          data: {
-            quantity: totalStock._sum.quantity ?? 0,
-          },
-        });
-      }
-
-      let createdDebt:
-        | {
-            id: string;
-            client_id: string;
-            amount_uzs: number;
-            remaining_amount_uzs: number;
-            repaid_amount_uzs: number;
-            due_date: string | null;
-            status: string;
-            created_at: string;
-            receipt_url: string | null;
+          if (!stock || stock.quantity < quantity) {
+            throw new BadRequestException('Недостаточно товара на складе');
           }
-        | null = null;
 
-      if (shouldCreateDebt && order.customerId) {
-        const debt = await tx.clientDebt.create({
+          const beforeQuantity = new Prisma.Decimal(stock.quantity);
+          const afterQuantity = beforeQuantity.minus(quantity);
+          const supplyPrice = stock.purchasePrice ?? 0;
+          const retailPrice = Number(item.price ?? stock.salePrice ?? 0);
+          const fromRetailPrice = stock.salePrice ?? 0;
+
+          const decremented = await tx.productStock.updateMany({
+            where: {
+              id: stock.id,
+              quantity: { gte: quantity },
+            },
+            data: {
+              quantity: {
+                decrement: quantity,
+              },
+            },
+          });
+          if (decremented.count !== 1) {
+            throw new BadRequestException('Недостаточно товара на складе');
+          }
+
+          const stockMovement = await tx.stockMovement.create({
+            data: {
+              companyId: order.companyId,
+              shopId: order.shopId,
+              productId: item.productId,
+              orderId: order.id,
+              type: 'SALE',
+              displayTypeCode: 'sale',
+              displayTypeLabel: 'Продажа',
+              externalId: order.orderNumber,
+              quantity: item.quantity,
+              loadedMeasurementValue: afterQuantity,
+              beforeQuantity,
+              afterQuantity,
+              fromShopId: order.shopId,
+              toShopId: order.shopId,
+              supplyPrice,
+              retailPrice,
+              newRetailPrice: retailPrice,
+              fromRetailPrice,
+              fromSupplyPrice: supplyPrice,
+              createdById: context.userId,
+            },
+          });
+
+          await this.createAuditLog(
+            tx,
+            context,
+            'stock.movement_created',
+            'StockMovement',
+            stockMovement.id,
+            {
+              orderId: order.id,
+              productId: item.productId,
+              type: 'SALE',
+              quantity: item.quantity.toString(),
+              beforeQuantity: beforeQuantity.toString(),
+              afterQuantity: afterQuantity.toString(),
+            },
+          );
+
+          const totalStock = await tx.productStock.aggregate({
+            where: {
+              productId: item.productId,
+            },
+            _sum: {
+              quantity: true,
+            },
+          });
+
+          await tx.product.update({
+            where: {
+              id: item.productId,
+            },
+            data: {
+              quantity: totalStock._sum.quantity ?? 0,
+            },
+          });
+        }
+
+        let createdDebt: {
+          id: string;
+          client_id: string;
+          amount_uzs: number;
+          remaining_amount_uzs: number;
+          repaid_amount_uzs: number;
+          due_date: string | null;
+          status: string;
+          created_at: string;
+          receipt_url: string | null;
+        } | null = null;
+
+        if (shouldCreateDebt && order.customerId) {
+          const debt = await tx.clientDebt.create({
+            data: {
+              companyId: context.companyId,
+              clientId: order.customerId,
+              shopId: order.shopId,
+              amountUzs: remainingDebtAmount,
+              remainingAmountUzs: remainingDebtAmount,
+              repaidAmountUzs: new Prisma.Decimal(0),
+              dueDate: this.parseOptionalDateOnly(dto.dueDate),
+              receiptUrl: this.optionalString(dto.receiptUrl),
+            },
+          });
+
+          const aggregate = await tx.clientDebt.aggregate({
+            where: {
+              companyId: context.companyId,
+              clientId: order.customerId,
+            },
+            _sum: {
+              remainingAmountUzs: true,
+            },
+          });
+
+          await tx.client.update({
+            where: {
+              id: order.customerId,
+            },
+            data: {
+              debtUzs:
+                aggregate._sum.remainingAmountUzs ?? new Prisma.Decimal(0),
+            },
+          });
+
+          createdDebt = {
+            id: debt.id,
+            client_id: debt.clientId,
+            amount_uzs: this.decimalToNumber(debt.amountUzs),
+            remaining_amount_uzs: this.decimalToNumber(debt.remainingAmountUzs),
+            repaid_amount_uzs: this.decimalToNumber(debt.repaidAmountUzs),
+            due_date: this.toDateOnly(debt.dueDate),
+            status: debt.status,
+            created_at: debt.createdAt.toISOString(),
+            receipt_url: debt.receiptUrl,
+          };
+
+          await this.createAuditLog(
+            tx,
+            context,
+            'client.debt_created_from_order',
+            'ClientDebt',
+            debt.id,
+            {
+              orderId: order.id,
+              orderNumber: order.orderNumber,
+              clientId: order.customerId,
+              amountUzs: remainingDebtAmount.toString(),
+              dueDate: dto.dueDate ?? null,
+            },
+          );
+        }
+
+        await tx.order.update({
+          where: { id: order.id },
           data: {
-            companyId: context.companyId,
-            clientId: order.customerId,
-            shopId: order.shopId,
-            amountUzs: remainingDebtAmount,
-            remainingAmountUzs: remainingDebtAmount,
-            repaidAmountUzs: new Prisma.Decimal(0),
-            dueDate: this.parseOptionalDateOnly(dto.dueDate),
-            receiptUrl: this.optionalString(dto.receiptUrl),
+            paidAmount,
           },
         });
-
-        const aggregate = await tx.clientDebt.aggregate({
-          where: {
-            companyId: context.companyId,
-            clientId: order.customerId,
-          },
-          _sum: {
-            remainingAmountUzs: true,
-          },
-        });
-
-        await tx.client.update({
-          where: {
-            id: order.customerId,
-          },
-          data: {
-            debtUzs: aggregate._sum.remainingAmountUzs ?? new Prisma.Decimal(0),
-          },
-        });
-
-        createdDebt = {
-          id: debt.id,
-          client_id: debt.clientId,
-          amount_uzs: this.decimalToNumber(debt.amountUzs),
-          remaining_amount_uzs: this.decimalToNumber(debt.remainingAmountUzs),
-          repaid_amount_uzs: this.decimalToNumber(debt.repaidAmountUzs),
-          due_date: this.toDateOnly(debt.dueDate),
-          status: debt.status,
-          created_at: debt.createdAt.toISOString(),
-          receipt_url: debt.receiptUrl,
-        };
 
         await this.createAuditLog(
           tx,
           context,
-          'client.debt_created_from_order',
-          'ClientDebt',
-          debt.id,
-          {
-            orderId: order.id,
-            orderNumber: order.orderNumber,
-            clientId: order.customerId,
-            amountUzs: remainingDebtAmount.toString(),
-            dueDate: dto.dueDate ?? null,
-          },
-        );
-      }
-
-      await tx.order.update({
-        where: {
-          id: order.id,
-        },
-        data: {
-          paidAmount,
-          status: 'COMPLETED',
-          completedAt: new Date(),
-          versionNumber: {
-            increment: 1,
-          },
-        },
-      });
-
-      await this.createAuditLog(
-        tx,
-        context,
           'order.completed',
           'Order',
           order.id,
@@ -628,10 +642,16 @@ export class OrdersService {
               : '0',
             debtCreated: shouldCreateDebt,
           },
-      );
+        );
 
-      return this.findOrderByIdForResponse(order.id, context, tx, createdDebt);
-    });
+        return this.findOrderByIdForResponse(
+          order.id,
+          context,
+          tx,
+          createdDebt,
+        );
+      },
+    );
 
     return this.toOrderResponse(completedOrder);
   }
@@ -871,7 +891,10 @@ export class OrdersService {
     return paymentType;
   }
 
-  private async findClientForCompanyOrThrow(clientId: string, companyId: string) {
+  private async findClientForCompanyOrThrow(
+    clientId: string,
+    companyId: string,
+  ) {
     const normalizedClientId = clientId.trim();
     if (!normalizedClientId) {
       throw new BadRequestException('customerId or clientId is required');

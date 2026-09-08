@@ -723,6 +723,7 @@ export class SupplierInvoiceService {
               await tx.productStock.create({
                 data: {
                   productId: product.id,
+                  shopId: allocation.shopId,
                   branchCode: allocation.shop.branchCode,
                   quantity: incoming,
                   purchasePrice: nextPrice,

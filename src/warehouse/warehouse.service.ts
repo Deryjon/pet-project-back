@@ -1,9 +1,12 @@
 import {
   Injectable,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { runSerializableTransaction } from '../common/serializable-transaction';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 
@@ -95,7 +98,12 @@ export class WarehouseService {
     const page = Math.max(1, Number(query.page) || 1);
     const limit = Math.min(Math.max(1, Number(query.limit) || 10), 100);
 
-    const where: any = this.scope(context);
+    const where: any = {
+      ...this.scope(context),
+      newRetailPrice: {
+        not: this.db.stockMovement.fields.fromRetailPrice,
+      },
+    };
 
     const [items, total] = await Promise.all([
       this.db.stockMovement.findMany({
@@ -115,25 +123,20 @@ export class WarehouseService {
     ]);
 
     return {
-      items: items
-        .filter(
-          (item) =>
-            Number(item.newRetailPrice) !== Number(item.fromRetailPrice),
-        )
-        .map((item) => ({
-          id: item.id,
-          name: item.product?.name ?? '',
-          store: item.shop?.name ?? '',
-          type: item.displayTypeLabel || 'Переоценка',
-          qty: Number(item.quantity),
-          oldPrice: Number(item.fromRetailPrice),
-          newPrice: Number(item.newRetailPrice),
-          status: 'completed',
-          user: item.createdBy
-            ? `${item.createdBy.firstName} ${item.createdBy.lastName}`.trim()
-            : '',
-          revaluatedAt: item.createdAt.toISOString(),
-        })),
+      items: items.map((item) => ({
+        id: item.id,
+        name: item.product?.name ?? '',
+        store: item.shop?.name ?? '',
+        type: item.displayTypeLabel || 'Переоценка',
+        qty: Number(item.quantity),
+        oldPrice: Number(item.fromRetailPrice),
+        newPrice: Number(item.newRetailPrice),
+        status: 'completed',
+        user: item.createdBy
+          ? `${item.createdBy.firstName} ${item.createdBy.lastName}`.trim()
+          : '',
+        revaluatedAt: item.createdAt.toISOString(),
+      })),
       total,
       page,
       limit,
@@ -336,29 +339,106 @@ export class WarehouseService {
 
   async applyInventory(sessionId: string, auth?: string) {
     const context = await this.context(auth);
-    const session = await this.db.inventorySession.findFirst({
-      where: { id: sessionId, ...this.scope(context) },
-      include: {
-        items: true,
-        shop: { select: { branchCode: true } },
-      },
-    });
-    if (!session) throw new NotFoundException('Session not found');
-    if (session.status !== 'draft')
-      throw new BadRequestException('Already applied');
+    await runSerializableTransaction(this.db, async (tx) => {
+      const session = await tx.inventorySession.findFirst({
+        where: { id: sessionId, ...this.scope(context) },
+        include: {
+          items: true,
+          shop: { select: { branchCode: true } },
+        },
+      });
+      if (!session) throw new NotFoundException('Session not found');
+      if (session.status !== 'draft')
+        throw new BadRequestException('Already applied');
 
-    const branchCode = session.shop?.branchCode ?? '';
-    await this.db.$transaction(async (tx) => {
+      const claimed = await tx.inventorySession.updateMany({
+        where: {
+          id: sessionId,
+          ...this.scope(context),
+          status: 'draft',
+        },
+        data: { status: 'applying' },
+      });
+      if (claimed.count !== 1) {
+        throw new ConflictException('Inventory is already being applied');
+      }
+
+      const branchCode = session.shop?.branchCode?.trim();
+      if (!branchCode) {
+        throw new ConflictException('Inventory shop has no branch code');
+      }
+
       for (const item of session.items) {
-        const stock = await tx.productStock.findFirst({
-          where: { productId: item.productId, branchCode },
+        if (
+          !Number.isInteger(item.productId) ||
+          item.productId <= 0 ||
+          !Number.isFinite(item.actualQuantity) ||
+          item.actualQuantity < 0
+        ) {
+          throw new BadRequestException('Inventory item is invalid');
+        }
+
+        const product = await tx.product.findFirst({
+          where: {
+            id: item.productId,
+            companyId: context.companyId,
+            archivedAt: null,
+          },
+          select: { id: true },
         });
+        if (!product) throw new NotFoundException('Product not found');
+
+        const stocks = await tx.productStock.findMany({
+          where: { productId: item.productId, branchCode },
+          orderBy: { id: 'asc' },
+          take: 2,
+        });
+        if (stocks.length > 1) {
+          throw new ConflictException(
+            'Duplicate product stock rows must be repaired before inventory',
+          );
+        }
+
+        const stock = stocks[0];
+        const beforeQuantity = Number(stock?.quantity ?? 0);
         if (stock) {
           await tx.productStock.update({
             where: { id: stock.id },
             data: { quantity: item.actualQuantity },
           });
+        } else {
+          await tx.productStock.create({
+            data: {
+              productId: item.productId,
+              shopId: session.shopId,
+              branchCode,
+              quantity: item.actualQuantity,
+            },
+          });
         }
+
+        const difference = item.actualQuantity - beforeQuantity;
+        if (difference !== 0) {
+          await tx.stockMovement.create({
+            data: {
+              companyId: context.companyId,
+              shopId: session.shopId,
+              productId: item.productId,
+              type: 'ADJUSTMENT',
+              displayTypeCode: 'inventory',
+              displayTypeLabel: 'Инвентаризация',
+              externalId: session.id,
+              quantity: new Prisma.Decimal(difference),
+              loadedMeasurementValue: new Prisma.Decimal(item.actualQuantity),
+              beforeQuantity: new Prisma.Decimal(beforeQuantity),
+              afterQuantity: new Prisma.Decimal(item.actualQuantity),
+              fromShopId: session.shopId,
+              toShopId: session.shopId,
+              createdById: context.userId,
+            },
+          });
+        }
+
         const totalStock = await tx.productStock.aggregate({
           where: { productId: item.productId },
           _sum: { quantity: true },
@@ -368,14 +448,21 @@ export class WarehouseService {
           data: { quantity: totalStock._sum.quantity ?? 0 },
         });
       }
-      await tx.inventorySession.update({
-        where: { id: sessionId },
+      const completed = await tx.inventorySession.updateMany({
+        where: {
+          id: sessionId,
+          ...this.scope(context),
+          status: 'applying',
+        },
         data: {
           status: 'completed',
-          closedById: context?.userId,
+          closedById: context.userId,
           closedAt: new Date(),
         },
       });
+      if (completed.count !== 1) {
+        throw new ConflictException('Inventory status changed during apply');
+      }
     });
 
     return { success: true, id: sessionId, status: 'completed' };

@@ -48,7 +48,10 @@ export class ReportsRepository {
     });
   }
 
-  async getSaleItemFacts(filter: ReportFilterDto, context: any): Promise<any[]> {
+  async getSaleItemFacts(
+    filter: ReportFilterDto,
+    context: any,
+  ): Promise<any[]> {
     const { clauses, params } = await this.buildSaleItemWhere(filter, context);
     const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const sql = `
@@ -92,7 +95,9 @@ export class ReportsRepository {
       INNER JOIN "Sale" s ON s.id = si."saleId"
       LEFT JOIN "User" u ON u.id = COALESCE(si."sellerId", s."userId")
       LEFT JOIN "Product" p ON p.id = si."productId"
-      LEFT JOIN "Shop" sh ON sh."branchCode" = s."branchCode"
+      LEFT JOIN "Shop" sh
+        ON sh."companyId" = s."companyId"
+       AND sh."branchCode" = s."branchCode"
       ${whereSql}
       ORDER BY COALESCE(s."paidAt", s."createdAt") DESC, s.id DESC, si.id DESC
     `;
@@ -100,7 +105,10 @@ export class ReportsRepository {
     return this.db.$queryRawUnsafe(sql, ...params) as Promise<any[]>;
   }
 
-  async getSellerAggregateRows(filter: ReportFilterDto, context: any): Promise<any[]> {
+  async getSellerAggregateRows(
+    filter: ReportFilterDto,
+    context: any,
+  ): Promise<any[]> {
     const { clauses, params } = await this.buildSaleItemWhere(filter, context);
     const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const sql = `
@@ -133,7 +141,9 @@ export class ReportsRepository {
       INNER JOIN "Sale" s ON s.id = si."saleId"
       LEFT JOIN "User" u ON u.id = COALESCE(si."sellerId", s."userId")
       LEFT JOIN "Product" p ON p.id = si."productId"
-      LEFT JOIN "Shop" sh ON sh."branchCode" = s."branchCode"
+      LEFT JOIN "Shop" sh
+        ON sh."companyId" = s."companyId"
+       AND sh."branchCode" = s."branchCode"
       ${whereSql}
       GROUP BY COALESCE(si."sellerId", s."userId"), u."firstName", u."lastName", COALESCE(sh.name, s."branchCode", '')
       ORDER BY net_gross_sales DESC NULLS LAST
@@ -178,34 +188,48 @@ export class ReportsRepository {
     const params: unknown[] = [];
 
     if (context?.companyId) {
-      clauses.push(`s."companyId" = ${this.pushParam(params, context.companyId)}`);
-    }
-
-    if (context?.allowedBranchCodes?.length) {
       clauses.push(
-        `s."branchCode" IN (${context.allowedBranchCodes
-          .map((value: string) => this.pushParam(params, value))
-          .join(', ')})`,
+        `s."companyId" = ${this.pushParam(params, context.companyId)}`,
       );
     }
 
+    if (context?.companyId && Array.isArray(context.allowedBranchCodes)) {
+      if (context.allowedBranchCodes.length) {
+        clauses.push(
+          `s."branchCode" IN (${context.allowedBranchCodes
+            .map((value: string) => this.pushParam(params, value))
+            .join(', ')})`,
+        );
+      } else {
+        clauses.push('FALSE');
+      }
+    }
+
     if (filter.from) {
-      clauses.push(`COALESCE(s."paidAt", s."createdAt") >= ${this.pushParam(params, new Date(filter.from))}`);
+      clauses.push(
+        `COALESCE(s."paidAt", s."createdAt") >= ${this.pushParam(params, new Date(filter.from))}`,
+      );
     }
 
     if (filter.to) {
       const to = new Date(filter.to);
       to.setHours(23, 59, 59, 999);
-      clauses.push(`COALESCE(s."paidAt", s."createdAt") <= ${this.pushParam(params, to)}`);
+      clauses.push(
+        `COALESCE(s."paidAt", s."createdAt") <= ${this.pushParam(params, to)}`,
+      );
     }
 
     const branchCodes = await this.resolveBranchCodes(filter, context);
-    if (branchCodes?.length) {
-      clauses.push(
-        `s."branchCode" IN (${branchCodes
-          .map((value) => this.pushParam(params, value))
-          .join(', ')})`,
-      );
+    if (branchCodes) {
+      if (branchCodes.length) {
+        clauses.push(
+          `s."branchCode" IN (${branchCodes
+            .map((value) => this.pushParam(params, value))
+            .join(', ')})`,
+        );
+      } else {
+        clauses.push('FALSE');
+      }
     }
 
     if (filter.sellerIds?.length) {

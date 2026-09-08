@@ -8,24 +8,34 @@ describe('Warehouse company and shop isolation', () => {
       inventorySession: {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn(),
+        updateMany: jest.fn(),
       },
       inventoryItem: { upsert: jest.fn() },
-      product: { findFirst: jest.fn().mockResolvedValue(null) },
+      product: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        update: jest.fn(),
+      },
+      productStock: {
+        findMany: jest.fn(),
+        update: jest.fn(),
+        create: jest.fn(),
+        aggregate: jest.fn(),
+      },
       stockMovement: {
+        fields: { fromRetailPrice: 'fromRetailPriceField' },
         findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
+        create: jest.fn(),
       },
-      $transaction: jest.fn(),
+      $transaction: jest.fn((operation) => operation(db)),
     };
     service = new WarehouseService(db, {
-      getRequestContext: jest
-        .fn()
-        .mockResolvedValue({
-          userType: 'company',
-          companyId: 'own',
-          userId: 1,
-          allowedShopIds: ['allowed'],
-        }),
+      getRequestContext: jest.fn().mockResolvedValue({
+        userType: 'company',
+        companyId: 'own',
+        userId: 1,
+        allowedShopIds: ['allowed'],
+      }),
     } as any);
   });
   it.each(['getInventorySession', 'applyInventory'] as const)(
@@ -41,7 +51,7 @@ describe('Warehouse company and shop isolation', () => {
           },
         }),
       );
-      expect(db.$transaction).not.toHaveBeenCalled();
+      expect(db.productStock.findMany).not.toHaveBeenCalled();
     },
   );
   it('rejects adding to an inaccessible inventory session', async () => {
@@ -115,5 +125,88 @@ describe('Warehouse company and shop isolation', () => {
         where: { type: 'PURCHASE', companyId: 'own', shopId: { in: [] } },
       }),
     );
+  });
+
+  it('filters revaluations before pagination and uses the same predicate for total', async () => {
+    await service.listRevaluations({}, 'Bearer test');
+    const expectedWhere = {
+      companyId: 'own',
+      shopId: { in: ['allowed'] },
+      newRetailPrice: { not: 'fromRetailPriceField' },
+    };
+    expect(db.stockMovement.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expectedWhere }),
+    );
+    expect(db.stockMovement.count).toHaveBeenCalledWith({
+      where: expectedWhere,
+    });
+  });
+
+  it('creates a missing stock row and records one inventory adjustment', async () => {
+    db.inventorySession.findFirst.mockResolvedValue({
+      id: 'inventory-1',
+      companyId: 'own',
+      shopId: 'allowed',
+      status: 'draft',
+      shop: { branchCode: '001' },
+      items: [{ productId: 10, actualQuantity: 7 }],
+    });
+    db.inventorySession.updateMany.mockResolvedValue({ count: 1 });
+    db.product.findFirst.mockResolvedValue({ id: 10 });
+    db.productStock.findMany.mockResolvedValue([]);
+    db.productStock.aggregate.mockResolvedValue({ _sum: { quantity: 7 } });
+    db.stockMovement.create.mockResolvedValue({ id: 'movement-1' });
+
+    await expect(
+      service.applyInventory('inventory-1', 'Bearer test'),
+    ).resolves.toEqual({
+      success: true,
+      id: 'inventory-1',
+      status: 'completed',
+    });
+
+    expect(db.productStock.create).toHaveBeenCalledWith({
+      data: {
+        productId: 10,
+        shopId: 'allowed',
+        branchCode: '001',
+        quantity: 7,
+      },
+    });
+    expect(db.stockMovement.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        companyId: 'own',
+        shopId: 'allowed',
+        productId: 10,
+        type: 'ADJUSTMENT',
+        externalId: 'inventory-1',
+        createdById: 1,
+      }),
+    });
+    expect(db.inventorySession.updateMany).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        where: expect.objectContaining({ status: 'applying' }),
+        data: expect.objectContaining({ status: 'completed' }),
+      }),
+    );
+  });
+
+  it('does not write stock when another request already claimed the session', async () => {
+    db.inventorySession.findFirst.mockResolvedValue({
+      id: 'inventory-1',
+      companyId: 'own',
+      shopId: 'allowed',
+      status: 'draft',
+      shop: { branchCode: '001' },
+      items: [{ productId: 10, actualQuantity: 7 }],
+    });
+    db.inventorySession.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(
+      service.applyInventory('inventory-1', 'Bearer test'),
+    ).rejects.toThrow('already being applied');
+    expect(db.productStock.findMany).not.toHaveBeenCalled();
+    expect(db.stockMovement.create).not.toHaveBeenCalled();
   });
 });
