@@ -62,7 +62,7 @@ export class SupplierDirectoryService {
     const companyId = await this.company(auth);
     await this.get(id, auth);
     return this.prisma.supplierProductAlias.findMany({
-      where: { companyId, supplierId: id },
+      where: { companyId, supplierId: id, product: { companyId } },
       include: { product: true },
       orderBy: { updatedAt: 'desc' },
     });
@@ -95,6 +95,16 @@ export class SupplierDirectoryService {
       where: { id: aliasId, supplierId: id, companyId },
     });
     if (!alias) throw new NotFoundException('Alias not found');
+    if (body.productId !== undefined) {
+      const productId = Number(body.productId);
+      if (!Number.isInteger(productId) || productId <= 0)
+        throw new BadRequestException('productId is invalid');
+      const product = await this.prisma.product.findFirst({
+        where: { id: productId, companyId },
+        select: { id: true },
+      });
+      if (!product) throw new NotFoundException('Product not found');
+    }
     return this.prisma.supplierProductAlias.update({
       where: { id: aliasId },
       data: {

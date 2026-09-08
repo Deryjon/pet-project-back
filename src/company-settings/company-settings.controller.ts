@@ -1,5 +1,6 @@
 import {
   Body,
+  ForbiddenException,
   Controller,
   Delete,
   Get,
@@ -25,8 +26,13 @@ export class CompanySettingsController {
   ) {}
 
   @Get(['default-currency', 'v1/default-currency'])
-  async getDefaultCurrency(@Query('company_id') companyId?: string) {
-    return this.companySettingsService.getDefaultCurrency(companyId);
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  async getDefaultCurrency(
+    @Query('company_id') companyId?: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const context = await this.companyContext(authorization);
+    return this.companySettingsService.getDefaultCurrency(context.companyId);
   }
 
   @Get(['country', 'v1/country'])
@@ -43,31 +49,33 @@ export class CompanySettingsController {
   }
 
   @Get('v2/company-tariff')
-  async getCompanyTariff() {
-    return this.companySettingsService.getCompanyTariff();
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  async getCompanyTariff(@Headers('authorization') authorization?: string) {
+    const context = await this.companyContext(authorization);
+    return this.companySettingsService.getCompanyTariff(context.companyId);
   }
 
   @Get(['company', 'v1/company'])
-  async getCompany() {
-    return this.companySettingsService.getCompany();
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  async getCompany(@Headers('authorization') authorization?: string) {
+    const context = await this.companyContext(authorization);
+    return this.companySettingsService.getCompany(context.companyId);
   }
 
   @Put(['company', 'v1/company'])
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('company-edit')
   async updateCompany(
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
   ) {
-    const context = authorization
-      ? await this.usersService.getRequestContext(authorization)
-      : null;
+    const context = await this.companyContext(authorization);
 
-    return this.companySettingsService.updateCompany(
-      body,
-      context?.companyId || undefined,
-    );
+    return this.companySettingsService.updateCompany(body, context.companyId);
   }
 
   @Get('shop')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
   async getShops(
     @Query('limit') limit?: string,
     @Query('page') page?: string,
@@ -76,23 +84,19 @@ export class CompanySettingsController {
     @Query('only_allowed') onlyAllowed?: string,
     @Headers('authorization') authorization?: string,
   ) {
-    const shouldUseAllowed = onlyAllowed === 'true';
-    const context = authorization
-      ? await this.usersService.getRequestContext(authorization)
-      : null;
+    const context = await this.companyContext(authorization);
 
     return this.companySettingsService.getShops({
       limit: Number(limit),
       page: Number(page),
       name,
-      companyId: companyId || context?.companyId || undefined,
-      allowedShopIds: shouldUseAllowed
-        ? (context?.allowedShopIds ?? [])
-        : undefined,
+      companyId: context.companyId,
+      allowedShopIds: context.allowedShopIds,
     });
   }
 
   @Get('v1/shop')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
   async getV1Shops(
     @Query('limit') limit?: string,
     @Query('page') page?: string,
@@ -112,38 +116,34 @@ export class CompanySettingsController {
   }
 
   @Get('v1/shop/:id')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
   async getV1ShopById(
     @Param('id') id: string,
     @Query('company_id') companyId?: string,
     @Headers('authorization') authorization?: string,
   ) {
-    const context = authorization
-      ? await this.usersService.getRequestContext(authorization)
-      : null;
+    const context = await this.companyContext(authorization);
 
-    return this.companySettingsService.getShopById(
-      id,
-      companyId || context?.companyId || undefined,
-    );
+    return this.companySettingsService.getShopById(id, context.companyId);
   }
 
   @Get('v2/measurement-unit/:id')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
   async getMeasurementUnit(
     @Param('id') id: string,
     @Query('company_id') companyId?: string,
     @Headers('authorization') authorization?: string,
   ) {
-    const context = authorization
-      ? await this.usersService.getRequestContext(authorization)
-      : null;
+    const context = await this.companyContext(authorization);
 
     return this.companySettingsService.getMeasurementUnitById(
       id,
-      companyId || context?.companyId || undefined,
+      context.companyId,
     );
   }
 
   @Get('v2/measurement-unit')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
   async getMeasurementUnits(
     @Query('limit') limit?: string,
     @Query('page') page?: string,
@@ -151,15 +151,13 @@ export class CompanySettingsController {
     @Query('company_id') companyId?: string,
     @Headers('authorization') authorization?: string,
   ) {
-    const context = authorization
-      ? await this.usersService.getRequestContext(authorization)
-      : null;
+    const context = await this.companyContext(authorization);
 
     return this.companySettingsService.getMeasurementUnits({
       limit: Number(limit),
       page: Number(page),
       name,
-      companyId: companyId || context?.companyId || undefined,
+      companyId: context.companyId,
     });
   }
 
@@ -169,19 +167,17 @@ export class CompanySettingsController {
   }
 
   @Post('v2/measurement-unit')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('catalog-operations')
   async createMeasurementUnit(
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
   ) {
-    const context = authorization
-      ? await this.usersService.getRequestContext(authorization)
-      : null;
+    const context = await this.companyContext(authorization);
 
     return this.companySettingsService.createMeasurementUnit({
       ...body,
-      company_id:
-        (typeof body.company_id === 'string' ? body.company_id : undefined) ||
-        context?.companyId,
+      company_id: context.companyId,
     });
   }
 
@@ -191,13 +187,9 @@ export class CompanySettingsController {
     @Query('company_id') companyId?: string,
     @Headers('authorization') authorization?: string,
   ) {
-    const context = authorization
-      ? await this.usersService.getRequestContext(authorization)
-      : null;
+    const context = await this.companyContext(authorization);
 
-    return this.companySettingsService.getPriceTags(
-      companyId || context?.companyId || undefined,
-    );
+    return this.companySettingsService.getPriceTags(context.companyId);
   }
 
   @Get(['price-tag/:id', 'v1/price-tag/:id'])
@@ -206,10 +198,8 @@ export class CompanySettingsController {
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
   ) {
-    const context = authorization
-      ? await this.usersService.getRequestContext(authorization)
-      : null;
-    return this.companySettingsService.getPriceTagById(id, context?.companyId ?? undefined);
+    const context = await this.companyContext(authorization);
+    return this.companySettingsService.getPriceTagById(id, context.companyId);
   }
 
   @Post(['price-tag', 'v1/price-tag'])
@@ -218,10 +208,8 @@ export class CompanySettingsController {
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
   ) {
-    const context = authorization
-      ? await this.usersService.getRequestContext(authorization)
-      : null;
-    const companyId = context?.companyId ?? (body.company_id as string | undefined);
+    const context = await this.companyContext(authorization);
+    const companyId = context.companyId;
     return this.companySettingsService.createPriceTag(body, companyId);
   }
 
@@ -232,10 +220,8 @@ export class CompanySettingsController {
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
   ) {
-    const context = authorization
-      ? await this.usersService.getRequestContext(authorization)
-      : null;
-    const companyId = context?.companyId ?? (body.company_id as string | undefined);
+    const context = await this.companyContext(authorization);
+    const companyId = context.companyId;
     return this.companySettingsService.updatePriceTag(id, body, companyId);
   }
 
@@ -245,87 +231,143 @@ export class CompanySettingsController {
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
   ) {
-    const context = authorization
-      ? await this.usersService.getRequestContext(authorization)
-      : null;
-    return this.companySettingsService.deletePriceTag(id, context?.companyId ?? undefined);
+    const context = await this.companyContext(authorization);
+    return this.companySettingsService.deletePriceTag(id, context.companyId);
   }
 
   @Get(['company-payment-type', 'v1/company-payment-type'])
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
   async getV1CompanyPaymentTypes(
     @Query('limit') limit?: string,
     @Query('company_id') companyId?: string,
+    @Headers('authorization') authorization?: string,
   ) {
+    const context = await this.companyContext(authorization);
     return this.companySettingsService.getCompanyPaymentTypes(
       Number(limit),
-      companyId,
+      context.companyId,
     );
   }
 
   @Post('company-payment-type')
-  async createCompanyPaymentType(@Body() body: Record<string, unknown>) {
-    return this.companySettingsService.createCompanyPaymentType(body);
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('payment-type-create')
+  async createCompanyPaymentType(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const context = await this.companyContext(authorization);
+    return this.companySettingsService.createCompanyPaymentType(
+      body,
+      context.companyId,
+    );
   }
 
   @Put('company-payment-type/:id')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('payment-type-edit')
   async updateCompanyPaymentType(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
   ) {
-    return this.companySettingsService.updateCompanyPaymentType(id, body);
+    const context = await this.companyContext(authorization);
+    return this.companySettingsService.updateCompanyPaymentType(
+      id,
+      body,
+      context.companyId,
+    );
   }
 
   @Delete('company-payment-type/:id')
-  async deleteCompanyPaymentType(@Param('id') id: string) {
-    return this.companySettingsService.deleteCompanyPaymentType(id);
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('payment-type-delete')
+  async deleteCompanyPaymentType(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const context = await this.companyContext(authorization);
+    return this.companySettingsService.deleteCompanyPaymentType(
+      id,
+      context.companyId,
+    );
   }
 
   @Get('cash-box')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
   async getCashBoxes(
     @Query('limit') limit?: string,
     @Query('page') page?: string,
     @Query('name') name?: string,
     @Query('company_id') companyId?: string,
+    @Headers('authorization') authorization?: string,
   ) {
+    const context = await this.companyContext(authorization);
     return this.companySettingsService.getCashBoxes({
       limit: Number(limit),
       page: Number(page),
       name,
-      companyId,
+      companyId: context.companyId,
     });
   }
 
   @Get('v1/cash-box')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
   async getV1CashBoxes(
     @Query('limit') limit?: string,
     @Query('page') page?: string,
     @Query('name') name?: string,
     @Query('company_id') companyId?: string,
+    @Headers('authorization') authorization?: string,
   ) {
+    const context = await this.companyContext(authorization);
     return this.companySettingsService.getCashBoxes({
       limit: Number(limit),
       page: Number(page),
       name,
-      companyId,
+      companyId: context.companyId,
     });
   }
 
   @Get('v1/loyalty-program')
-  async getV1LoyaltyProgram(@Query('company_id') companyId?: string) {
-    return this.companySettingsService.getLoyaltyProgram(companyId);
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  async getV1LoyaltyProgram(
+    @Query('company_id') companyId?: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const context = await this.companyContext(authorization);
+    return this.companySettingsService.getLoyaltyProgram(context.companyId);
   }
 
   @Put('v1/loyalty-program')
-  updateLoyaltyProgram(
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('loyalty-edit')
+  async updateLoyaltyProgram(
     @Body() body: Record<string, unknown>,
     @Headers('x-company-id') companyId?: string,
     @Headers('authorization') authorization?: string,
   ) {
-    return this.companySettingsService.updateLoyaltyProgram(body, companyId);
+    const context = await this.companyContext(authorization);
+    return this.companySettingsService.updateLoyaltyProgram(
+      body,
+      context.companyId,
+    );
   }
 
   @Get('v2/company-currencies')
-  async getV2CompanyCurrencies(@Query('company_id') companyId?: string) {
-    return this.companySettingsService.getCompanyCurrencies(companyId);
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  async getV2CompanyCurrencies(
+    @Query('company_id') companyId?: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const context = await this.companyContext(authorization);
+    return this.companySettingsService.getCompanyCurrencies(context.companyId);
+  }
+  private async companyContext(authorization?: string) {
+    const context = await this.usersService.getRequestContext(authorization);
+    if (context.userType !== 'company' || !context.companyId) {
+      throw new ForbiddenException('Company context required');
+    }
+    return { ...context, companyId: context.companyId };
   }
 }

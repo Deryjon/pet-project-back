@@ -66,6 +66,8 @@ export class ProductsController {
   }
 
   @Post('products')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('catalog-operations')
   create(
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
@@ -429,6 +431,8 @@ export class ProductsController {
   }
 
   @Post('v2/product/create')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('catalog-operations')
   createCatalogProduct(
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,

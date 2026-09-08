@@ -65,3 +65,20 @@ describe('ProductsService identifier generation', () => {
     });
   });
 });
+
+
+describe('Legacy product creation authorization', () => {
+  it('rejects calls without authorization before writing a product', async () => {
+    const prisma = { product: { create: jest.fn() } };
+    const service = new ProductsService(prisma as any, {} as any, {} as any);
+    await expect(service.create({ name: 'Cable', company_id: 'foreign' })).rejects.toThrow('Authorization is required');
+    expect(prisma.product.create).not.toHaveBeenCalled();
+  });
+  it('uses the authenticated company even when the request supplies another ID', async () => {
+    const prisma = { product: { create: jest.fn().mockResolvedValue({ id: 1 }), findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 1 }) } };
+    const service = new ProductsService(prisma as any, {} as any, { getRequestContext: jest.fn().mockResolvedValue({ userType: 'company', companyId: 'own', allowedShopIds: [], allowedBranchCodes: [] }) } as any);
+    jest.spyOn(service as any, 'toProductResponse').mockImplementation(value => value);
+    await service.create({ name: 'Cable', company_id: 'foreign' }, 'Bearer user');
+    expect(prisma.product.create).toHaveBeenCalledWith({ data: expect.objectContaining({ company: { connect: { id: 'own' } } }) });
+  });
+});

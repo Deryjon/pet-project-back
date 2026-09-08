@@ -1,6 +1,7 @@
 import {
   Injectable,
   BadRequestException,
+  ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
@@ -13,20 +14,32 @@ export class WarehouseService {
     private readonly usersService: UsersService,
   ) {}
 
+  private async context(auth?: string) {
+    const context = await this.usersService.getRequestContext(auth);
+    if (context.userType !== 'company' || !context.companyId) {
+      throw new ForbiddenException('Company context required');
+    }
+    return { ...context, companyId: context.companyId };
+  }
+
+  private scope(context: { companyId: string; allowedShopIds: string[] }) {
+    return {
+      companyId: context.companyId,
+      shopId: { in: context.allowedShopIds },
+    };
+  }
+
   async listMovements(
     type: string,
     query: Record<string, string>,
     auth?: string,
   ) {
-    const context = auth
-      ? await this.usersService.getRequestContext(auth)
-      : null;
+    const context = await this.context(auth);
     const page = Math.max(1, Number(query.page) || 1);
     const limit = Math.min(Math.max(1, Number(query.limit) || 10), 100);
     const search = query.search?.trim();
 
-    const where: any = { type };
-    if (context?.companyId) where.companyId = context.companyId;
+    const where: any = { type, ...this.scope(context) };
     if (search) {
       where.product = {
         name: { contains: search, mode: 'insensitive' },
@@ -78,14 +91,11 @@ export class WarehouseService {
   }
 
   async listRevaluations(query: Record<string, string>, auth?: string) {
-    const context = auth
-      ? await this.usersService.getRequestContext(auth)
-      : null;
+    const context = await this.context(auth);
     const page = Math.max(1, Number(query.page) || 1);
     const limit = Math.min(Math.max(1, Number(query.limit) || 10), 100);
 
-    const where: any = {};
-    if (context?.companyId) where.companyId = context.companyId;
+    const where: any = this.scope(context);
 
     const [items, total] = await Promise.all([
       this.db.stockMovement.findMany({
@@ -131,13 +141,10 @@ export class WarehouseService {
   }
 
   async listInventorySessions(query: Record<string, string>, auth?: string) {
-    const context = auth
-      ? await this.usersService.getRequestContext(auth)
-      : null;
+    const context = await this.context(auth);
     const page = Math.max(1, Number(query.page) || 1);
     const limit = Math.min(Math.max(1, Number(query.limit) || 10), 100);
-    const where: any = {};
-    if (context?.companyId) where.companyId = context.companyId;
+    const where: any = this.scope(context);
     if (query.status) where.status = query.status;
 
     const [items, total] = await Promise.all([
@@ -185,8 +192,9 @@ export class WarehouseService {
   }
 
   async getInventorySession(id: string, auth?: string) {
-    const session = await this.db.inventorySession.findUnique({
-      where: { id },
+    const context = await this.context(auth);
+    const session = await this.db.inventorySession.findFirst({
+      where: { id, ...this.scope(context) },
       include: {
         shop: { select: { id: true, name: true } },
         createdBy: {
@@ -218,17 +226,14 @@ export class WarehouseService {
     };
   }
 
-  async createInventorySession(
-    body: Record<string, unknown>,
-    auth?: string,
-  ) {
-    const context = auth
-      ? await this.usersService.getRequestContext(auth)
-      : null;
+  async createInventorySession(body: Record<string, unknown>, auth?: string) {
+    const context = await this.context(auth);
     if (!context?.companyId || !context?.userId)
       throw new BadRequestException('Auth required');
     const shopId = String(body.shop_id || '').trim();
     if (!shopId) throw new BadRequestException('shop_id required');
+    if (!context.allowedShopIds.includes(shopId))
+      throw new ForbiddenException('Shop is not available');
     const shop = await this.db.shop.findFirst({
       where: { id: shopId, companyId: context.companyId },
     });
@@ -261,16 +266,25 @@ export class WarehouseService {
     body: Record<string, unknown>,
     auth?: string,
   ) {
-    const session = await this.db.inventorySession.findUnique({
-      where: { id: sessionId },
+    const context = await this.context(auth);
+    const session = await this.db.inventorySession.findFirst({
+      where: { id: sessionId, ...this.scope(context) },
     });
     if (!session) throw new NotFoundException('Session not found');
     if (session.status !== 'draft')
       throw new BadRequestException('Session is not in draft status');
 
     const productId = Number(body.product_id);
-    if (!productId) throw new BadRequestException('product_id required');
+    if (!Number.isInteger(productId) || productId <= 0)
+      throw new BadRequestException('product_id is invalid');
     const actualQuantity = Number(body.actual_quantity ?? 0);
+    if (!Number.isFinite(actualQuantity) || actualQuantity < 0)
+      throw new BadRequestException('actual_quantity is invalid');
+    const product = await this.db.product.findFirst({
+      where: { id: productId, companyId: context.companyId, archivedAt: null },
+      select: { id: true },
+    });
+    if (!product) throw new NotFoundException('Product not found');
 
     const shop = await this.db.shop.findUnique({
       where: { id: session.shopId },
@@ -321,11 +335,9 @@ export class WarehouseService {
   }
 
   async applyInventory(sessionId: string, auth?: string) {
-    const context = auth
-      ? await this.usersService.getRequestContext(auth)
-      : null;
-    const session = await this.db.inventorySession.findUnique({
-      where: { id: sessionId },
+    const context = await this.context(auth);
+    const session = await this.db.inventorySession.findFirst({
+      where: { id: sessionId, ...this.scope(context) },
       include: {
         items: true,
         shop: { select: { branchCode: true } },

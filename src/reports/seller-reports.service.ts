@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
 } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
@@ -107,7 +108,10 @@ export class SellerReportsService {
     const parsedSellerId = this.parseSellerId(sellerId);
     const context = await this.getContext(authorization);
     await this.assertSellerVisibility(parsedSellerId, context, authorization);
-    await this.reportsRepository.requireSeller(parsedSellerId);
+    await this.reportsRepository.requireSeller(
+      parsedSellerId,
+      context?.companyId ?? undefined,
+    );
 
     const rows = await this.reportsRepository.getSaleItemFacts(
       {
@@ -169,7 +173,10 @@ export class SellerReportsService {
     const parsedSellerId = this.parseSellerId(sellerId);
     const context = await this.getContext(authorization);
     await this.assertSellerVisibility(parsedSellerId, context, authorization);
-    const seller = await this.reportsRepository.requireSeller(parsedSellerId);
+    const seller = await this.reportsRepository.requireSeller(
+      parsedSellerId,
+      context?.companyId ?? undefined,
+    );
     const settings = await this.reportsRepository.getSellerSalarySettings(parsedSellerId);
 
     return {
@@ -189,8 +196,14 @@ export class SellerReportsService {
     authorization?: string,
   ) {
     const parsedSellerId = this.parseSellerId(sellerId);
-    await this.usersService.assertAdminAccess(authorization);
-    await this.reportsRepository.requireSeller(parsedSellerId);
+    const context = await this.usersService.assertAdminAccess(authorization);
+    if (context.userType !== 'platform' && !context.companyId) {
+      throw new ForbiddenException('Company context required');
+    }
+    await this.reportsRepository.requireSeller(
+      parsedSellerId,
+      context.companyId ?? undefined,
+    );
 
     const settings = await this.reportsRepository.updateSellerSalarySettings(
       parsedSellerId,
@@ -224,7 +237,10 @@ export class SellerReportsService {
     const parsedSellerId = this.parseSellerId(sellerId);
     const context = await this.getContext(authorization);
     await this.assertSellerVisibility(parsedSellerId, context, authorization);
-    const seller = await this.reportsRepository.requireSeller(parsedSellerId);
+    const seller = await this.reportsRepository.requireSeller(
+      parsedSellerId,
+      context?.companyId ?? undefined,
+    );
     const settings = await this.reportsRepository.getSellerSalarySettings(parsedSellerId);
     const facts = await this.reportsRepository.getSaleItemFacts(
       { ...filter, sellerIds: [parsedSellerId] },

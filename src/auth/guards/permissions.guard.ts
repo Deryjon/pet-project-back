@@ -55,7 +55,9 @@ export class PermissionsGuard implements CanActivate {
       },
     });
 
-    if (role?.isAdmin) {
+    if (!role) throw new ForbiddenException('Role is not available');
+
+    if (role.isAdmin) {
       return true;
     }
 

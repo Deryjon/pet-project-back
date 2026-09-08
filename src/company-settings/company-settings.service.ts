@@ -666,11 +666,8 @@ export class CompanySettingsService {
     };
   }
 
-  async getCompanyTariff() {
-    const targetCompanyId = await this.resolveCompanyId();
-    if (!targetCompanyId) {
-      return DEFAULT_COMPANY_TARIFF;
-    }
+  async getCompanyTariff(companyId: string) {
+    const targetCompanyId = this.requireString(companyId, 'companyId');
 
     await this.ensureCompanySettingsSeeded(targetCompanyId);
     const tariff = await this.db.companyTariffSetting.findUnique({
@@ -683,15 +680,11 @@ export class CompanySettingsService {
     });
   }
 
-  async getCompany() {
-    const companyFromDb = await this.db.company.findFirst({
-      where: {
-        isActive: true,
-      },
-      orderBy: {
-        createdAt: 'asc',
-      },
+  async getCompany(companyId: string) {
+    const companyFromDb = await this.db.company.findUnique({
+      where: { id: this.requireString(companyId, 'companyId') },
     });
+    if (!companyFromDb) throw new NotFoundException('Company not found');
 
     if (companyFromDb) {
       await this.ensureCompanySettingsSeeded(companyFromDb.id);
@@ -1377,9 +1370,11 @@ export class CompanySettingsService {
     };
   }
 
-  async createCompanyPaymentType(body: Record<string, unknown>) {
-    const companyId =
-      this.optionalString(body.company_id) ?? DEFAULT_COMPANY_ID;
+  async createCompanyPaymentType(
+    body: Record<string, unknown>,
+    companyId: string,
+  ) {
+    companyId = this.requireString(companyId, 'companyId');
     const name = this.requireString(body.name, 'name');
     const paymentTypeId =
       this.optionalString(body.payment_type_id) ??
@@ -1422,9 +1417,14 @@ export class CompanySettingsService {
     }
   }
 
-  async updateCompanyPaymentType(id: string, body: Record<string, unknown>) {
-    const paymentType = await this.db.companyPaymentType.findUnique({
-      where: { id },
+  async updateCompanyPaymentType(
+    id: string,
+    body: Record<string, unknown>,
+    companyId: string,
+  ) {
+    companyId = this.requireString(companyId, 'companyId');
+    const paymentType = await this.db.companyPaymentType.findFirst({
+      where: { id, companyId },
     });
 
     if (!paymentType) {
@@ -1432,15 +1432,10 @@ export class CompanySettingsService {
     }
 
     const updatedPaymentType = await this.db.companyPaymentType.update({
-      where: { id },
+      where: { id, companyId },
       data: {
         ...(body.name !== undefined
           ? { name: this.requireString(body.name, 'name') }
-          : {}),
-        ...(body.company_id !== undefined
-          ? {
-              companyId: this.requireString(body.company_id, 'company_id'),
-            }
           : {}),
         ...(body.token !== undefined
           ? {
@@ -1513,9 +1508,10 @@ export class CompanySettingsService {
     return this.toCompanyPaymentTypeResponse(updatedPaymentType);
   }
 
-  async deleteCompanyPaymentType(id: string) {
-    const existing = await this.db.companyPaymentType.findUnique({
-      where: { id },
+  async deleteCompanyPaymentType(id: string, companyId: string) {
+    companyId = this.requireString(companyId, 'companyId');
+    const existing = await this.db.companyPaymentType.findFirst({
+      where: { id, companyId },
     });
 
     if (!existing) {
@@ -1523,7 +1519,7 @@ export class CompanySettingsService {
     }
 
     const deleted = await this.db.companyPaymentType.delete({
-      where: { id },
+      where: { id, companyId },
     });
 
     return {

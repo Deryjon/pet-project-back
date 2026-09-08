@@ -1,7 +1,7 @@
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import * as express from 'express';
-import { join } from 'path';
+import { publicUploads } from './common/public-uploads';
 import { AppModule } from './app.module';
 import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
 import { PrismaService } from './prisma/prisma.service';
@@ -96,7 +96,7 @@ async function bootstrap() {
     origin: corsOrigins,
     credentials: true,
   });
-  app.use('/uploads', express.static(join(process.cwd(), 'uploads')));
+  app.use('/uploads', publicUploads());
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

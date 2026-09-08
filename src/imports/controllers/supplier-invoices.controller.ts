@@ -1,3 +1,5 @@
+import { PermissionsGuard } from '../../auth/guards/permissions.guard';
+import { Permissions } from '../../auth/permissions.decorator';
 import {
   Body,
   Controller,
@@ -5,6 +7,8 @@ import {
   Get,
   Headers,
   Param,
+  ParseIntPipe,
+  StreamableFile,
   Patch,
   Post,
   Query,
@@ -22,19 +26,21 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { SupplierInvoiceService } from '../services/supplier-invoice.service';
 
 @Controller('supplier-invoices')
-@UseGuards(JwtAuthGuard, CompanyAccessGuard)
+@UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+@Permissions('import-details')
 export class SupplierInvoicesController {
   constructor(private readonly invoices: SupplierInvoiceService) {}
-  @Post() create(@Body() body: any, @Headers('authorization') auth?: string) {
+  @Post()
+  @Permissions('import-create')
+  create(@Body() body: any, @Headers('authorization') auth?: string) {
     return this.invoices.create(body, auth);
   }
-  @Get() list(@Query() query: any, @Headers('authorization') auth?: string) {
+  @Get()
+  list(@Query() query: any, @Headers('authorization') auth?: string) {
     return this.invoices.list(query, auth);
   }
-  @Get(':id') get(
-    @Param('id') id: string,
-    @Headers('authorization') auth?: string,
-  ) {
+  @Get(':id')
+  get(@Param('id') id: string, @Headers('authorization') auth?: string) {
     return this.invoices.get(id, auth);
   }
   @Post(':id/files')
@@ -42,7 +48,7 @@ export class SupplierInvoicesController {
     FilesInterceptor('files', 10, {
       storage: diskStorage({
         destination: (_req, _file, callback) => {
-          const directory = join(process.cwd(), 'uploads', 'invoices');
+          const directory = join(process.cwd(), 'private', 'invoices');
           mkdirSync(directory, { recursive: true });
           callback(null, directory);
         },
@@ -67,6 +73,7 @@ export class SupplierInvoicesController {
         ),
     }),
   )
+  @Permissions('import-create')
   uploadFiles(
     @Param('id') id: string,
     @UploadedFiles()
@@ -81,20 +88,35 @@ export class SupplierInvoicesController {
   ) {
     return this.invoices.saveFiles(id, files || [], auth);
   }
-  @Post(':id/recognize') recognize(
+  @Get(':id/files/:fileIndex')
+  async downloadFile(
     @Param('id') id: string,
+    @Param('fileIndex', ParseIntPipe) fileIndex: number,
     @Headers('authorization') auth?: string,
   ) {
+    const file = await this.invoices.readFile(id, fileIndex, auth);
+    return new StreamableFile(file.data, {
+      type: file.mimeType,
+      disposition: `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+    });
+  }
+  @Post(':id/recognize')
+  @Permissions('import-check')
+  recognize(@Param('id') id: string, @Headers('authorization') auth?: string) {
     return this.invoices.recognize(id, auth);
   }
-  @Post(':id/recognized-items') addItems(
+  @Post(':id/recognized-items')
+  @Permissions('import-check')
+  addItems(
     @Param('id') id: string,
     @Body() body: any,
     @Headers('authorization') auth?: string,
   ) {
     return this.invoices.addItems(id, body, auth);
   }
-  @Patch(':id/items/:itemId') updateItem(
+  @Patch(':id/items/:itemId')
+  @Permissions('import-check')
+  updateItem(
     @Param('id') id: string,
     @Param('itemId') itemId: string,
     @Body() body: any,
@@ -102,20 +124,23 @@ export class SupplierInvoicesController {
   ) {
     return this.invoices.updateItem(id, itemId, body, auth);
   }
-  @Delete(':id/items/:itemId') deleteItem(
+  @Delete(':id/items/:itemId')
+  @Permissions('import-check')
+  deleteItem(
     @Param('id') id: string,
     @Param('itemId') itemId: string,
     @Headers('authorization') auth?: string,
   ) {
     return this.invoices.deleteItem(id, itemId, auth);
   }
-  @Post(':id/auto-match') autoMatch(
-    @Param('id') id: string,
-    @Headers('authorization') auth?: string,
-  ) {
+  @Post(':id/auto-match')
+  @Permissions('import-check')
+  autoMatch(@Param('id') id: string, @Headers('authorization') auth?: string) {
     return this.invoices.autoMatch(id, auth);
   }
-  @Post(':id/items/:itemId/match') match(
+  @Post(':id/items/:itemId/match')
+  @Permissions('import-check')
+  match(
     @Param('id') id: string,
     @Param('itemId') itemId: string,
     @Body() body: any,
@@ -123,7 +148,9 @@ export class SupplierInvoicesController {
   ) {
     return this.invoices.matchItem(id, itemId, body, auth);
   }
-  @Post(':id/allocations') allocate(
+  @Post(':id/allocations')
+  @Permissions('import-check')
+  allocate(
     @Param('id') id: string,
     @Body() body: any,
     @Headers('authorization') auth?: string,
@@ -131,6 +158,7 @@ export class SupplierInvoicesController {
     return this.invoices.allocate(id, body, auth);
   }
   @Post(':id/items/merge')
+  @Permissions('import-check')
   mergeItems(
     @Param('id') id: string,
     @Body() body: any,
@@ -138,29 +166,28 @@ export class SupplierInvoicesController {
   ) {
     return this.invoices.mergeItems(id, body, auth);
   }
-  @Post(':id/ready') ready(
-    @Param('id') id: string,
-    @Headers('authorization') auth?: string,
-  ) {
+  @Post(':id/ready')
+  @Permissions('import-check')
+  ready(@Param('id') id: string, @Headers('authorization') auth?: string) {
     return this.invoices.markReady(id, auth);
   }
-  @Post(':id/commit') commit(
+  @Post(':id/commit')
+  @Permissions('import-check')
+  commit(
     @Param('id') id: string,
     @Body() body: any,
     @Headers('authorization') auth?: string,
   ) {
     return this.invoices.commit(id, body, auth);
   }
-  @Post(':id/cancel') cancel(
-    @Param('id') id: string,
-    @Headers('authorization') auth?: string,
-  ) {
+  @Post(':id/cancel')
+  @Permissions('import-delete')
+  cancel(@Param('id') id: string, @Headers('authorization') auth?: string) {
     return this.invoices.cancel(id, auth);
   }
-  @Post(':id/rollback') rollback(
-    @Param('id') id: string,
-    @Headers('authorization') auth?: string,
-  ) {
+  @Post(':id/rollback')
+  @Permissions('import-delete')
+  rollback(@Param('id') id: string, @Headers('authorization') auth?: string) {
     return this.invoices.rollback(id, auth);
   }
 }

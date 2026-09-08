@@ -30,6 +30,7 @@ export class ImportMatcherService {
       where: {
         companyId,
         supplierId,
+        product: { companyId },
         OR: [
           ...(sku ? [{ supplierSku: sku }] : []),
           ...(barcode ? [{ supplierBarcode: barcode }] : []),

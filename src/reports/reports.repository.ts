@@ -10,8 +10,10 @@ export class ReportsRepository {
     return this.prisma;
   }
 
-  async findSellerById(sellerId: number) {
-    return this.db.user.findUnique({ where: { id: sellerId } });
+  async findSellerById(sellerId: number, companyId?: string) {
+    return this.db.user.findFirst({
+      where: { id: sellerId, ...(companyId ? { companyId } : {}) },
+    });
   }
 
   async getSellerSalarySettings(sellerId: number) {
@@ -161,8 +163,8 @@ export class ReportsRepository {
     return shops.map((shop: any) => shop.branchCode).filter(Boolean);
   }
 
-  async requireSeller(sellerId: number) {
-    const seller = await this.findSellerById(sellerId);
+  async requireSeller(sellerId: number, companyId?: string) {
+    const seller = await this.findSellerById(sellerId, companyId);
     if (!seller) {
       throw new NotFoundException('Seller not found');
     }

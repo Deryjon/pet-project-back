@@ -6,6 +6,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { promises as fs } from 'fs';
+import { resolve, sep } from 'path';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UsersService } from '../../users/users.service';
 import { ImportMatcherService } from './import-matcher.service';
@@ -44,12 +46,12 @@ export class SupplierInvoiceService {
     if (!['DRAFT', 'PROCESSING', 'REVIEW', 'READY'].includes(invoice.status))
       throw new BadRequestException('Invoice files can no longer be changed');
     if (!files.length) throw new BadRequestException('files are required');
-    const stored = files.map((file) => ({
+    const stored = files.map((file, index) => ({
       name: file.originalname,
       mimeType: file.mimetype,
       size: file.size,
       path: file.path,
-      url: `/uploads/invoices/${file.filename}`,
+      url: `/api/supplier-invoices/${id}/files/${index}`,
     }));
     return this.prisma.$transaction(async (tx: any) => {
       await tx.supplierInvoice.update({
@@ -63,30 +65,127 @@ export class SupplierInvoiceService {
     });
   }
 
+  async readFile(id: string, fileIndex: number, auth?: string) {
+    const invoice = await this.get(id, auth);
+    const files = Array.isArray(invoice.originalFiles)
+      ? invoice.originalFiles
+      : [];
+    const file = files[fileIndex] as any;
+    if (!Number.isInteger(fileIndex) || fileIndex < 0 || !file?.path) {
+      throw new NotFoundException('Invoice file not found');
+    }
+    const filePath = resolve(file.path);
+    const allowedRoots = [
+      resolve('private/invoices'),
+      resolve('uploads/invoices'),
+    ];
+    if (!allowedRoots.some((root) => filePath.startsWith(root + sep))) {
+      throw new NotFoundException('Invoice file not found');
+    }
+    try {
+      return {
+        data: await fs.readFile(filePath),
+        name: String(file.name || 'invoice'),
+        mimeType: String(file.mimeType || 'application/octet-stream'),
+      };
+    } catch {
+      throw new NotFoundException('Invoice file not found');
+    }
+  }
+
   async recognize(id: string, auth?: string) {
     const ctx = await this.context(auth);
     const invoice = await this.get(id, auth);
+    this.assertEditable(invoice);
     const files = Array.isArray(invoice.originalFiles)
-      ? (invoice.originalFiles as any[])
+      ? invoice.originalFiles
       : [];
     const result = await this.recognition.recognize(files);
-    await (this.prisma as any).supplierInvoiceItem.deleteMany({
-      where: { invoiceId: id },
-    });
-    const updated = await this.addItems(id, { items: result.items }, auth);
-    await (this.prisma as any).supplierInvoice.update({
-      where: { id },
-      data: {
-        invoiceNumber: result.invoiceNumber || invoice.invoiceNumber,
-        invoiceDate: result.invoiceDate
-          ? new Date(result.invoiceDate)
-          : invoice.invoiceDate,
+    const rows = this.prepareItems(result.items);
+    const invoiceDate = result.invoiceDate
+      ? new Date(result.invoiceDate)
+      : undefined;
+    if (invoiceDate && !Number.isFinite(invoiceDate.getTime())) {
+      throw new BadRequestException('Invalid recognized invoice date');
+    }
+
+    return this.prisma.$transaction(
+      async (tx: any) => {
+        // Lock and recheck the document after OCR: it may have been committed
+        // or cancelled while the external recognition process was running.
+        const editable = await tx.supplierInvoice.updateMany({
+          where: {
+            id,
+            companyId: ctx.companyId,
+            status: { in: ['DRAFT', 'PROCESSING', 'REVIEW', 'READY'] },
+          },
+          data: {
+            status: 'REVIEW',
+            ...(result.invoiceNumber
+              ? { invoiceNumber: result.invoiceNumber }
+              : {}),
+            ...(invoiceDate ? { invoiceDate } : {}),
+          },
+        });
+        if (!editable.count)
+          throw new ConflictException('Invoice can no longer be changed');
+        await tx.supplierInvoiceItem.deleteMany({ where: { invoiceId: id } });
+        await this.insertItems(tx, id, rows);
+        await this.audit(tx, ctx, 'OCR_COMPLETED', id, {
+          itemCount: rows.length,
+        });
+        return tx.supplierInvoice.findUnique({
+          where: { id },
+          include: this.include(),
+        });
       },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  private prepareItems(items: any) {
+    if (!Array.isArray(items) || !items.length) {
+      throw new BadRequestException('items are required');
+    }
+    return items.map((row: any) => {
+      if (!row || !String(row.rawName || '').trim()) {
+        throw new BadRequestException('rawName is required');
+      }
+      const quantity = this.num(row.quantity, 'quantity');
+      const supplyPrice = this.num(row.supplyPrice, 'supplyPrice', true);
+      const totalPrice =
+        row.totalPrice == null
+          ? quantity * supplyPrice
+          : this.num(row.totalPrice, 'totalPrice', true);
+      const warnings: string[] = [];
+      if (
+        Math.abs(quantity * supplyPrice - totalPrice) >
+        Math.max(1, quantity * supplyPrice * 0.01)
+      ) {
+        warnings.push('TOTAL_MISMATCH');
+      }
+      return {
+        rawName: String(row.rawName).trim(),
+        rawSku: row.sku || null,
+        rawBarcode: row.barcode || null,
+        originalQuantity: quantity,
+        originalSupplyPrice: supplyPrice,
+        quantity,
+        supplyPrice,
+        totalPrice,
+        warnings,
+      };
     });
-    await this.audit(this.prisma, ctx, 'OCR_COMPLETED', id, {
-      itemCount: result.items.length,
-    });
-    return updated;
+  }
+
+  private async insertItems(
+    tx: any,
+    invoiceId: string,
+    rows: ReturnType<SupplierInvoiceService['prepareItems']>,
+  ) {
+    for (const row of rows) {
+      await tx.supplierInvoiceItem.create({ data: { invoiceId, ...row } });
+    }
   }
   private include() {
     return {
@@ -218,42 +317,23 @@ export class SupplierInvoiceService {
       include: this.include(),
     });
     if (!invoice) throw new NotFoundException('Invoice not found');
-    return invoice;
+    return {
+      ...invoice,
+      originalFiles: Array.isArray(invoice.originalFiles)
+        ? invoice.originalFiles.map((file: any, index: number) => ({
+            ...file,
+            url: `/api/supplier-invoices/${id}/files/${index}`,
+          }))
+        : [],
+    };
   }
   async addItems(id: string, body: any, auth?: string) {
     const ctx = await this.context(auth);
     const invoice = await this.get(id, auth);
     this.assertEditable(invoice);
-    const rows = Array.isArray(body.items) ? body.items : [];
-    if (!rows.length) throw new BadRequestException('items are required');
+    const rows = this.prepareItems(body.items);
     return this.prisma.$transaction(async (tx: any) => {
-      for (const row of rows) {
-        const quantity = this.num(row.quantity, 'quantity'),
-          supplyPrice = this.num(row.supplyPrice, 'supplyPrice', true);
-        const warnings: string[] = [];
-        if (!String(row.rawName || '').trim())
-          throw new BadRequestException('rawName is required');
-        if (
-          row.totalPrice != null &&
-          Math.abs(quantity * supplyPrice - Number(row.totalPrice)) >
-            Math.max(1, quantity * supplyPrice * 0.01)
-        )
-          warnings.push('TOTAL_MISMATCH');
-        await tx.supplierInvoiceItem.create({
-          data: {
-            invoiceId: id,
-            rawName: String(row.rawName).trim(),
-            rawSku: row.sku || null,
-            rawBarcode: row.barcode || null,
-            originalQuantity: quantity,
-            originalSupplyPrice: supplyPrice,
-            quantity,
-            supplyPrice,
-            totalPrice: row.totalPrice ?? quantity * supplyPrice,
-            warnings,
-          },
-        });
-      }
+      await this.insertItems(tx, id, rows);
       await tx.supplierInvoice.update({
         where: { id },
         data: { status: 'REVIEW' },

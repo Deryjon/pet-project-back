@@ -3262,7 +3262,9 @@ export class ProductsService {
   }
 
   async create(body: Record<string, unknown>, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+    const context = this.requireCatalogWriteContext(
+      await this.getRequestContext(authorization),
+    );
     const productCompanyId = this.resolveProductCompanyId(body, context);
     const name = this.requireString(body.name, 'name');
     const sku = this.optionalString(body.sku);

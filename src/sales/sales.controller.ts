@@ -1,3 +1,6 @@
+import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { Permissions } from '../auth/permissions.decorator';
 import {
   Body,
   Controller,
@@ -15,12 +18,14 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SalesService } from './sales.service';
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
 @Controller()
+@Permissions('new-sale')
 export class SalesController {
   constructor(private readonly salesService: SalesService) {}
 
   @Get('sales')
+  @Permissions('all-sales')
   findAll(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -29,6 +34,7 @@ export class SalesController {
   }
 
   @Post('new-sale')
+  @Permissions('order-new')
   createDraft(@Headers('authorization') authorization?: string) {
     return this.salesService.createDraft(authorization);
   }
@@ -44,6 +50,7 @@ export class SalesController {
   }
 
   @Post(['order', 'v2/order'])
+  @Permissions('order-new')
   createOrder(
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
@@ -52,6 +59,7 @@ export class SalesController {
   }
 
   @Get(['order/:id', 'v2/order/:id'])
+  @Permissions('orders.read')
   findOrder(
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
@@ -60,6 +68,7 @@ export class SalesController {
   }
 
   @Get(['order/:id/audit-logs', 'v2/order/:id/audit-logs'])
+  @Permissions('all-sales')
   findOrderAuditLogs(
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
@@ -68,6 +77,7 @@ export class SalesController {
   }
 
   @Get(['order-draft-debt/:id', 'v1/order-draft-debt/:id'])
+  @Permissions('orders.read')
   findOrderDraftDebt(
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
@@ -76,6 +86,7 @@ export class SalesController {
   }
 
   @Get(['order-search', 'v3/order-search'])
+  @Permissions('all-sales')
   searchOrders(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -84,6 +95,7 @@ export class SalesController {
   }
 
   @Get(['order-search-stats', 'v3/order-search-stats'])
+  @Permissions('all-sales')
   searchOrderStats(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -111,6 +123,7 @@ export class SalesController {
   }
 
   @Post(['order-payment/:id', 'v2/order-payment/:id'])
+  @Permissions('order-new')
   payOrder(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -120,6 +133,7 @@ export class SalesController {
   }
 
   @Post(['order/:id/return', 'v2/order/:id/return'])
+  @Permissions('order-return')
   processReturn(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -129,6 +143,7 @@ export class SalesController {
   }
 
   @Post(['order/:id/exchange', 'v2/order/:id/exchange'])
+  @Permissions('order-return')
   processExchange(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -138,6 +153,7 @@ export class SalesController {
   }
 
   @Patch(['order/:id/payment-method', 'v2/order/:id/payment-method'])
+  @Permissions('payment-type')
   updatePaymentMethod(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -163,6 +179,7 @@ export class SalesController {
   }
 
   @Post('new-sale/:id/items')
+  @Permissions('order-new')
   addItem(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
@@ -176,6 +193,7 @@ export class SalesController {
     'v1/new-sale/:id/items/:itemId',
     'v2/new-sale/:id/items/:itemId',
   ])
+  @Permissions('order-new')
   removeItem(
     @Param('id', ParseIntPipe) id: number,
     @Param('itemId', ParseIntPipe) itemId: number,
@@ -189,6 +207,7 @@ export class SalesController {
     'v1/new-sale/:id/items/:itemId',
     'v2/new-sale/:id/items/:itemId',
   ])
+  @Permissions('order-new')
   updateItem(
     @Param('id', ParseIntPipe) id: number,
     @Param('itemId', ParseIntPipe) itemId: number,
@@ -199,6 +218,7 @@ export class SalesController {
   }
 
   @Put('new-sale/:id/discount')
+  @Permissions('manual-discount')
   updateDiscount(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
@@ -215,6 +235,7 @@ export class SalesController {
     'v1/new-sale/:id/client',
     'v2/new-sale/:id/client',
   ])
+  @Permissions('order-new')
   attachClient(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
@@ -224,6 +245,7 @@ export class SalesController {
   }
 
   @Post('new-sale/:id/pay')
+  @Permissions('order-new')
   pay(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
@@ -240,6 +262,7 @@ export class SalesController {
     'v1/new-sale/:id/leave',
     'v2/new-sale/:id/leave',
   ])
+  @Permissions('order-new')
   parkDraft(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
@@ -249,6 +272,7 @@ export class SalesController {
   }
 
   @Post(['leave-sale/:id', 'v1/leave-sale/:id', 'v2/leave-sale/:id'])
+  @Permissions('order-new')
   leaveDraft(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
@@ -263,6 +287,7 @@ export class SalesController {
     'draft-sales/:id/resume',
     'v2/draft-sales/:id/resume',
   ])
+  @Permissions('delay-finish')
   resumeParkedSale(
     @Param('id', ParseIntPipe) id: number,
     @Headers('authorization') authorization?: string,
@@ -271,6 +296,7 @@ export class SalesController {
   }
 
   @Delete('new-sale/:id')
+  @Permissions('order-new')
   remove(
     @Param('id', ParseIntPipe) id: number,
     @Headers('authorization') authorization?: string,
@@ -279,6 +305,7 @@ export class SalesController {
   }
 
   @Delete(['order/:id', 'v2/order/:id'])
+  @Permissions('order-delete')
   removeOrder(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,

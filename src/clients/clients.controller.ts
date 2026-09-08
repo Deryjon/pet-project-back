@@ -1,3 +1,5 @@
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { Permissions } from '../auth/permissions.decorator';
 import {
   Body,
   Controller,
@@ -14,11 +16,13 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ClientsService } from './clients.service';
 
 @Controller()
-@UseGuards(JwtAuthGuard, CompanyAccessGuard)
+@UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+@Permissions('clients')
 export class ClientsController {
   constructor(private readonly clientsService: ClientsService) {}
 
   @Post('clients')
+  @Permissions('client-card-edit')
   createClient(
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
@@ -58,6 +62,7 @@ export class ClientsController {
   }
 
   @Post('client-groups')
+  @Permissions('client-card-edit')
   createGroup(
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
@@ -71,6 +76,7 @@ export class ClientsController {
   }
 
   @Post('client-tags')
+  @Permissions('client-card-edit')
   createTag(
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
@@ -79,6 +85,7 @@ export class ClientsController {
   }
 
   @Get('clients/debts')
+  @Permissions('debt-detail')
   getAllDebts(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -87,6 +94,7 @@ export class ClientsController {
   }
 
   @Get('clients/:id')
+  @Permissions('client-card')
   findOne(
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
@@ -95,6 +103,7 @@ export class ClientsController {
   }
 
   @Get('v1/customer/:id')
+  @Permissions('client-card')
   findCustomerCard(
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
@@ -103,6 +112,7 @@ export class ClientsController {
   }
 
   @Patch('clients/:id')
+  @Permissions('client-card-edit')
   updateClient(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -112,6 +122,7 @@ export class ClientsController {
   }
 
   @Get('clients/:id/notes')
+  @Permissions('client-card')
   getNotes(
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
@@ -120,6 +131,7 @@ export class ClientsController {
   }
 
   @Post('clients/:id/notes')
+  @Permissions('client-card-edit')
   createNote(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -129,6 +141,7 @@ export class ClientsController {
   }
 
   @Get('clients/:id/history')
+  @Permissions('client-card')
   getHistory(
     @Param('id') id: string,
     @Query() query: Record<string, string | undefined>,
@@ -138,6 +151,7 @@ export class ClientsController {
   }
 
   @Get('clients/:id/preferences')
+  @Permissions('client-card')
   getPreferences(
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
@@ -146,6 +160,7 @@ export class ClientsController {
   }
 
   @Get('clients/:id/debts')
+  @Permissions('debt-detail')
   getDebts(
     @Param('id') id: string,
     @Query() query: Record<string, string | undefined>,
@@ -155,6 +170,7 @@ export class ClientsController {
   }
 
   @Post('clients/:id/debts')
+  @Permissions('debt-edit')
   createDebt(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -164,6 +180,7 @@ export class ClientsController {
   }
 
   @Post('clients/:id/debts/:debtId/repayment')
+  @Permissions('debt-cancel')
   repayDebt(
     @Param('id') id: string,
     @Param('debtId') debtId: string,
@@ -174,6 +191,7 @@ export class ClientsController {
   }
 
   @Get('clients/:id/cards')
+  @Permissions('client-card')
   getCards(
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
@@ -182,6 +200,7 @@ export class ClientsController {
   }
 
   @Post('clients/:id/cards')
+  @Permissions('client-card-edit')
   createCard(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
