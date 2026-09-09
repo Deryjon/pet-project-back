@@ -410,12 +410,13 @@ export class SupplierInvoiceService {
     const invoice = await this.get(id, auth);
     this.assertEditable(invoice);
     const results: any[] = [];
-    for (const item of invoice.items) {
-      const found = await this.matcher.match(
-        ctx.companyId,
-        invoice.supplierId,
-        item,
-      );
+    const matches = await this.matcher.matchMany(
+      ctx.companyId,
+      invoice.supplierId,
+      invoice.items,
+    );
+    for (const [index, item] of invoice.items.entries()) {
+      const found = matches[index];
       const updated = await (this.prisma as any).supplierInvoiceItem.update({
         where: { id: item.id },
         data: {

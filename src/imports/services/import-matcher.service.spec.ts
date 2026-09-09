@@ -230,5 +230,7 @@ describe('Import matching', () => {
         userConfirmed: false,
       },
     });
+    expect(db.product.findMany).toHaveBeenCalledTimes(1);
+    expect(db.supplierProductAlias.findMany).toHaveBeenCalledTimes(1);
   });
 });

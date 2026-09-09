@@ -8,6 +8,7 @@ import { promises as fs } from 'fs';
 import { execFile } from 'child_process';
 import { join } from 'path';
 import { InvoiceFile, RecognizedInvoice } from '../types/recognition.types';
+import { AsyncConcurrencyLimiter } from '../../common/async-concurrency-limiter';
 
 export const INVOICE_RECOGNITION_PROVIDER = Symbol(
   'INVOICE_RECOGNITION_PROVIDER',
@@ -16,15 +17,20 @@ export const INVOICE_RECOGNITION_PROVIDER = Symbol(
 @Injectable()
 export class InvoiceRecognitionService {
   private readonly logger = new Logger(InvoiceRecognitionService.name);
+  private readonly limiter = new AsyncConcurrencyLimiter(
+    Math.max(1, Number(process.env.PADDLE_OCR_MAX_CONCURRENCY) || 1),
+  );
 
   async recognize(files: InvoiceFile[]): Promise<RecognizedInvoice> {
-    if (
-      (process.env.INVOICE_RECOGNITION_PROVIDER || 'paddle').toLowerCase() ===
-      'openai'
-    ) {
-      return this.recognizeWithOpenAi(files);
-    }
-    return this.recognizeWithPaddle(files);
+    return this.limiter.run(async () => {
+      if (
+        (process.env.INVOICE_RECOGNITION_PROVIDER || 'paddle').toLowerCase() ===
+        'openai'
+      ) {
+        return this.recognizeWithOpenAi(files);
+      }
+      return this.recognizeWithPaddle(files);
+    });
   }
 
   private async recognizeWithPaddle(

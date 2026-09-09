@@ -25,6 +25,16 @@ import { randomUUID } from 'crypto';
 import { CompanyAccessGuard } from '../../auth/guards/company-access.guard';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { SupplierInvoiceService } from '../services/supplier-invoice.service';
+import {
+  AddRecognizedItemsDto,
+  AllocateSupplierInvoiceDto,
+  CommitSupplierInvoiceDto,
+  CreateSupplierInvoiceDto,
+  MatchSupplierInvoiceItemDto,
+  MergeSupplierInvoiceItemsDto,
+  SupplierInvoiceListQueryDto,
+  UpdateSupplierInvoiceItemDto,
+} from '../dto/supplier-invoice.dto';
 
 @Controller('supplier-invoices')
 @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
@@ -33,11 +43,17 @@ export class SupplierInvoicesController {
   constructor(private readonly invoices: SupplierInvoiceService) {}
   @Post()
   @Permissions('import-create')
-  create(@Body() body: any, @Headers('authorization') auth?: string) {
+  create(
+    @Body() body: CreateSupplierInvoiceDto,
+    @Headers('authorization') auth?: string,
+  ) {
     return this.invoices.create(body, auth);
   }
   @Get()
-  list(@Query() query: any, @Headers('authorization') auth?: string) {
+  list(
+    @Query() query: SupplierInvoiceListQueryDto,
+    @Headers('authorization') auth?: string,
+  ) {
     return this.invoices.list(query, auth);
   }
   @Get(':id')
@@ -114,7 +130,7 @@ export class SupplierInvoicesController {
   @Permissions('import-check')
   addItems(
     @Param('id') id: string,
-    @Body() body: any,
+    @Body() body: AddRecognizedItemsDto,
     @Headers('authorization') auth?: string,
   ) {
     return this.invoices.addItems(id, body, auth);
@@ -124,7 +140,7 @@ export class SupplierInvoicesController {
   updateItem(
     @Param('id') id: string,
     @Param('itemId') itemId: string,
-    @Body() body: any,
+    @Body() body: UpdateSupplierInvoiceItemDto,
     @Headers('authorization') auth?: string,
   ) {
     return this.invoices.updateItem(id, itemId, body, auth);
@@ -148,7 +164,7 @@ export class SupplierInvoicesController {
   match(
     @Param('id') id: string,
     @Param('itemId') itemId: string,
-    @Body() body: any,
+    @Body() body: MatchSupplierInvoiceItemDto,
     @Headers('authorization') auth?: string,
   ) {
     return this.invoices.matchItem(id, itemId, body, auth);
@@ -157,7 +173,7 @@ export class SupplierInvoicesController {
   @Permissions('import-check')
   allocate(
     @Param('id') id: string,
-    @Body() body: any,
+    @Body() body: AllocateSupplierInvoiceDto,
     @Headers('authorization') auth?: string,
   ) {
     return this.invoices.allocate(id, body, auth);
@@ -166,7 +182,7 @@ export class SupplierInvoicesController {
   @Permissions('import-check')
   mergeItems(
     @Param('id') id: string,
-    @Body() body: any,
+    @Body() body: MergeSupplierInvoiceItemsDto,
     @Headers('authorization') auth?: string,
   ) {
     return this.invoices.mergeItems(id, body, auth);
@@ -180,7 +196,7 @@ export class SupplierInvoicesController {
   @Permissions('import-check')
   commit(
     @Param('id') id: string,
-    @Body() body: any,
+    @Body() body: CommitSupplierInvoiceDto,
     @Headers('authorization') auth?: string,
   ) {
     return this.invoices.commit(id, body, auth);
