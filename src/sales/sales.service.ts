@@ -34,6 +34,13 @@ const SHOP_BY_BRANCH_CODE: Record<
   { shop_id: string; shop_name: string; id?: string; aliases?: string[] }
 > = {};
 
+type SaleStockWriteOffResult = {
+  companyId: string;
+  branchCode: string;
+  lowStockSettings: { enabled: boolean; threshold: number };
+  lowStockCrossings: Array<{ productId: number; quantity: number }>;
+};
+
 @Injectable()
 export class SalesService {
   private readonly logger = new Logger(SalesService.name);
@@ -795,16 +802,7 @@ export class SalesService {
       };
     }
 
-    await this.recalculateSale(sale.id);
-
-    await this.finalizeSaleItemSnapshots(
-      sale.id,
-      sale.branchCode,
-      sale.userId ?? null,
-      sale.companyId ?? context?.companyId ?? null,
-    );
-
-    await this.writeOffSaleItemsFromStock(sale);
+    const recalculatedSale = await this.recalculateSale(sale.id);
 
     const paymentsInput = Array.isArray(body.payments)
       ? (body.payments as Record<string, unknown>[]).filter(
@@ -813,7 +811,7 @@ export class SalesService {
       : [];
     this.validatePaymentAmounts(
       paymentsInput,
-      this.getSalePayableAmount(sale),
+      this.getSalePayableAmount(recalculatedSale),
       body,
     );
 
@@ -856,35 +854,62 @@ export class SalesService {
       },
     );
 
-    let paidSale: any = null;
-    await this.prisma.$transaction(async (tx) => {
-      const updatedSale = await tx.sale.update({
-        where: { id: sale.id },
-        data: {
-          status: 'paid',
-          isDraft: false,
-          paymentMethod,
-          extraPayments: extraPayments ?? undefined,
-          clientId: resolvedClient.clientId,
-          clientName: resolvedClient.clientName,
-          parkNote: null,
-          paidAt: new Date(),
-        },
-      });
-      paidSale = updatedSale;
-      await this.createDebtForFinalizedSale(tx, updatedSale, body, context);
-      await this.refreshClientSalesAggregates(
-        tx,
-        updatedSale.companyId ?? context?.companyId ?? null,
-        (updatedSale as any).clientId ?? null,
-      );
-    });
+    const { paidSale, stockPosting } = await runSerializableTransaction(
+      this.prisma,
+      async (tx) => {
+        const claimed = await tx.sale.updateMany({
+          where: { id: sale.id, isDraft: true },
+          data: { status: 'processing' },
+        });
+        if (claimed.count !== 1) {
+          throw new ConflictException('Продажа уже проведена или изменена');
+        }
 
-    if (paidSale) {
-      this.telegramService.notifySale(paidSale).catch((err) =>
-        this.logger.error('Telegram notifySale failed', err),
-      );
-    }
+        const transactionSale = await tx.sale.findUniqueOrThrow({
+          where: { id: sale.id },
+          include: { items: true },
+        });
+        await this.finalizeSaleItemSnapshots(
+          sale.id,
+          transactionSale.branchCode,
+          transactionSale.userId ?? null,
+          transactionSale.companyId ?? context?.companyId ?? null,
+          tx,
+        );
+        const stockPosting = await this.writeOffSaleItemsFromStock(
+          transactionSale,
+          undefined,
+          tx,
+          false,
+        );
+        const updatedSale = await tx.sale.update({
+          where: { id: sale.id },
+          data: {
+            status: 'paid',
+            isDraft: false,
+            paymentMethod,
+            extraPayments: extraPayments ?? undefined,
+            clientId: resolvedClient.clientId,
+            clientName: resolvedClient.clientName,
+            parkNote: null,
+            paidAt: new Date(),
+          },
+        });
+        await this.createDebtForFinalizedSale(tx, updatedSale, body, context);
+        await this.refreshClientSalesAggregates(
+          tx,
+          updatedSale.companyId ?? context?.companyId ?? null,
+          (updatedSale as any).clientId ?? null,
+        );
+        return { paidSale: updatedSale, stockPosting };
+      },
+    );
+
+    await this.notifySaleStockCrossings(stockPosting);
+
+    this.telegramService.notifySale(paidSale).catch((err) =>
+      this.logger.error('Telegram notifySale failed', err),
+    );
 
     return {
       order_type: 'SALE',
@@ -1452,7 +1477,7 @@ export class SalesService {
       return this.toSaleListItem(sale, context);
     }
 
-    await this.recalculateSale(id);
+    const recalculatedSale = await this.recalculateSale(id);
 
     const branchCode =
       (await this.resolveScopedBranchCode(
@@ -1473,15 +1498,6 @@ export class SalesService {
       if (seller) resolvedSellerId = seller.id;
     }
 
-    await this.finalizeSaleItemSnapshots(
-      id,
-      branchCode,
-      resolvedSellerId ?? context?.userId ?? null,
-      sale.companyId ?? context?.companyId ?? null,
-    );
-
-    await this.writeOffSaleItemsFromStock(sale, branchCode);
-
     const resolvedClient = await this.resolveSaleClientPayload(
       body,
       sale.companyId ?? context?.companyId ?? null,
@@ -1499,7 +1515,7 @@ export class SalesService {
 
     this.validatePaymentAmounts(
       paymentsInput,
-      this.getSalePayableAmount(sale),
+      this.getSalePayableAmount(recalculatedSale),
       body,
     );
 
@@ -1534,37 +1550,68 @@ export class SalesService {
 
     const saleComment = this.optionalString(body.comment);
 
-    const updatedSale = await this.prisma.$transaction(async (tx) => {
-      const persistedSale = await tx.sale.update({
-        where: { id },
-        data: {
-          status: 'paid',
-          isDraft: false,
-          paymentMethod,
-          ...(extraPayments !== null ? { extraPayments } : {}),
-          ...(resolvedSellerId !== null ? { userId: resolvedSellerId } : {}),
-          clientId: resolvedClient.clientId,
-          clientName: resolvedClient.clientName,
-          parkNote: null,
+    const { updatedSale, stockPosting } = await runSerializableTransaction(
+      this.prisma,
+      async (tx) => {
+        const claimed = await tx.sale.updateMany({
+          where: { id, isDraft: true },
+          data: { status: 'processing' },
+        });
+        if (claimed.count !== 1) {
+          throw new ConflictException('Продажа уже проведена или изменена');
+        }
+
+        const transactionSale = await tx.sale.findUniqueOrThrow({
+          where: { id },
+          include: { items: true },
+        });
+        await this.finalizeSaleItemSnapshots(
+          id,
           branchCode,
-          paidAt: new Date(),
-          ...(saleComment ? { comment: saleComment } : {}),
-        },
-      });
-      await this.createDebtForFinalizedSale(tx, persistedSale, body, context);
-      await this.refreshClientSalesAggregates(
-        tx,
-        persistedSale.companyId ?? context?.companyId ?? null,
-        (persistedSale as any).clientId ?? null,
-      );
-      return tx.sale.findUniqueOrThrow({
-        where: { id },
-        include: {
-          user: true,
-          items: true,
-        },
-      });
-    });
+          resolvedSellerId ?? context?.userId ?? null,
+          transactionSale.companyId ?? context?.companyId ?? null,
+          tx,
+        );
+        const stockPosting = await this.writeOffSaleItemsFromStock(
+          transactionSale,
+          branchCode,
+          tx,
+          false,
+        );
+        const persistedSale = await tx.sale.update({
+          where: { id },
+          data: {
+            status: 'paid',
+            isDraft: false,
+            paymentMethod,
+            ...(extraPayments !== null ? { extraPayments } : {}),
+            ...(resolvedSellerId !== null ? { userId: resolvedSellerId } : {}),
+            clientId: resolvedClient.clientId,
+            clientName: resolvedClient.clientName,
+            parkNote: null,
+            branchCode,
+            paidAt: new Date(),
+            ...(saleComment ? { comment: saleComment } : {}),
+          },
+        });
+        await this.createDebtForFinalizedSale(tx, persistedSale, body, context);
+        await this.refreshClientSalesAggregates(
+          tx,
+          persistedSale.companyId ?? context?.companyId ?? null,
+          (persistedSale as any).clientId ?? null,
+        );
+        const updatedSale = await tx.sale.findUniqueOrThrow({
+          where: { id },
+          include: {
+            user: true,
+            items: true,
+          },
+        });
+        return { updatedSale, stockPosting };
+      },
+    );
+
+    await this.notifySaleStockCrossings(stockPosting);
 
     this.telegramService.notifySale(updatedSale).catch((err) =>
       this.logger.error('Telegram notifySale failed', err),
@@ -2800,7 +2847,7 @@ export class SalesService {
     const flatDiscount = Number(sale.discountAmount);
     const payableTotal = Math.max(0, total - percentDiscount - flatDiscount);
 
-    await this.prisma.sale.update({
+    return this.prisma.sale.update({
       where: { id },
       data: {
         total,
@@ -2919,7 +2966,9 @@ export class SalesService {
       }[];
     },
     branchCodeOverride?: string | null,
-  ) {
+    txOverride?: Prisma.TransactionClient,
+    notify = true,
+  ): Promise<SaleStockWriteOffResult | undefined> {
     const sale = {
       ...saleInput,
       items: saleInput.items.map((item) => ({
@@ -2955,12 +3004,12 @@ export class SalesService {
     }
 
     const lowStockSettings = await this.telegramService.getLowStockThresholdSettings();
-    const lowStockCrossings: Array<{
-      productId: number;
-      quantity: number;
-    }> = [];
+    const postItems = async (tx: Prisma.TransactionClient) => {
+      const lowStockCrossings: Array<{
+        productId: number;
+        quantity: number;
+      }> = [];
 
-    await runSerializableTransaction(this.prisma, async (tx) => {
       for (const item of sale.items) {
         if (!item.productId) {
           continue;
@@ -3001,38 +3050,69 @@ export class SalesService {
           },
         });
       }
-    });
 
-    if (lowStockSettings.enabled && lowStockCrossings.length) {
-      const products = await this.prisma.product.findMany({
-        where: { id: { in: lowStockCrossings.map((c) => c.productId) } },
-        select: { id: true, name: true, sku: true, barcode: true },
-      });
-      const productById = new Map(products.map((p) => [p.id, p]));
+      return lowStockCrossings;
+    };
 
-      await Promise.all(
-        lowStockCrossings.map((crossing) => {
-          const product = productById.get(crossing.productId);
-          if (!product) {
-            return Promise.resolve();
-          }
+    const lowStockCrossings = txOverride
+      ? await postItems(txOverride)
+      : await runSerializableTransaction(this.prisma, postItems);
 
-          return this.telegramService
-            .notifyLowStock({
-              companyId,
-              branchCode,
-              productName: product.name,
-              sku: product.sku,
-              barcode: product.barcode,
-              quantity: crossing.quantity,
-              threshold: lowStockSettings.threshold,
-            })
-            .catch((err) =>
-              this.logger.error('Telegram notifyLowStock failed', err),
-            );
-        }),
-      );
+    const result = {
+      companyId,
+      branchCode,
+      lowStockSettings,
+      lowStockCrossings,
+    };
+
+    if (notify) {
+      await this.notifySaleStockCrossings(result);
     }
+
+    return result;
+  }
+
+  private async notifySaleStockCrossings(
+    result: SaleStockWriteOffResult | undefined,
+  ) {
+    if (
+      !result ||
+      !result.lowStockSettings.enabled ||
+      !result.lowStockCrossings.length
+    ) {
+      return;
+    }
+
+    const products = await this.prisma.product.findMany({
+      where: {
+        id: { in: result.lowStockCrossings.map((crossing) => crossing.productId) },
+      },
+      select: { id: true, name: true, sku: true, barcode: true },
+    });
+    const productById = new Map(products.map((product) => [product.id, product]));
+
+    await Promise.all(
+      result.lowStockCrossings.map((crossing) => {
+        const product = productById.get(crossing.productId);
+        if (!product) {
+          return Promise.resolve();
+        }
+
+        return this.telegramService
+          .notifyLowStock({
+            companyId: result.companyId,
+            branchCode: result.branchCode,
+            productName: product.name,
+            sku: product.sku,
+            barcode: product.barcode,
+            quantity: crossing.quantity,
+            threshold: result.lowStockSettings.threshold,
+          })
+          .catch((err) =>
+            this.logger.error('Telegram notifyLowStock failed', err),
+          );
+      }),
+    );
   }
 
   private async restoreSaleStock(saleInput: {
