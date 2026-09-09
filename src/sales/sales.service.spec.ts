@@ -476,7 +476,7 @@ describe('SalesService money calculations', () => {
       lowStockNotifiedAt: Date | null;
       purchasePrice?: number | null;
       salePrice?: number | null;
-    }) {
+    } | null) {
       const productStockUpdate = jest.fn().mockResolvedValue({ count: 1 });
       const stockMovementCreate = jest.fn();
       const notifyLowStock = jest.fn().mockResolvedValue(undefined);
@@ -555,6 +555,15 @@ describe('SalesService money calculations', () => {
           threshold: 5,
         }),
       );
+    });
+
+    it('rejects a sale when the warehouse has no stock row', async () => {
+      const { service, prisma } = createServiceWithStock(null);
+
+      await expect(
+        (service as any).writeOffSaleItemsFromStock(sale),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect((prisma.stockMovement.create as jest.Mock)).not.toHaveBeenCalled();
     });
 
     it('does not re-notify when already armed and still below threshold', async () => {

@@ -7,6 +7,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { runSerializableTransaction } from '../../common/serializable-transaction';
+import { postSaleStockDecrease } from '../../common/sale-stock-posting';
 import { UsersService } from '../../users/users.service';
 import { AddOrderItemDto } from './dto/add-order-item.dto';
 import { AddPaymentDto } from './dto/add-payment.dto';
@@ -455,61 +456,16 @@ export class OrdersService {
 
         for (const item of order.items) {
           const quantity = this.toStockQuantity(item.quantity);
-          const stock = await tx.productStock.findFirst({
-            where: {
-              productId: item.productId,
-              branchCode: order.shop.branchCode,
-            },
-          });
-
-          if (!stock || stock.quantity < quantity) {
-            throw new BadRequestException('Недостаточно товара на складе');
-          }
-
-          const beforeQuantity = new Prisma.Decimal(stock.quantity);
-          const afterQuantity = beforeQuantity.minus(quantity);
-          const supplyPrice = stock.purchasePrice ?? 0;
-          const retailPrice = Number(item.price ?? stock.salePrice ?? 0);
-          const fromRetailPrice = stock.salePrice ?? 0;
-
-          const decremented = await tx.productStock.updateMany({
-            where: {
-              id: stock.id,
-              quantity: { gte: quantity },
-            },
-            data: {
-              quantity: {
-                decrement: quantity,
-              },
-            },
-          });
-          if (decremented.count !== 1) {
-            throw new BadRequestException('Недостаточно товара на складе');
-          }
-
-          const stockMovement = await tx.stockMovement.create({
-            data: {
-              companyId: order.companyId,
-              shopId: order.shopId,
-              productId: item.productId,
-              orderId: order.id,
-              type: 'SALE',
-              displayTypeCode: 'sale',
-              displayTypeLabel: 'Продажа',
-              externalId: order.orderNumber,
-              quantity: item.quantity,
-              loadedMeasurementValue: afterQuantity,
-              beforeQuantity,
-              afterQuantity,
-              fromShopId: order.shopId,
-              toShopId: order.shopId,
-              supplyPrice,
-              retailPrice,
-              newRetailPrice: retailPrice,
-              fromRetailPrice,
-              fromSupplyPrice: supplyPrice,
-              createdById: context.userId,
-            },
+          const posting = await postSaleStockDecrease(tx, {
+            companyId: order.companyId,
+            shopId: order.shopId,
+            branchCode: order.shop.branchCode,
+            productId: item.productId,
+            orderId: order.id,
+            quantity,
+            createdById: context.userId,
+            externalId: order.orderNumber,
+            retailPrice: item.price,
           });
 
           await this.createAuditLog(
@@ -517,14 +473,14 @@ export class OrdersService {
             context,
             'stock.movement_created',
             'StockMovement',
-            stockMovement.id,
+            posting.movement.id,
             {
               orderId: order.id,
               productId: item.productId,
               type: 'SALE',
               quantity: item.quantity.toString(),
-              beforeQuantity: beforeQuantity.toString(),
-              afterQuantity: afterQuantity.toString(),
+              beforeQuantity: posting.beforeQuantity.toString(),
+              afterQuantity: posting.afterQuantity.toString(),
             },
           );
 

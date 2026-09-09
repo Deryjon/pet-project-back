@@ -12,6 +12,8 @@ import { CompanySettingsService } from '../company-settings/company-settings.ser
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { UsersService } from '../users/users.service';
+import { postSaleStockDecrease } from '../common/sale-stock-posting';
+import { runSerializableTransaction } from '../common/serializable-transaction';
 
 const COMPANY_ID = process.env.COMPANY_ID ?? '';
 const DEFAULT_PRODUCT_TYPE_ID =
@@ -2467,10 +2469,34 @@ export class SalesService {
     }
 
     for (const item of items) {
+      if (multiplier === -1) {
+        if (!meta?.companyId || !meta.userId || meta.movementType !== 'SALE') {
+          throw new InternalServerErrorException(
+            'Для списания товара не задан контекст складского движения',
+          );
+        }
+
+        await postSaleStockDecrease(tx, {
+          companyId: meta.companyId,
+          shopId,
+          branchCode,
+          productId: item.productId,
+          quantity: item.quantity,
+          createdById: meta.userId,
+          externalId: meta.externalId ?? '',
+          retailPrice: item.salePrice,
+        });
+        continue;
+      }
+
       const stock = await tx.productStock.findFirst({
         where: {
           productId: item.productId,
+          shopId,
           branchCode,
+          ...(meta?.companyId
+            ? { product: { companyId: meta.companyId } }
+            : {}),
         },
       });
 
@@ -2478,35 +2504,10 @@ export class SalesService {
         const beforeQuantity = stock.quantity;
         const afterQuantity = stock.quantity + item.quantity * multiplier;
 
-        if (multiplier === -1) {
-          // Decrementing (e.g. consuming stock for a new exchange item) —
-          // guard atomically against a concurrent sale/exchange racing this
-          // one down below zero, instead of computing afterQuantity in JS
-          // and blindly writing it.
-          const updated = await tx.productStock.updateMany({
-            where: {
-              id: stock.id,
-              quantity: { gte: item.quantity },
-            },
-            data: {
-              quantity: { decrement: item.quantity },
-            },
-          });
-
-          if (updated.count === 0) {
-            throw new ConflictException(
-              `Недостаточно остатка по товару ${item.productId} на складе ${branchCode}`,
-            );
-          }
-        } else {
-          // Incrementing (restoring stock from a return) can't go negative,
-          // so no gte-guard is needed — just use the atomic increment
-          // operator instead of a computed absolute write.
-          await tx.productStock.update({
-            where: { id: stock.id },
-            data: { quantity: { increment: item.quantity } },
-          });
-        }
+        await tx.productStock.update({
+          where: { id: stock.id },
+          data: { quantity: { increment: item.quantity } },
+        });
 
         if (shopId && meta?.companyId && meta?.userId && meta?.movementType) {
           await this.createStockMovement(tx, {
@@ -2540,7 +2541,7 @@ export class SalesService {
             productId: item.productId,
             shopId,
             branchCode,
-            quantity: item.quantity * multiplier,
+            quantity: item.quantity,
             purchasePrice: product?.purchasePrice ?? 0,
             salePrice: item.salePrice,
           },
@@ -2554,7 +2555,7 @@ export class SalesService {
             type: meta.movementType,
             quantity: item.quantity,
             beforeQuantity: 0,
-            afterQuantity: item.quantity * multiplier,
+            afterQuantity: item.quantity,
             createdById: meta.userId,
             externalId: meta.externalId ?? '',
             supplyPrice: product?.purchasePrice ?? 0,
@@ -2959,114 +2960,30 @@ export class SalesService {
       quantity: number;
     }> = [];
 
-    await this.prisma.$transaction(async (tx) => {
+    await runSerializableTransaction(this.prisma, async (tx) => {
       for (const item of sale.items) {
         if (!item.productId) {
           continue;
         }
 
-        const stock = await tx.productStock.findFirst({
-          where: {
-            productId: item.productId,
-            shopId,
-            branchCode,
-          },
-        });
-
-        if (stock) {
-          const beforeQuantity = stock.quantity;
-          const afterQuantity = stock.quantity - item.quantity;
-          const crossedBelow =
-            lowStockSettings.threshold > 0 &&
-            beforeQuantity >= lowStockSettings.threshold &&
-            afterQuantity < lowStockSettings.threshold &&
-            !stock.lowStockNotifiedAt;
-          const crossedAbove =
-            lowStockSettings.threshold > 0 &&
-            afterQuantity >= lowStockSettings.threshold &&
-            stock.lowStockNotifiedAt;
-
-          const updated = await tx.productStock.updateMany({
-            where: {
-              id: stock.id,
-              quantity: { gte: item.quantity },
-            },
-            data: {
-              quantity: {
-                decrement: item.quantity,
-              },
-              ...(crossedBelow ? { lowStockNotifiedAt: new Date() } : {}),
-              ...(crossedAbove ? { lowStockNotifiedAt: null } : {}),
-            },
-          });
-
-          if (updated.count === 0) {
-            throw new ConflictException(
-              `Недостаточно остатка по товару ${item.productId} на складе ${branchCode}`,
-            );
-          }
-
-          if (crossedBelow) {
-            lowStockCrossings.push({
-              productId: item.productId,
-              quantity: afterQuantity,
-            });
-          }
-
-          await this.createStockMovement(tx, {
-            companyId,
-            shopId,
-            productId: item.productId,
-            type: 'SALE',
-            quantity: item.quantity,
-            beforeQuantity,
-            afterQuantity,
-            createdById,
-            externalId: sale.number,
-            supplyPrice: stock.purchasePrice ?? 0,
-            retailPrice: item.salePrice,
-            newRetailPrice: item.salePrice,
-            fromRetailPrice: stock.salePrice ?? 0,
-            fromSupplyPrice: stock.purchasePrice ?? 0,
-          });
-          continue;
-        }
-
-        const product = await tx.product.findUnique({
-          where: { id: item.productId },
-          select: {
-            purchasePrice: true,
-            salePrice: true,
-          },
-        });
-
-        await tx.productStock.create({
-          data: {
-            productId: item.productId,
-            shopId,
-            branchCode,
-            quantity: -item.quantity,
-            purchasePrice: product?.purchasePrice ?? 0,
-            salePrice: item.salePrice,
-          },
-        });
-
-        await this.createStockMovement(tx, {
+        const posting = await postSaleStockDecrease(tx, {
           companyId,
           shopId,
+          branchCode,
           productId: item.productId,
-          type: 'SALE',
           quantity: item.quantity,
-          beforeQuantity: 0,
-          afterQuantity: -item.quantity,
           createdById,
           externalId: sale.number,
-          supplyPrice: product?.purchasePrice ?? 0,
           retailPrice: item.salePrice,
-          newRetailPrice: item.salePrice,
-          fromRetailPrice: product?.salePrice ?? 0,
-          fromSupplyPrice: product?.purchasePrice ?? 0,
+          lowStockThreshold: lowStockSettings.threshold,
         });
+
+        if (posting.crossedBelowLowStockThreshold) {
+          lowStockCrossings.push({
+            productId: item.productId,
+            quantity: posting.afterQuantity,
+          });
+        }
       }
 
       for (const productId of productIds) {
