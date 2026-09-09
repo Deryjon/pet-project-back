@@ -30,7 +30,7 @@ describe('Warehouse company and shop isolation', () => {
       $transaction: jest.fn((operation) => operation(db)),
     };
     service = new WarehouseService(db, {
-      getRequestContext: jest.fn().mockResolvedValue({
+      getCompanyRequestContext: jest.fn().mockResolvedValue({
         userType: 'company',
         companyId: 'own',
         userId: 1,
@@ -113,7 +113,7 @@ describe('Warehouse company and shop isolation', () => {
   });
   it('does not remove filtering for a user with no shops', async () => {
     const noShops = new WarehouseService(db, {
-      getRequestContext: async () => ({
+      getCompanyRequestContext: async () => ({
         userType: 'company',
         companyId: 'own',
         allowedShopIds: [],

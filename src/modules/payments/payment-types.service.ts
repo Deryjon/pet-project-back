@@ -1,6 +1,5 @@
 import {
   ConflictException,
-  ForbiddenException,
   Injectable,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -64,17 +63,7 @@ export class PaymentTypesService {
   }
 
   private async getCompanyContext(authorization?: string) {
-    const context = await this.usersService.getRequestContext(authorization);
-    if (context.userType !== 'company' || !context.companyId) {
-      throw new ForbiddenException(
-        'Only company users can manage payment types',
-      );
-    }
-
-    return {
-      companyId: context.companyId,
-      userId: context.userId,
-    };
+    return this.usersService.getCompanyRequestContext(authorization);
   }
 
   private toPaymentTypeResponse(paymentType: {

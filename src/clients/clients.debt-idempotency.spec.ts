@@ -37,7 +37,7 @@ describe('ClientsService repayment idempotency', () => {
       prisma,
       { toIsoForCompany: (date: Date) => date.toISOString() } as any,
       {
-        getRequestContext: async () => ({
+        getCompanyRequestContext: async () => ({
           userType: 'company',
           companyId: 'company-1',
           userId: 7,

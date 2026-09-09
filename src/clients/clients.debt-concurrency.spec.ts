@@ -56,7 +56,7 @@ describe('ClientsService.repayDebt concurrency guard', () => {
       toIsoForCompany: jest.fn((date) => date.toISOString()),
     };
     const users: any = {
-      getRequestContext: jest.fn(async () => ({
+      getCompanyRequestContext: jest.fn(async () => ({
         userType: 'company',
         companyId: 'company-1',
         userId: 7,

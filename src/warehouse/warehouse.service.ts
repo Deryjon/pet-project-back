@@ -18,11 +18,7 @@ export class WarehouseService {
   ) {}
 
   private async context(auth?: string) {
-    const context = await this.usersService.getRequestContext(auth);
-    if (context.userType !== 'company' || !context.companyId) {
-      throw new ForbiddenException('Company context required');
-    }
-    return { ...context, companyId: context.companyId };
+    return this.usersService.getCompanyRequestContext(auth);
   }
 
   private scope(context: { companyId: string; allowedShopIds: string[] }) {
@@ -231,8 +227,6 @@ export class WarehouseService {
 
   async createInventorySession(body: Record<string, unknown>, auth?: string) {
     const context = await this.context(auth);
-    if (!context?.companyId || !context?.userId)
-      throw new BadRequestException('Auth required');
     const shopId = String(body.shop_id || '').trim();
     if (!shopId) throw new BadRequestException('shop_id required');
     if (!context.allowedShopIds.includes(shopId))

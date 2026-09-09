@@ -10,16 +10,14 @@ import {
   ClientGender,
   Prisma,
 } from '@prisma/client';
+import { CompanyRequestContext } from '../auth/request-context';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { resolveProductPhotoUrl } from '../common/product-photo.util';
 import { runSerializableTransaction } from '../common/serializable-transaction';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 
-type ClientContext = Awaited<ReturnType<UsersService['getRequestContext']>>;
-type CompanyClientContext = Omit<ClientContext, 'companyId'> & {
-  companyId: string;
-};
+type CompanyClientContext = CompanyRequestContext;
 type ClientListRecord = Prisma.ClientGetPayload<{
   include: {
     registrationShop: true;
@@ -926,9 +924,7 @@ export class ClientsService {
       this.prisma.shop.findMany({
         where: {
           companyId: context.companyId,
-          ...(context.allowedShopIds.length
-            ? { id: { in: context.allowedShopIds } }
-            : {}),
+          id: { in: context.allowedShopIds },
         },
         orderBy: { name: 'asc' },
       }),
@@ -945,11 +941,7 @@ export class ClientsService {
   private async getContext(
     authorization?: string,
   ): Promise<CompanyClientContext> {
-    const context = await this.usersService.getRequestContext(authorization);
-    if (!context.companyId) {
-      throw new ForbiddenException('Company context required');
-    }
-    return context as CompanyClientContext;
+    return this.usersService.getCompanyRequestContext(authorization);
   }
 
   private async generateClientCode(
@@ -970,10 +962,7 @@ export class ClientsService {
     if (!shopId) {
       return null;
     }
-    if (
-      context.allowedShopIds.length &&
-      !context.allowedShopIds.includes(shopId)
-    ) {
+    if (!context.allowedShopIds.includes(shopId)) {
       throw new BadRequestException('registration_shop_id is not accessible');
     }
     const shop = await this.prisma.shop.findFirst({
