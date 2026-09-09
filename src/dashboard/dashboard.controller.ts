@@ -8,9 +8,13 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { Permissions } from '../auth/permissions.decorator';
 import { DashboardService } from './dashboard.service';
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+@Permissions('dashboard-orders')
 @Controller()
 export class DashboardController {
   constructor(private readonly dashboardService: DashboardService) {}
@@ -43,7 +47,10 @@ export class DashboardController {
   }
 
   @Post('v1/dashboard-setting')
-  saveDashboardSetting(@Body() body: Record<string, unknown>) {
-    return this.dashboardService.saveDashboardSetting(body);
+  saveDashboardSetting(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.dashboardService.saveDashboardSetting(body, authorization);
   }
 }

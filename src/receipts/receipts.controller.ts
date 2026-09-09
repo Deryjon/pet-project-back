@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -29,12 +28,8 @@ export class ReceiptsController {
   ) {}
 
   private async requireCompanyId(authorization?: string) {
-    const context = authorization
-      ? await this.usersService.getRequestContext(authorization)
-      : null;
-    if (!context?.companyId) {
-      throw new BadRequestException('Company context is required');
-    }
+    const context =
+      await this.usersService.getCompanyRequestContext(authorization);
     return context.companyId;
   }
 

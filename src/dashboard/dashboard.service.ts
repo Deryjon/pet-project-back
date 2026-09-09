@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
+import { CompanyRequestContext } from '../auth/request-context';
 import {
   getSaleItemNetSales,
   getSignedSaleAmount,
@@ -40,26 +40,33 @@ export class DashboardService {
     },
     authorization?: string,
   ) {
-    const context = authorization
-      ? await this.usersService.getRequestContext(authorization)
-      : null;
+    const context =
+      await this.usersService.getCompanyRequestContext(authorization);
     const startDate = this.parseStartDate(query.startDate);
     const reportPeriod = (query.reportPeriod ?? '').trim().toLowerCase();
     const detalization = (query.detalization ?? 'hour').trim().toLowerCase();
-    const companyId = context?.companyId ?? undefined;
-    const allowedBranchCodes = context?.allowedBranchCodes as string[] | undefined;
-    const filterBranchCode = query.branchCode || undefined;
+    const companyId = context.companyId;
+    const allowedBranchCodes = context.allowedBranchCodes;
+    const filterBranchCode = query.branchCode?.trim() || undefined;
+    if (filterBranchCode && !allowedBranchCodes.includes(filterBranchCode)) {
+      throw new BadRequestException(
+        'Requested branch is not available for this user',
+      );
+    }
     const allShops = await this.loadVisibleShops(companyId, allowedBranchCodes);
     const shops = filterBranchCode
       ? allShops.filter((s) => s.branchCode === filterBranchCode)
       : allShops;
-    const endDate = this.buildEndDate(startDate, detalization, reportPeriod, query.endDate);
+    const endDate = this.buildEndDate(
+      startDate,
+      detalization,
+      reportPeriod,
+      query.endDate,
+    );
 
     const effectiveBranchCodes = filterBranchCode
       ? [filterBranchCode]
-      : allowedBranchCodes?.length
-        ? allowedBranchCodes
-        : undefined;
+      : allowedBranchCodes;
 
     const sales = await this.prisma.sale.findMany({
       where: {
@@ -72,20 +79,10 @@ export class DashboardService {
             'partially_exchanged',
           ],
         },
-        ...(companyId
-          ? {
-              user: {
-                companyId,
-              },
-            }
-          : {}),
-        ...(effectiveBranchCodes?.length
-          ? {
-              branchCode: {
-                in: effectiveBranchCodes,
-              },
-            }
-          : {}),
+        companyId,
+        branchCode: {
+          in: effectiveBranchCodes,
+        },
         paidAt: {
           gte: startDate,
           lt: endDate,
@@ -105,7 +102,7 @@ export class DashboardService {
         .filter((shop) => shop.branchCode)
         .map((shop) => [shop.branchCode, shop]),
     );
-    const shopByName = new Map(shops.map((shop) => [shop.name, shop])); 
+    const shopByName = new Map(shops.map((shop) => [shop.name, shop]));
     const currencyCode =
       query.currency?.trim() ||
       this.companySettingsService.getDefaultCurrencyIsoCode(companyId);
@@ -115,16 +112,28 @@ export class DashboardService {
     );
     const bucketTotals = bucketStarts.map((bucketStart, index) => {
       const nextBucketStart = bucketStarts[index + 1];
-      let bucketEndDate = new Date(bucketStart);
+      const bucketEndDate = new Date(bucketStart);
 
       // Calculate end_date for each bucket based on detalization
       switch (detalization) {
-        case 'month': bucketEndDate.setMonth(bucketEndDate.getMonth() + 1); bucketEndDate.setDate(bucketEndDate.getDate() - 1); break;
-        case 'week': bucketEndDate.setDate(bucketEndDate.getDate() + 6); break;
-        case 'day': bucketEndDate.setDate(bucketEndDate.getDate()); break;
-        case 'hour': default: bucketEndDate.setHours(bucketEndDate.getHours()); break;
+        case 'month':
+          bucketEndDate.setMonth(bucketEndDate.getMonth() + 1);
+          bucketEndDate.setDate(bucketEndDate.getDate() - 1);
+          break;
+        case 'week':
+          bucketEndDate.setDate(bucketEndDate.getDate() + 6);
+          break;
+        case 'day':
+          bucketEndDate.setDate(bucketEndDate.getDate());
+          break;
+        case 'hour':
+        default:
+          bucketEndDate.setHours(bucketEndDate.getHours());
+          break;
       }
-      const actualEndDate = nextBucketStart ? new Date(nextBucketStart.getTime() - 1) : bucketEndDate;
+      const actualEndDate = nextBucketStart
+        ? new Date(nextBucketStart.getTime() - 1)
+        : bucketEndDate;
 
       return {
         start_date: this.formatDateTime(bucketStart, companyId),
@@ -145,10 +154,11 @@ export class DashboardService {
     });
 
     const paymentTypeLookup = new Map<string, string>();
-    const paymentTypes = await this.companySettingsService.getCompanyPaymentTypes(
-      undefined,
-      companyId,
-    );
+    const paymentTypes =
+      await this.companySettingsService.getCompanyPaymentTypes(
+        undefined,
+        companyId,
+      );
     for (const paymentType of paymentTypes.company_payment_types as Array<
       Record<string, unknown>
     >) {
@@ -164,7 +174,12 @@ export class DashboardService {
 
     const paymentTotals = new Map<
       string,
-      { payment_type_id: string; payment_type_name: string; total_price: number; count: number }
+      {
+        payment_type_id: string;
+        payment_type_name: string;
+        total_price: number;
+        count: number;
+      }
     >();
     const sellerTotals = new Map<
       string,
@@ -177,7 +192,11 @@ export class DashboardService {
 
     for (const sale of sales) {
       const saleDate = sale.paidAt ?? sale.createdAt;
-      const bucketIndex = this.resolveBucketIndex(bucketStarts, saleDate, detalization);
+      const bucketIndex = this.resolveBucketIndex(
+        bucketStarts,
+        saleDate,
+        detalization,
+      );
       const shop = sale.branchCode
         ? shopByBranchCode.get(sale.branchCode)
         : undefined;
@@ -195,17 +214,7 @@ export class DashboardService {
 
       shopTotals.set(shopName, (shopTotals.get(shopName) ?? 0) + saleTotal);
 
-      const extraPaymentsRaw = (sale as any).extraPayments;
-      const extraList: Array<{ payment_method: string; amount: number }> =
-        Array.isArray(extraPaymentsRaw) && extraPaymentsRaw.length > 0
-          ? (extraPaymentsRaw as any[]).filter(
-              (p) =>
-                p &&
-                typeof p === 'object' &&
-                typeof p.payment_method === 'string' &&
-                Number(p.amount) > 0,
-            )
-          : [];
+      const extraList = this.normalizeExtraPayments(sale.extraPayments);
 
       const paymentEntries =
         extraList.length > 0
@@ -243,10 +252,11 @@ export class DashboardService {
       existingSeller.orders_count += 1;
       sellerTotals.set(sellerName, existingSeller);
 
-      const itemSign = (sale as any).saleType === 'return' ? -1 : 1;
+      const itemSign = sale.saleType === 'return' ? -1 : 1;
 
       for (const item of sale.items) {
-        const productName = item.name || `Product ${item.productId ?? ''}`.trim();
+        const productName =
+          item.name || `Product ${item.productId ?? ''}`.trim();
         const existingProduct = productTotals.get(productName) ?? {
           name: productName,
           quantity: 0,
@@ -255,8 +265,7 @@ export class DashboardService {
         };
         existingProduct.quantity += Number(item.quantity) * itemSign;
         existingProduct.total_price += Number(item.lineTotal) * itemSign;
-        existingProduct.net_sales +=
-          getSaleItemNetSales(item) * itemSign;
+        existingProduct.net_sales += getSaleItemNetSales(item) * itemSign;
         productTotals.set(productName, existingProduct);
       }
     }
@@ -274,12 +283,12 @@ export class DashboardService {
       }
     }
 
-      return {
-        shops: [...visibleShopNames].map((shopName) => ({
-          shop_id: shopByName.get(shopName)?.id ?? '',
-          shop_name: shopName,
-          total_price: shopTotals.get(shopName) ?? 0,
-        })),
+    return {
+      shops: [...visibleShopNames].map((shopName) => ({
+        shop_id: shopByName.get(shopName)?.id ?? '',
+        shop_name: shopName,
+        total_price: shopTotals.get(shopName) ?? 0,
+      })),
       shop_orders: shopOrders,
       total: bucketTotals,
       total_orders_price: sales.reduce(
@@ -290,13 +299,14 @@ export class DashboardService {
       transactions: {
         total: sales.length,
         products: sales.reduce(
-          (sum, sale) => sum + sale.items.filter((item) => item.productId).length,
+          (sum, sale) =>
+            sum + sale.items.filter((item) => item.productId).length,
           0,
         ),
         services: 0,
         sets: 0,
-        refunds: sales.filter((sale) => (sale as any).saleType === 'return').length,
-        exchanges: sales.filter((sale) => (sale as any).saleType === 'exchange').length,
+        refunds: sales.filter((sale) => sale.saleType === 'return').length,
+        exchanges: sales.filter((sale) => sale.saleType === 'exchange').length,
       },
       top_sellers: [...sellerTotals.values()]
         .sort((a, b) => b.total_price - a.total_price)
@@ -312,14 +322,24 @@ export class DashboardService {
       currency: currencyCode,
       seller_field: query.sellerField ?? 'sales_sum',
       product_group_field: query.productGroupField ?? 'name',
-      granularity_label: granularityLabels[detalization] || granularityLabels.hour,
+      granularity_label:
+        granularityLabels[detalization] || granularityLabels.hour,
       product_field: query.productField ?? 'net_sales',
     };
   }
 
-  saveDashboardSetting(body: Record<string, unknown>) {
+  async saveDashboardSetting(
+    body: Record<string, unknown>,
+    authorization?: string,
+  ) {
+    const context =
+      await this.usersService.getCompanyRequestContext(authorization);
     const id = randomUUID();
-    this.dashboardSettingsStore.set(id, { ...body });
+    this.dashboardSettingsStore.set(id, {
+      ...body,
+      companyId: context.companyId,
+      userId: context.userId,
+    });
 
     return {
       message: id,
@@ -327,8 +347,8 @@ export class DashboardService {
   }
 
   private async loadVisibleShops(
-    companyId?: string,
-    allowedBranchCodes?: string[],
+    companyId: string,
+    allowedBranchCodes: CompanyRequestContext['allowedBranchCodes'],
   ) {
     const shopsResponse = await this.companySettingsService.getShops({
       companyId,
@@ -349,10 +369,7 @@ export class DashboardService {
               : '',
       }))
       .filter(
-        (shop) =>
-          !!shop.name &&
-          (!allowedBranchCodes?.length ||
-            allowedBranchCodes.includes(shop.branchCode)),
+        (shop) => !!shop.name && allowedBranchCodes.includes(shop.branchCode),
       );
   }
 
@@ -371,7 +388,12 @@ export class DashboardService {
     return date;
   }
 
-  private buildEndDate(startDate: Date, detalization: string, reportPeriod?: string, endDateOverride?: string) {
+  private buildEndDate(
+    startDate: Date,
+    detalization: string,
+    reportPeriod?: string,
+    endDateOverride?: string,
+  ) {
     // If the frontend explicitly sent an end_date, use it (shift +1 day so the query
     // uses exclusive `lt` and includes all sales on the end day itself).
     if (endDateOverride?.trim()) {
@@ -419,7 +441,7 @@ export class DashboardService {
 
   private buildBuckets(startDate: Date, detalization: string, endDate: Date) {
     const buckets: Date[] = [];
-    let current = new Date(startDate);
+    const current = new Date(startDate);
 
     while (current < endDate) {
       buckets.push(new Date(current)); // Push the start of the current bucket
@@ -446,6 +468,25 @@ export class DashboardService {
     return buckets;
   }
 
+  private normalizeExtraPayments(value: unknown) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.flatMap((payment) => {
+      if (!payment || typeof payment !== 'object' || Array.isArray(payment)) {
+        return [];
+      }
+      const record = payment as Record<string, unknown>;
+      const paymentMethod = record.payment_method;
+      const amount = Number(record.amount);
+      if (typeof paymentMethod !== 'string' || amount <= 0) {
+        return [];
+      }
+      return [{ payment_method: paymentMethod, amount }];
+    });
+  }
+
   private resolveBucketIndex(
     bucketStarts: Date[],
     value: Date,
@@ -470,14 +511,17 @@ export class DashboardService {
           bucketStart.getDate() === value.getDate(),
       );
     }
-    
+
     // For week and month, we need to check if the value falls within the bucket's range
     // A bucket starts at `bucketStarts[i]` and ends just before `bucketStarts[i+1]`
     for (let i = 0; i < bucketStarts.length; i++) {
       const bucketStart = bucketStarts[i];
       const nextBucketStart = bucketStarts[i + 1];
 
-      if (value >= bucketStart && (!nextBucketStart || value < nextBucketStart)) {
+      if (
+        value >= bucketStart &&
+        (!nextBucketStart || value < nextBucketStart)
+      ) {
         return i;
       }
     }
@@ -486,7 +530,9 @@ export class DashboardService {
   }
 
   private formatDateTime(value: Date, companyId?: string) {
-    return this.companySettingsService.formatDateTimeForCompany(value, companyId);
+    return this.companySettingsService.formatDateTimeForCompany(
+      value,
+      companyId,
+    );
   }
-
 }

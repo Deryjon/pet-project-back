@@ -13,6 +13,7 @@ import { WarehouseController } from '../../warehouse/warehouse.controller';
 import { CashboxesController } from '../../modules/cashboxes/cashboxes.controller';
 import { PaymentTypesController } from '../../modules/payments/payment-types.controller';
 import { OrdersController } from '../../modules/orders/orders.controller';
+import { DashboardController } from '../../dashboard/dashboard.controller';
 import { DEFAULT_CRM_ROLES } from '../../roles/default-crm-roles';
 
 const controllers = [
@@ -24,6 +25,7 @@ const controllers = [
   CashboxesController,
   PaymentTypesController,
   OrdersController,
+  DashboardController,
 ];
 
 const permissionAliases: Record<string, string[]> = {
@@ -158,6 +160,8 @@ describe('Cashier new sale access', () => {
     [OrdersController, 'complete'],
     [CashboxesController, 'findAll'],
     [PaymentTypesController, 'findAll'],
+    [DashboardController, 'getDashboardReport'],
+    [DashboardController, 'saveDashboardSetting'],
   ] as const;
 
   it.each(saleHandlers)(
