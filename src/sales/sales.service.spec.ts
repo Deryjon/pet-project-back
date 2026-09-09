@@ -30,11 +30,23 @@ describe('SalesService money calculations', () => {
       sellerSalarySettings: {
         findUnique: jest.fn(),
       },
+      auditLog: {
+        create: jest.fn(),
+      },
       ...prismaOverrides,
     } as unknown as PrismaService;
 
     const companySettingsService = {} as CompanySettingsService;
-    const usersService = {} as UsersService;
+    const usersService = {
+      getCompanyRequestContext: jest.fn().mockResolvedValue({
+        userId: 7,
+        userType: 'company',
+        companyId: 'company-1',
+        allowedShopIds: ['shop-1'],
+        allowedBranchCodes: ['B1'],
+        currentBranchCode: 'B1',
+      }),
+    } as unknown as UsersService;
     const telegramService = {} as TelegramService;
 
     const service = new SalesService(
@@ -804,7 +816,7 @@ describe('SalesService money calculations', () => {
           status: 'cancelled',
           isDraft: false,
           cancelledAt: expect.any(Date),
-          cancelledById: null,
+          cancelledById: 7,
           cancelReason: 'Cancelled sale document',
         }),
       });
@@ -916,6 +928,9 @@ describe('SalesService money calculations', () => {
             update: jest.fn(),
             findMany: jest.fn().mockResolvedValue([]),
           },
+          auditLog: {
+            create: jest.fn(),
+          },
         }),
       );
       const { service } = createService({
@@ -941,7 +956,7 @@ describe('SalesService money calculations', () => {
           status: 'cancelled',
           isDraft: false,
           cancelledAt: expect.any(Date),
-          cancelledById: null,
+          cancelledById: 7,
           cancelReason: 'Cancelled adjustment document',
         }),
       });

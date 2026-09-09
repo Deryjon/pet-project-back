@@ -701,20 +701,9 @@ export class OrdersService {
   }
 
   private async getCompanyContext(authorization?: string) {
-    const context = await this.usersService.getRequestContext(authorization);
-    if (context.userType !== 'company' || !context.companyId) {
-      throw new ForbiddenException('Only company users can manage orders');
-    }
-
-    if (!context.allowedShopIds.length) {
-      throw new ForbiddenException('No available shops for this user');
-    }
-
-    return {
-      companyId: context.companyId,
-      userId: context.userId,
-      allowedShopIds: context.allowedShopIds,
-    };
+    return this.usersService.getCompanyRequestContext(authorization, {
+      requireAvailableShop: true,
+    });
   }
 
   private async findAccessibleShop(

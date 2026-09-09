@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { ClientDebtStatus, Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
+import { CompanyRequestContext } from '../auth/request-context';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
@@ -53,9 +54,7 @@ export class SalesService {
   ) {}
 
   private async getRequestContext(authorization?: string) {
-    return authorization
-      ? this.usersService.getRequestContext(authorization)
-      : null;
+    return this.usersService.getCompanyRequestContext(authorization);
   }
 
   private extractMeasurementUnitShortName(metadata: unknown) {
@@ -5336,17 +5335,7 @@ export class SalesService {
     return resolvedBranch ?? normalizedShopId;
   }
 
-  private buildSaleScope(context: any) {
-    if (!context || context.userType !== 'company') {
-      return undefined;
-    }
-
-    if (!context.companyId) {
-      return {
-        id: -1,
-      };
-    }
-
+  private buildSaleScope(context: CompanyRequestContext) {
     const scopedFilters: Record<string, unknown>[] = [
       {
         companyId: context.companyId,
@@ -5372,18 +5361,14 @@ export class SalesService {
 
   private async resolveScopedBranchCode(
     shopId: string | undefined,
-    context: any,
+    context: CompanyRequestContext,
   ) {
     const requestedBranchCode = shopId
       ? await this.resolveBranchCodeForScopedSale(shopId, context)
       : undefined;
 
-    if (!context || context.userType !== 'company') {
-      return requestedBranchCode;
-    }
-
     if (!requestedBranchCode) {
-      return context.currentBranchCode;
+      return context.currentBranchCode ?? undefined;
     }
 
     if (!context.allowedBranchCodes.includes(requestedBranchCode)) {
@@ -5397,7 +5382,7 @@ export class SalesService {
 
   private async resolveBranchCodeForScopedSale(
     shopIdentifier: string,
-    context: any,
+    context: CompanyRequestContext,
   ) {
     const normalizedIdentifier = shopIdentifier.trim();
 
@@ -5405,34 +5390,32 @@ export class SalesService {
       return undefined;
     }
 
-    if (context?.userType === 'company') {
-      if (context.allowedBranchCodes.includes(normalizedIdentifier)) {
-        return normalizedIdentifier;
+    if (context.allowedBranchCodes.includes(normalizedIdentifier)) {
+      return normalizedIdentifier;
+    }
+
+    const shop = await this.prisma.shop.findFirst({
+      where: {
+        companyId: context.companyId,
+        OR: [
+          { id: normalizedIdentifier },
+          { branchCode: normalizedIdentifier },
+        ],
+      },
+      select: {
+        id: true,
+        branchCode: true,
+      },
+    });
+
+    if (shop) {
+      if (!context.allowedShopIds.includes(shop.id)) {
+        throw new BadRequestException(
+          'Requested shop is not available for this user',
+        );
       }
 
-      const shop = await this.prisma.shop.findFirst({
-        where: {
-          companyId: context.companyId,
-          OR: [
-            { id: normalizedIdentifier },
-            { branchCode: normalizedIdentifier },
-          ],
-        },
-        select: {
-          id: true,
-          branchCode: true,
-        },
-      });
-
-      if (shop) {
-        if (!context.allowedShopIds.includes(shop.id)) {
-          throw new BadRequestException(
-            'Requested shop is not available for this user',
-          );
-        }
-
-        return shop.branchCode;
-      }
+      return shop.branchCode;
     }
 
     return this.resolveBranchCodeByShopId(normalizedIdentifier);
@@ -5440,30 +5423,24 @@ export class SalesService {
 
   private assertSaleAccess(
     sale: { companyId?: string | null; branchCode: string | null },
-    context: any,
+    context: CompanyRequestContext,
   ) {
-    if (!context || context.userType !== 'company' || !sale.branchCode) {
-      return;
-    }
-
-    if (
-      context.companyId &&
-      sale.companyId &&
-      context.companyId !== sale.companyId
-    ) {
+    if (sale.companyId !== context.companyId) {
       throw new NotFoundException('Order not found');
     }
 
-    if (!context.allowedBranchCodes.includes(sale.branchCode)) {
+    if (
+      sale.branchCode &&
+      !context.allowedBranchCodes.includes(sale.branchCode)
+    ) {
       throw new NotFoundException('Order not found');
     }
   }
 
-  private buildProductScope(where: Record<string, unknown>, context: any) {
-    if (!context || context.userType !== 'company' || !context.companyId) {
-      return where;
-    }
-
+  private buildProductScope(
+    where: Record<string, unknown>,
+    context: CompanyRequestContext,
+  ) {
     return {
       AND: [
         where,

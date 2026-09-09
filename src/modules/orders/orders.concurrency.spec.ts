@@ -77,11 +77,12 @@ describe('OrdersService.complete concurrency guards', () => {
       $transaction: jest.fn((operation) => operation(tx)),
     };
     const users: any = {
-      getRequestContext: jest.fn(async () => ({
+      getCompanyRequestContext: jest.fn(async () => ({
         userType: 'company',
         userId: 7,
         companyId: 'company-1',
         allowedShopIds: ['shop-1'],
+        allowedBranchCodes: ['001'],
       })),
     };
     return { service: new OrdersService(prisma, users), tx, prisma };
@@ -115,5 +116,17 @@ describe('OrdersService.complete concurrency guards', () => {
       where: { id: 21, quantity: { gte: 1 } },
       data: { quantity: { decrement: 1 } },
     });
+  });
+
+  it('requires the centralized company context with an available shop', async () => {
+    const { service } = setup();
+    const users = (service as any).usersService;
+
+    await service.complete('order-1', {}, 'Bearer test');
+
+    expect(users.getCompanyRequestContext).toHaveBeenCalledWith(
+      'Bearer test',
+      { requireAvailableShop: true },
+    );
   });
 });

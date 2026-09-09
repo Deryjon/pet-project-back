@@ -14,6 +14,11 @@ import { promises as fs } from 'fs';
 import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
 import { extname, join } from 'path';
 import { extractAccessToken } from '../auth/access-token.util';
+import {
+  CompanyContextOptions,
+  CompanyRequestContext,
+  RequestContext,
+} from '../auth/request-context';
 import { assertPasswordMeetsPlatformPolicy } from '../common/platform-security-policy';
 import { PrismaService } from '../prisma/prisma.service';
 import { ROLE_PERMISSION_SECTIONS } from '../roles/roles.permissions';
@@ -1315,7 +1320,7 @@ export class UsersService {
     });
   }
 
-  async getRequestContext(authorization?: string) {
+  async getRequestContext(authorization?: string): Promise<RequestContext> {
     const user = await this.prepareAuthenticatedUser(
       (await this.getAuthenticatedUser(authorization)).id,
     );
@@ -1337,6 +1342,27 @@ export class UsersService {
       allowedShopIds: allowedShops.map((shop) => shop.id),
       allowedBranchCodes: allowedShops.map((shop) => shop.branchCode),
       canSwitchShops: Boolean(user.canSwitchShops) && allowedShops.length > 1,
+    };
+  }
+
+  async getCompanyRequestContext(
+    authorization?: string,
+    options: CompanyContextOptions = {},
+  ): Promise<CompanyRequestContext> {
+    const context = await this.getRequestContext(authorization);
+
+    if (context.userType !== 'company' || !context.companyId) {
+      throw new ForbiddenException('Only company users can access this resource');
+    }
+
+    if (options.requireAvailableShop && !context.allowedShopIds.length) {
+      throw new ForbiddenException('No available shops for this user');
+    }
+
+    return {
+      ...context,
+      userType: 'company',
+      companyId: context.companyId,
     };
   }
 
