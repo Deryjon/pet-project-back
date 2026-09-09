@@ -20,7 +20,7 @@ export class CashboxesController {
   constructor(private readonly cashboxesService: CashboxesService) {}
 
   @Post()
-  @Permissions('cashboxes.manage')
+  @Permissions('cashbox-create')
   create(
     @Body() dto: CreateCashboxDto,
     @Headers('authorization') authorization?: string,
@@ -29,7 +29,7 @@ export class CashboxesController {
   }
 
   @Get()
-  @Permissions('cashboxes.manage')
+  @Permissions('cashboxes.read')
   findAll(
     @Query('shopId') shopId?: string,
     @Headers('authorization') authorization?: string,

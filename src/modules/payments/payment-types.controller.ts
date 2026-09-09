@@ -19,7 +19,7 @@ export class PaymentTypesController {
   constructor(private readonly paymentTypesService: PaymentTypesService) {}
 
   @Post()
-  @Permissions('payments.create')
+  @Permissions('payment-type-create')
   create(
     @Body() dto: CreatePaymentTypeDto,
     @Headers('authorization') authorization?: string,
@@ -28,7 +28,7 @@ export class PaymentTypesController {
   }
 
   @Get()
-  @Permissions('payments.create')
+  @Permissions('payment-types.read')
   findAll(@Headers('authorization') authorization?: string) {
     return this.paymentTypesService.findAll(authorization);
   }

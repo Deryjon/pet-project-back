@@ -10,6 +10,10 @@ import { SuppliersController } from '../../imports/controllers/suppliers.control
 import { ClientsController } from '../../clients/clients.controller';
 import { SalesController } from '../../sales/sales.controller';
 import { WarehouseController } from '../../warehouse/warehouse.controller';
+import { CashboxesController } from '../../modules/cashboxes/cashboxes.controller';
+import { PaymentTypesController } from '../../modules/payments/payment-types.controller';
+import { OrdersController } from '../../modules/orders/orders.controller';
+import { DEFAULT_CRM_ROLES } from '../../roles/default-crm-roles';
 
 const controllers = [
   SupplierInvoicesController,
@@ -17,7 +21,24 @@ const controllers = [
   ClientsController,
   SalesController,
   WarehouseController,
+  CashboxesController,
+  PaymentTypesController,
+  OrdersController,
 ];
+
+const permissionAliases: Record<string, string[]> = {
+  'orders.read': ['new-sale', 'order-new', 'all-sales'],
+  'orders.create': ['new-sale', 'order-new'],
+  'orders.cancel': ['new-sale', 'order-new', 'all-sales'],
+  'orders.complete': ['new-sale', 'order-new'],
+  'payments.create': ['new-sale', 'order-new'],
+  'payment-types.read': ['payment-types', 'new-sale', 'order-new'],
+  'cashboxes.read': ['cashbox-list', 'new-sale', 'order-new'],
+};
+
+function permissionIdsFor(slug: string) {
+  return (permissionAliases[slug] ?? [slug]).flatMap(getPermissionIdsBySlug);
+}
 const routes = controllers.flatMap((controller) =>
   Object.getOwnPropertyNames(controller.prototype)
     .filter(
@@ -54,9 +75,7 @@ describe('Operation permission matrix', () => {
       );
       expect(permissions?.length).toBeGreaterThan(0);
       const permissionIds = permissions.flatMap((slug) => {
-        const ids = slug === 'orders.read'
-        ? [...getPermissionIdsBySlug('new-sale'), ...getPermissionIdsBySlug('all-sales')]
-        : getPermissionIdsBySlug(slug);
+        const ids = permissionIdsFor(slug);
         expect(ids.length).toBeGreaterThan(0);
         return ids;
       });
@@ -115,11 +134,143 @@ describe('Operation permission matrix', () => {
   );
 });
 
+describe('Cashier new sale access', () => {
+  const cashier = DEFAULT_CRM_ROLES.find((role) => role.name === 'Кассир');
+  if (!cashier || !Array.isArray(cashier.permissionSlugs)) {
+    throw new Error('Default cashier role is not configured');
+  }
+  const cashierPermissionIds = (
+    cashier.permissionSlugs as readonly string[]
+  ).flatMap(getPermissionIdsBySlug);
+  const saleHandlers = [
+    [SalesController, 'findProductsForNewSale'],
+    [SalesController, 'createDraft'],
+    [SalesController, 'addItem'],
+    [SalesController, 'attachClient'],
+    [SalesController, 'pay'],
+    [SalesController, 'parkDraft'],
+    [SalesController, 'leaveDraft'],
+    [SalesController, 'remove'],
+    [OrdersController, 'create'],
+    [OrdersController, 'findOne'],
+    [OrdersController, 'addItem'],
+    [OrdersController, 'addPayment'],
+    [OrdersController, 'complete'],
+    [CashboxesController, 'findAll'],
+    [PaymentTypesController, 'findAll'],
+  ] as const;
+
+  it.each(saleHandlers)(
+    'allows the default cashier to call %p.%s',
+    async (controller, method) => {
+      const guard = new PermissionsGuard(new Reflector(), {
+        role: { findFirst: async () => ({ isAdmin: false }) },
+        rolePermission: {
+          findMany: async () =>
+            cashierPermissionIds.map((permissionId) => ({ permissionId })),
+        },
+      } as any);
+      const context = {
+        getHandler: () => controller.prototype[method],
+        getClass: () => controller,
+        switchToHttp: () => ({
+          getRequest: () => ({
+            user: { crmRoleId: 'cashier-role', companyId: 'own' },
+          }),
+        }),
+      } as any;
+
+      await expect(guard.canActivate(context)).resolves.toBe(true);
+    },
+  );
+
+  it.each(['new-sale', 'order-new'])(
+    'keeps the complete sale path usable when a role has only %s',
+    async (permissionSlug) => {
+      const permissionIds = getPermissionIdsBySlug(permissionSlug);
+      const guard = new PermissionsGuard(new Reflector(), {
+        role: { findFirst: async () => ({ isAdmin: false }) },
+        rolePermission: {
+          findMany: async () =>
+            permissionIds.map((permissionId) => ({ permissionId })),
+        },
+      } as any);
+      const essentialHandlers = [
+        [SalesController, 'findProductsForNewSale'],
+        [SalesController, 'createDraft'],
+        [SalesController, 'addItem'],
+        [SalesController, 'pay'],
+        [SalesController, 'remove'],
+        [CashboxesController, 'findAll'],
+        [PaymentTypesController, 'findAll'],
+      ] as const;
+
+      for (const [controller, method] of essentialHandlers) {
+        const context = {
+          getHandler: () => controller.prototype[method],
+          getClass: () => controller,
+          switchToHttp: () => ({
+            getRequest: () => ({
+              user: { crmRoleId: 'cashier-role', companyId: 'own' },
+            }),
+          }),
+        } as any;
+        await expect(guard.canActivate(context)).resolves.toBe(true);
+      }
+    },
+  );
+
+  it.each([
+    [CashboxesController, 'create'],
+    [PaymentTypesController, 'create'],
+  ] as const)(
+    'does not let cashier sale rights create reference data through %p.%s',
+    async (controller, method) => {
+      const guard = new PermissionsGuard(new Reflector(), {
+        role: { findFirst: async () => ({ isAdmin: false }) },
+        rolePermission: {
+          findMany: async () =>
+            cashierPermissionIds.map((permissionId) => ({ permissionId })),
+        },
+      } as any);
+      const context = {
+        getHandler: () => controller.prototype[method],
+        getClass: () => controller,
+        switchToHttp: () => ({
+          getRequest: () => ({
+            user: { crmRoleId: 'cashier-role', companyId: 'own' },
+          }),
+        }),
+      } as any;
+
+      await expect(guard.canActivate(context)).rejects.toThrow(
+        'Insufficient permissions',
+      );
+    },
+  );
+});
 
 describe('Sales detail read access', () => {
-  it.each(['new-sale', 'all-sales'])('allows %s to open an order card', async slug => {
-    const guard = new PermissionsGuard(new Reflector(), { role: { findFirst: async () => ({ isAdmin: false }) }, rolePermission: { findMany: async () => getPermissionIdsBySlug(slug).map(permissionId => ({ permissionId })) } } as any);
-    const context = { getHandler: () => SalesController.prototype.findOrder, getClass: () => SalesController, switchToHttp: () => ({ getRequest: () => ({ user: { crmRoleId: 'role', companyId: 'own' } }) }) } as any;
-    await expect(guard.canActivate(context)).resolves.toBe(true);
-  });
+  it.each(['new-sale', 'all-sales'])(
+    'allows %s to open an order card',
+    async (slug) => {
+      const guard = new PermissionsGuard(new Reflector(), {
+        role: { findFirst: async () => ({ isAdmin: false }) },
+        rolePermission: {
+          findMany: async () =>
+            getPermissionIdsBySlug(slug).map((permissionId) => ({
+              permissionId,
+            })),
+        },
+      } as any);
+      const context = {
+        getHandler: () => SalesController.prototype.findOrder,
+        getClass: () => SalesController,
+        switchToHttp: () => ({
+          getRequest: () => ({ user: { crmRoleId: 'role', companyId: 'own' } }),
+        }),
+      } as any;
+      await expect(guard.canActivate(context)).resolves.toBe(true);
+    },
+  );
 });

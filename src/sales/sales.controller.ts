@@ -20,7 +20,7 @@ import { SalesService } from './sales.service';
 
 @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
 @Controller()
-@Permissions('new-sale')
+@Permissions('orders.read')
 export class SalesController {
   constructor(private readonly salesService: SalesService) {}
 
@@ -34,7 +34,7 @@ export class SalesController {
   }
 
   @Post('new-sale')
-  @Permissions('order-new')
+  @Permissions('orders.create')
   createDraft(@Headers('authorization') authorization?: string) {
     return this.salesService.createDraft(authorization);
   }
@@ -50,7 +50,7 @@ export class SalesController {
   }
 
   @Post(['order', 'v2/order'])
-  @Permissions('order-new')
+  @Permissions('orders.create')
   createOrder(
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
@@ -123,7 +123,7 @@ export class SalesController {
   }
 
   @Post(['order-payment/:id', 'v2/order-payment/:id'])
-  @Permissions('order-new')
+  @Permissions('orders.create')
   payOrder(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -179,7 +179,7 @@ export class SalesController {
   }
 
   @Post('new-sale/:id/items')
-  @Permissions('order-new')
+  @Permissions('orders.create')
   addItem(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
@@ -193,7 +193,7 @@ export class SalesController {
     'v1/new-sale/:id/items/:itemId',
     'v2/new-sale/:id/items/:itemId',
   ])
-  @Permissions('order-new')
+  @Permissions('orders.create')
   removeItem(
     @Param('id', ParseIntPipe) id: number,
     @Param('itemId', ParseIntPipe) itemId: number,
@@ -207,7 +207,7 @@ export class SalesController {
     'v1/new-sale/:id/items/:itemId',
     'v2/new-sale/:id/items/:itemId',
   ])
-  @Permissions('order-new')
+  @Permissions('orders.create')
   updateItem(
     @Param('id', ParseIntPipe) id: number,
     @Param('itemId', ParseIntPipe) itemId: number,
@@ -235,7 +235,7 @@ export class SalesController {
     'v1/new-sale/:id/client',
     'v2/new-sale/:id/client',
   ])
-  @Permissions('order-new')
+  @Permissions('orders.create')
   attachClient(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
@@ -245,7 +245,7 @@ export class SalesController {
   }
 
   @Post('new-sale/:id/pay')
-  @Permissions('order-new')
+  @Permissions('orders.complete')
   pay(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
@@ -262,7 +262,7 @@ export class SalesController {
     'v1/new-sale/:id/leave',
     'v2/new-sale/:id/leave',
   ])
-  @Permissions('order-new')
+  @Permissions('orders.create')
   parkDraft(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
@@ -272,7 +272,7 @@ export class SalesController {
   }
 
   @Post(['leave-sale/:id', 'v1/leave-sale/:id', 'v2/leave-sale/:id'])
-  @Permissions('order-new')
+  @Permissions('orders.create')
   leaveDraft(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
@@ -296,7 +296,7 @@ export class SalesController {
   }
 
   @Delete('new-sale/:id')
-  @Permissions('order-new')
+  @Permissions('orders.cancel')
   remove(
     @Param('id', ParseIntPipe) id: number,
     @Headers('authorization') authorization?: string,

@@ -10,11 +10,13 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PERMISSIONS_KEY } from '../permissions.decorator';
 
 const LEGACY_PERMISSION_ALIASES: Record<string, string[]> = {
-  'orders.read': ['new-sale', 'all-sales'],
+  'orders.read': ['new-sale', 'order-new', 'all-sales'],
   'orders.create': ['new-sale', 'order-new'],
-  'orders.cancel': ['new-sale', 'all-sales'],
+  'orders.cancel': ['new-sale', 'order-new', 'all-sales'],
   'orders.complete': ['new-sale', 'order-new'],
-  'payments.create': ['payment-types'],
+  'payments.create': ['new-sale', 'order-new'],
+  'payment-types.read': ['payment-types', 'new-sale', 'order-new'],
+  'cashboxes.read': ['cashbox-list', 'new-sale', 'order-new'],
   'cashboxes.manage': ['cashbox-list', 'cashbox-create'],
 };
 
@@ -94,8 +96,9 @@ export class PermissionsGuard implements CanActivate {
 
   private resolvePermissionIds(permission: string) {
     const normalizedPermission = permission.trim().toLowerCase();
-    const aliasPermissions =
-      LEGACY_PERMISSION_ALIASES[normalizedPermission] ?? [normalizedPermission];
+    const aliasPermissions = LEGACY_PERMISSION_ALIASES[
+      normalizedPermission
+    ] ?? [normalizedPermission];
     const resolvedPermissionIds = aliasPermissions.flatMap((item) =>
       getPermissionIdsBySlug(item),
     );
