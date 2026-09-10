@@ -8,8 +8,13 @@ import {
   Patch,
   Post,
   UnauthorizedException,
+  UseGuards,
 } from '@nestjs/common';
 import { timingSafeEqual } from 'crypto';
+import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { Permissions } from '../auth/permissions.decorator';
 import { TelegramService } from './telegram.service';
 
 @Controller()
@@ -42,16 +47,22 @@ export class TelegramController {
 
   // All routes below are under /api prefix (added by frontend baseURL)
   @Post('telegram/generate-link')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('telegram-notification')
   generateLink(@Headers('authorization') authorization: string) {
     return this.telegramService.generateLinkToken(authorization);
   }
 
   @Get('telegram/subscribers')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('telegram-notification')
   getSubscribers(@Headers('authorization') authorization: string) {
     return this.telegramService.getSubscribers(authorization);
   }
 
   @Patch('telegram/subscribers/:id')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('telegram-notification')
   updateSubscriber(
     @Param('id') id: string,
     @Body()
@@ -68,6 +79,8 @@ export class TelegramController {
   }
 
   @Delete('telegram/subscribers/:id')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('telegram-notification')
   deleteSubscriber(
     @Param('id') id: string,
     @Headers('authorization') authorization: string,

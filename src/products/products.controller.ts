@@ -23,6 +23,7 @@ import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { Permissions } from '../auth/permissions.decorator';
 import { ProductsService } from './products.service';
 
+@UseGuards(JwtAuthGuard, CompanyAccessGuard)
 @Controller()
 export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
@@ -94,7 +95,10 @@ export class ProductsController {
   }
 
   @Get('v2/imports')
-  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+  @Header(
+    'Cache-Control',
+    'no-store, no-cache, must-revalidate, proxy-revalidate',
+  )
   @Header('Pragma', 'no-cache')
   @Header('Expires', '0')
   @Header('Surrogate-Control', 'no-store')
@@ -113,7 +117,10 @@ export class ProductsController {
   }
 
   @Get('v2/imports/:id')
-  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+  @Header(
+    'Cache-Control',
+    'no-store, no-cache, must-revalidate, proxy-revalidate',
+  )
   @Header('Pragma', 'no-cache')
   @Header('Expires', '0')
   @Header('Surrogate-Control', 'no-store')
@@ -148,8 +155,11 @@ export class ProductsController {
   }
 
   @Get('v2/import-progress/:id')
-  getImportProgress(@Param('id') id: string) {
-    return this.productsService.getImportProgress(id);
+  getImportProgress(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.getImportProgress(id, authorization);
   }
 
   @Get('v2/import-search/:id')
@@ -158,17 +168,25 @@ export class ProductsController {
     @Query('limit') limit?: string,
     @Query('page') page?: string,
     @Query('difference') difference?: string,
+    @Headers('authorization') authorization?: string,
   ) {
-    return this.productsService.getImportSearch(id, {
-      limit: Number(limit) || 20,
-      page: Number(page) || 1,
-      difference: this.toBoolean(difference),
-    });
+    return this.productsService.getImportSearch(
+      id,
+      {
+        limit: Number(limit) || 20,
+        page: Number(page) || 1,
+        difference: this.toBoolean(difference),
+      },
+      authorization,
+    );
   }
 
   @Get('v2/import-items-dp/:id')
-  async getImportItemsDp(@Param('id') id: string) {
-    return this.productsService.getImportItemsDp(id);
+  async getImportItemsDp(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.getImportItemsDp(id, authorization);
   }
 
   @Post('v2/import-commit/:id')
@@ -184,12 +202,17 @@ export class ProductsController {
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
   ) {
-    return this.productsService.commitImport(id, authorization, { forceWithCheckAccept: true });
+    return this.productsService.commitImport(id, authorization, {
+      forceWithCheckAccept: true,
+    });
   }
 
   @Post('v2/imports/:id/cancel')
-  cancelImportDraft(@Param('id') id: string) {
-    return this.productsService.cancelImport(id);
+  cancelImportDraft(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.productsService.cancelImport(id, authorization);
   }
 
   @Post('v2/imports/:id/rollback')
@@ -225,12 +248,17 @@ export class ProductsController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('type') type?: string,
+    @Headers('authorization') authorization?: string,
   ) {
-    return this.productsService.getStocktakingById(id, {
-      page: Number(page) || 1,
-      limit: Number(limit) || 10,
-      type: type?.trim(),
-    });
+    return this.productsService.getStocktakingById(
+      id,
+      {
+        page: Number(page) || 1,
+        limit: Number(limit) || 10,
+        type: type?.trim(),
+      },
+      authorization,
+    );
   }
 
   @Get('v2/stocktaking-logs/:id')
@@ -238,11 +266,16 @@ export class ProductsController {
     @Param('id') id: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Headers('authorization') authorization?: string,
   ) {
-    return this.productsService.getStocktakingLogs(id, {
-      page: Number(page) || 1,
-      limit: Number(limit) || 10,
-    });
+    return this.productsService.getStocktakingLogs(
+      id,
+      {
+        page: Number(page) || 1,
+        limit: Number(limit) || 10,
+      },
+      authorization,
+    );
   }
 
   @Patch('v2/stocktaking/:id/set-product-by-barcode')
@@ -470,7 +503,11 @@ export class ProductsController {
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
   ) {
-    return this.productsService.patchProductIdentifiers(id, body, authorization);
+    return this.productsService.patchProductIdentifiers(
+      id,
+      body,
+      authorization,
+    );
   }
 
   @Put('v2/products/bulk/archive')
@@ -482,9 +519,7 @@ export class ProductsController {
   }
 
   @Delete('v2/products/archived')
-  clearAllArchivedProducts(
-    @Headers('authorization') authorization?: string,
-  ) {
+  clearAllArchivedProducts(@Headers('authorization') authorization?: string) {
     return this.productsService.clearAllArchivedProducts(authorization);
   }
 

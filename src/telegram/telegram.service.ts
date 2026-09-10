@@ -11,7 +11,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 
 function randomToken(length = 8): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const chars =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let result = '';
   for (let i = 0; i < length; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -22,9 +23,15 @@ function randomToken(length = 8): string {
 @Injectable()
 export class TelegramService {
   private readonly logger = new Logger(TelegramService.name);
-  private get token() { return process.env.TELEGRAM_BOT_TOKEN ?? ''; }
-  private get botUsername() { return process.env.TELEGRAM_BOT_USERNAME ?? ''; }
-  private get apiBase() { return `https://api.telegram.org/bot${this.token}`; }
+  private get token() {
+    return process.env.TELEGRAM_BOT_TOKEN ?? '';
+  }
+  private get botUsername() {
+    return process.env.TELEGRAM_BOT_USERNAME ?? '';
+  }
+  private get apiBase() {
+    return `https://api.telegram.org/bot${this.token}`;
+  }
 
   constructor(
     private readonly prisma: PrismaService,
@@ -49,10 +56,8 @@ export class TelegramService {
   }
 
   async generateLinkToken(authorization: string): Promise<{ link: string }> {
-    const context = await this.usersService.getRequestContext(authorization);
-    if (!context?.userId || !context?.companyId) {
-      throw new ForbiddenException('Требуется авторизация');
-    }
+    const context =
+      await this.usersService.getCompanyRequestContext(authorization);
 
     const user = await this.prisma.user.findUnique({
       where: { id: Number(context.userId) },
@@ -221,7 +226,8 @@ export class TelegramService {
         const pt = paymentTypeMap.get(methodId);
         if (pt) return pt;
         const lower = methodId.toLowerCase();
-        if (lower === 'cash') return paymentTypes.find((p) => p.isCashPaymentType) ?? null;
+        if (lower === 'cash')
+          return paymentTypes.find((p) => p.isCashPaymentType) ?? null;
         return paymentTypes.find((p) => p.name.toLowerCase() === lower) ?? null;
       };
 
@@ -256,7 +262,10 @@ export class TelegramService {
 
       // Payment breakdown
       const extraPayments = Array.isArray(sale.extraPayments)
-        ? (sale.extraPayments as Array<{ payment_method: string; amount: number }>)
+        ? (sale.extraPayments as Array<{
+            payment_method: string;
+            amount: number;
+          }>)
         : null;
 
       const paymentLines: string[] = [];
@@ -281,7 +290,9 @@ export class TelegramService {
         const quantity = Number(item.quantity);
         const salePrice = Number(item.salePrice);
         const originalTotal =
-          Number(item.retailPriceAtSale) || Number(item.lineTotal) || salePrice * quantity;
+          Number(item.retailPriceAtSale) ||
+          Number(item.lineTotal) ||
+          salePrice * quantity;
         const finalPrice = Number(item.finalPrice ?? 0);
         const hasFinalizedSnapshot =
           Number(item.retailPriceAtSale ?? 0) > 0 ||
@@ -326,7 +337,9 @@ export class TelegramService {
         }
       }
 
-      const text = lines.filter((l) => l !== null && l !== undefined).join('\n');
+      const text = lines
+        .filter((l) => l !== null && l !== undefined)
+        .join('\n');
 
       await Promise.all(
         subscribers.map((sub) => this.sendMessage(sub.chatId, text)),
@@ -361,7 +374,10 @@ export class TelegramService {
         where: {
           companyId: args.companyId,
           notifyOnLowStock: true,
-          OR: [{ branchCode: args.branchCode ?? undefined }, { branchCode: null }],
+          OR: [
+            { branchCode: args.branchCode ?? undefined },
+            { branchCode: null },
+          ],
         },
       });
 
@@ -409,13 +425,20 @@ export class TelegramService {
       if (!subscribers.length) return;
 
       const parsed = new UAParser(userAgent || '').getResult();
-      const osLabel = [parsed.os.name, parsed.os.version].filter(Boolean).join(' ') || 'Неизвестно';
+      const osLabel =
+        [parsed.os.name, parsed.os.version].filter(Boolean).join(' ') ||
+        'Неизвестно';
       const browserLabel =
-        [parsed.browser.name, parsed.browser.version].filter(Boolean).join(' ') || 'Неизвестно';
+        [parsed.browser.name, parsed.browser.version]
+          .filter(Boolean)
+          .join(' ') || 'Неизвестно';
 
       const now = new Date();
       const tashkentNow = new Date(now.getTime() + 5 * 60 * 60 * 1000);
-      const dateTimeStr = tashkentNow.toISOString().slice(0, 19).replace('T', ' ');
+      const dateTimeStr = tashkentNow
+        .toISOString()
+        .slice(0, 19)
+        .replace('T', ' ');
 
       const userName = `${user.firstName} ${user.lastName}`.trim();
       const text = [
@@ -436,18 +459,18 @@ export class TelegramService {
   }
 
   private fmt(value: number): string {
-    return Math.round(value)
-      .toLocaleString('ru-RU')
-      .replace(/\s/g, ' ');
+    return Math.round(value).toLocaleString('ru-RU').replace(/\s/g, ' ');
   }
 
   async getSubscribers(authorization: string) {
-    const context = await this.usersService.getRequestContext(authorization);
-    if (!context?.companyId) throw new ForbiddenException('Требуется авторизация');
+    const context =
+      await this.usersService.getCompanyRequestContext(authorization);
 
     const subscribers = await this.prisma.telegramSubscriber.findMany({
       where: { companyId: context.companyId },
-      include: { user: { select: { id: true, firstName: true, lastName: true } } },
+      include: {
+        user: { select: { id: true, firstName: true, lastName: true } },
+      },
       orderBy: { linkedAt: 'desc' },
     });
 
@@ -455,9 +478,7 @@ export class TelegramService {
       id: s.id,
       chatId: s.chatId,
       userId: s.userId,
-      userName: s.user
-        ? `${s.user.firstName} ${s.user.lastName}`.trim()
-        : '',
+      userName: s.user ? `${s.user.firstName} ${s.user.lastName}`.trim() : '',
       notifyOnSale: s.notifyOnSale,
       notifySellerAnalytics: s.notifySellerAnalytics,
       notifyOnLogin: s.notifyOnLogin,
@@ -478,8 +499,15 @@ export class TelegramService {
     },
     authorization: string,
   ) {
-    const context = await this.usersService.getRequestContext(authorization);
-    if (!context?.companyId) throw new ForbiddenException('Требуется авторизация');
+    const context =
+      await this.usersService.getCompanyRequestContext(authorization);
+
+    if (
+      typeof body.branchCode === 'string' &&
+      !context.allowedBranchCodes.includes(body.branchCode)
+    ) {
+      throw new ForbiddenException('Филиал недоступен');
+    }
 
     const sub = await this.prisma.telegramSubscriber.findFirst({
       where: { id, companyId: context.companyId },
@@ -489,7 +517,9 @@ export class TelegramService {
     return this.prisma.telegramSubscriber.update({
       where: { id },
       data: {
-        ...(body.notifyOnSale !== undefined && { notifyOnSale: body.notifyOnSale }),
+        ...(body.notifyOnSale !== undefined && {
+          notifyOnSale: body.notifyOnSale,
+        }),
         ...(body.notifySellerAnalytics !== undefined && {
           notifySellerAnalytics: body.notifySellerAnalytics,
         }),
@@ -505,8 +535,8 @@ export class TelegramService {
   }
 
   async deleteSubscriber(id: string, authorization: string) {
-    const context = await this.usersService.getRequestContext(authorization);
-    if (!context?.companyId) throw new ForbiddenException('Требуется авторизация');
+    const context =
+      await this.usersService.getCompanyRequestContext(authorization);
 
     const sub = await this.prisma.telegramSubscriber.findFirst({
       where: { id, companyId: context.companyId },

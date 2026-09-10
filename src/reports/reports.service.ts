@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
+import { CompanyRequestContext } from '../auth/request-context';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { ReportsMapper } from './reports.mapper';
@@ -471,7 +472,10 @@ export class ReportsService {
     const context = await this.getContext(authorization);
     const sales = await this.loadReportSales(query, context);
     const shops = await this.db.shop.findMany({
-      where: context?.companyId ? { companyId: context.companyId } : undefined,
+      where: {
+        companyId: context.companyId,
+        branchCode: { in: context.allowedBranchCodes },
+      },
       orderBy: { name: 'asc' },
     });
     const shopNameByBranchCode = new Map<string, string>(
@@ -508,7 +512,8 @@ export class ReportsService {
     const context = await this.getContext(authorization);
     const shop = await this.db.shop.findFirst({
       where: {
-        ...(context?.companyId ? { companyId: context.companyId } : {}),
+        companyId: context.companyId,
+        branchCode: { in: context.allowedBranchCodes },
         OR: [{ id: shopId }, { branchCode: shopId }],
       },
     });
@@ -1467,14 +1472,12 @@ export class ReportsService {
   }
 
   private async getContext(authorization?: string) {
-    return authorization
-      ? this.usersService.getRequestContext(authorization)
-      : null;
+    return this.usersService.getCompanyRequestContext(authorization);
   }
 
   private async loadReportSales(
     query: Record<string, string | undefined>,
-    context: any,
+    context: CompanyRequestContext,
   ) {
     const where = await this.buildReportWhere(query, context);
     return this.loadAllReportPages((skip, take) =>
@@ -1504,16 +1507,15 @@ export class ReportsService {
   }
 
   private async loadReportShops(
-    context: any,
+    context: CompanyRequestContext,
     query: Record<string, string | undefined>,
     keys = ['shop_ids', 'shopId', 'shop_id'],
   ) {
     const requestedShopIds = this.extractQueryStringArray(query, ...keys);
-    const where: Record<string, unknown> = {};
-
-    if (context?.companyId) {
-      where.companyId = context.companyId;
-    }
+    const where: Record<string, unknown> = {
+      companyId: context.companyId,
+      branchCode: { in: context.allowedBranchCodes },
+    };
 
     if (requestedShopIds.length) {
       where.OR = [
@@ -1536,7 +1538,7 @@ export class ReportsService {
 
   private async loadReportProducts(
     query: Record<string, string | undefined>,
-    context: any,
+    context: CompanyRequestContext,
   ) {
     const where = await this.buildProductWhere(query, context);
     return this.loadAllReportPages((skip, take) =>
@@ -1557,7 +1559,7 @@ export class ReportsService {
 
   private async loadProductMovements(
     query: Record<string, string | undefined>,
-    context: any,
+    context: CompanyRequestContext,
   ) {
     const where = await this.buildStockMovementWhere(query, context);
     return this.loadAllReportPages((skip, take) =>
@@ -1595,7 +1597,7 @@ export class ReportsService {
 
   private async buildReportWhere(
     query: Record<string, string | undefined>,
-    context: any,
+    context: CompanyRequestContext,
   ) {
     const and: Record<string, unknown>[] = [
       {
@@ -1610,12 +1612,8 @@ export class ReportsService {
         },
       },
     ];
-    if (context?.companyId) {
-      and.push({ companyId: context.companyId });
-    }
-    if (context?.companyId && Array.isArray(context.allowedBranchCodes)) {
-      and.push({ branchCode: { in: context.allowedBranchCodes } });
-    }
+    and.push({ companyId: context.companyId });
+    and.push({ branchCode: { in: context.allowedBranchCodes } });
 
     const from = this.parseDate(
       this.firstQueryValue(
@@ -1714,12 +1712,10 @@ export class ReportsService {
 
   private async buildProductWhere(
     query: Record<string, string | undefined>,
-    context: any,
+    context: CompanyRequestContext,
   ) {
     const and: Record<string, unknown>[] = [];
-    if (context?.companyId) {
-      and.push({ companyId: context.companyId });
-    }
+    and.push({ companyId: context.companyId });
 
     const productId = this.toInt(
       this.firstQueryValue(query, 'productId', 'product_id'),
@@ -1777,12 +1773,10 @@ export class ReportsService {
 
   private async buildStockMovementWhere(
     query: Record<string, string | undefined>,
-    context: any,
+    context: CompanyRequestContext,
   ) {
     const and: Record<string, unknown>[] = [];
-    if (context?.companyId) {
-      and.push({ companyId: context.companyId });
-    }
+    and.push({ companyId: context.companyId });
 
     const from = this.parseDate(
       this.firstQueryValue(
@@ -2309,7 +2303,7 @@ export class ReportsService {
 
   private async buildProductPerformanceRowsApi(
     query: Record<string, string | undefined>,
-    context: any,
+    context: CompanyRequestContext,
   ) {
     const products = await this.loadReportProducts(query, context);
     const sales = await this.loadReportSales(query, context);
@@ -2371,7 +2365,7 @@ export class ReportsService {
 
         return {
           rep_date: '0001-01-01T00:00:00Z',
-          company_id: context?.companyId ?? '',
+          company_id: context.companyId,
           shop_id: shop?.id ?? '',
           shop_name: shop?.name ?? branchCode,
           product_id: product.publicId ?? product.id ?? '',
@@ -2486,7 +2480,7 @@ export class ReportsService {
 
   private async buildImportReportRows(
     query: Record<string, string | undefined>,
-    context: any,
+    context: CompanyRequestContext,
   ) {
     const movements = await this.loadProductMovements(
       { ...query, movementType: 'PURCHASE' },
@@ -2676,7 +2670,7 @@ export class ReportsService {
 
   private async buildStockReportRows(
     query: Record<string, string | undefined>,
-    context: any,
+    context: CompanyRequestContext,
   ) {
     const products = await this.loadReportProducts(query, context);
     const shops = await this.loadReportShops(context, query);
@@ -3149,7 +3143,7 @@ export class ReportsService {
 
   private async assertSellerVisibility(
     sellerId: number,
-    context: any,
+    context: CompanyRequestContext,
     authorization?: string,
   ) {
     if (context?.userId === sellerId) {
@@ -3495,7 +3489,10 @@ export class ReportsService {
     return sale.clientName?.trim() || sale.clientId?.trim() || '';
   }
 
-  private async loadCustomerFirstPurchaseDates(sales: any[], context: any) {
+  private async loadCustomerFirstPurchaseDates(
+    sales: any[],
+    context: CompanyRequestContext,
+  ) {
     const firstPurchaseByCustomer = new Map<string, Date>();
     const clientIds = [
       ...new Set(
@@ -3512,10 +3509,8 @@ export class ReportsService {
           status: {
             in: ['paid', 'returned'],
           },
-          ...(context?.companyId ? { companyId: context.companyId } : {}),
-          ...(context?.allowedBranchCodes?.length
-            ? { branchCode: { in: context.allowedBranchCodes } }
-            : {}),
+          companyId: context.companyId,
+          branchCode: { in: context.allowedBranchCodes },
           NOT: {
             saleType: 'return',
           },
@@ -3616,7 +3611,7 @@ export class ReportsService {
 
   private async resolveShopBranchCodesFromQuery(
     query: Record<string, string | undefined>,
-    context: any,
+    context: CompanyRequestContext,
     keys: string[],
   ) {
     const shopKeys = this.extractQueryStringArray(query, ...keys);
@@ -3625,7 +3620,8 @@ export class ReportsService {
     }
     const shops = await this.db.shop.findMany({
       where: {
-        ...(context?.companyId ? { companyId: context.companyId } : {}),
+        companyId: context.companyId,
+        branchCode: { in: context.allowedBranchCodes },
         OR: [{ id: { in: shopKeys } }, { branchCode: { in: shopKeys } }],
       },
       select: {
@@ -3637,7 +3633,7 @@ export class ReportsService {
 
   private async resolveShopIdsFromQuery(
     query: Record<string, string | undefined>,
-    context: any,
+    context: CompanyRequestContext,
     keys: string[],
   ) {
     const shopKeys = this.extractQueryStringArray(query, ...keys);
@@ -3646,7 +3642,8 @@ export class ReportsService {
     }
     const shops = await this.db.shop.findMany({
       where: {
-        ...(context?.companyId ? { companyId: context.companyId } : {}),
+        companyId: context.companyId,
+        branchCode: { in: context.allowedBranchCodes },
         OR: [{ id: { in: shopKeys } }, { branchCode: { in: shopKeys } }],
       },
       select: {

@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -9,6 +8,7 @@ import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import { extname, join } from 'path';
+import { CompanyRequestContext } from '../auth/request-context';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import {
   normalizeProductPhotoForStorage,
@@ -689,9 +689,7 @@ export class ProductsService {
   }
 
   private async getRequestContext(authorization?: string) {
-    return authorization
-      ? this.usersService.getRequestContext(authorization)
-      : null;
+    return this.usersService.getCompanyRequestContext(authorization);
   }
 
   async searchForPos(
@@ -699,12 +697,6 @@ export class ProductsService {
     authorization?: string,
   ) {
     const context = await this.getRequestContext(authorization);
-    if (!context || context.userType !== 'company' || !context.companyId) {
-      throw new ForbiddenException(
-        'Only company users can search POS products',
-      );
-    }
-
     const shopId = args.shopId?.trim() || context.currentShopId;
     if (!shopId) {
       throw new BadRequestException('shopId is required');
@@ -732,10 +724,7 @@ export class ProductsService {
               ],
             }
           : {}),
-        OR: [
-          { stocks: { some: { branchCode } } },
-          { stocks: { none: {} } },
-        ],
+        OR: [{ stocks: { some: { branchCode } } }, { stocks: { none: {} } }],
       },
       include: {
         stocks: {
@@ -884,9 +873,8 @@ export class ProductsService {
     const offset = (safePage - 1) * safeLimit;
     const windowSize = offset + safeLimit;
     const context = await this.getRequestContext(authorization);
-    const companyId =
-      context?.userType === 'company' ? (context.companyId ?? undefined) : undefined;
-    const invoiceWhere = companyId ? { companyId } : {};
+    const companyId = context.companyId;
+    const invoiceWhere = { companyId };
     const [sessions, importCount, invoices, invoiceCount] = await Promise.all([
       this.listPersistedImportSessions(0, windowSize, companyId),
       this.countPersistedImportSessions(companyId),
@@ -971,14 +959,18 @@ export class ProductsService {
     for (const item of items) {
       for (const allocation of item.allocations ?? []) {
         const shop = allocation?.shop;
-        if (shop?.id && shop?.name) shops.set(String(shop.id), String(shop.name));
+        if (shop?.id && shop?.name)
+          shops.set(String(shop.id), String(shop.name));
       }
     }
 
     const totalQuantity =
       invoice.totalQuantity != null
         ? Number(invoice.totalQuantity)
-        : items.reduce((sum: number, item: any) => sum + Number(item.quantity), 0);
+        : items.reduce(
+            (sum: number, item: any) => sum + Number(item.quantity),
+            0,
+          );
     const totalSupplyPrice =
       invoice.totalAmount != null
         ? Number(invoice.totalAmount)
@@ -989,12 +981,16 @@ export class ProductsService {
           );
     const totalRetailPrice = items.reduce(
       (sum: number, item: any) =>
-        sum + Number(item.quantity) * Number(item.matchedProduct?.salePrice ?? 0),
+        sum +
+        Number(item.quantity) * Number(item.matchedProduct?.salePrice ?? 0),
       0,
     );
     const rawStatus = String(invoice.status ?? 'DRAFT');
     const statusCode = statusCodeByInvoiceStatus[rawStatus] ?? 'draft';
-    const createdBy = [invoice.createdBy?.firstName, invoice.createdBy?.lastName]
+    const createdBy = [
+      invoice.createdBy?.firstName,
+      invoice.createdBy?.lastName,
+    ]
       .filter(Boolean)
       .join(' ');
     const shopEntries = [...shops.entries()];
@@ -1023,7 +1019,9 @@ export class ProductsService {
       int_id: String(invoice.intId),
       requires_approval: rawStatus === 'READY',
       can_commit: rawStatus === 'READY',
-      is_finished: ['COMMITTED', 'CANCELLED', 'ROLLED_BACK'].includes(rawStatus),
+      is_finished: ['COMMITTED', 'CANCELLED', 'ROLLED_BACK'].includes(
+        rawStatus,
+      ),
       mode: 'with_check',
       source: 'receipt',
     };
@@ -1036,13 +1034,7 @@ export class ProductsService {
     }
 
     const context = await this.getRequestContext(authorization);
-    if (
-      context?.userType === 'company' &&
-      context.companyId &&
-      session.companyId !== context.companyId
-    ) {
-      throw new NotFoundException('Import session not found');
-    }
+    this.assertImportSessionAccess(session, context);
 
     const shopLookup = await this.buildShopLookupByBranchCodes(
       [session.branchCode],
@@ -1070,6 +1062,9 @@ export class ProductsService {
       this.optionalString(body.id) ??
       randomUUID();
     const existingSession = await this.resolveImportSessionFromStore(importId);
+    if (existingSession) {
+      this.assertImportSessionAccess(existingSession, writeContext);
+    }
     const shopId =
       this.optionalString(body.shop_id) ?? existingSession?.shopId ?? '';
 
@@ -1158,12 +1153,18 @@ export class ProductsService {
     };
   }
 
-  async getImportProgress(id: string) {
+  async getImportProgress(id: string, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
     const resolvedJobId = IMPORT_JOBS.has(id)
       ? id
       : (this.resolveImportSession(id)?.jobId ?? '');
     const job = resolvedJobId ? IMPORT_JOBS.get(resolvedJobId) : undefined;
     if (job) {
+      const session = await this.resolveImportSessionFromStore(job.importId);
+      if (!session) {
+        throw new NotFoundException('Import job not found');
+      }
+      this.assertImportSessionAccess(session, context);
       return {
         correlation_id: job.correlation_id,
         import_id: job.importId,
@@ -1179,6 +1180,7 @@ export class ProductsService {
     if (!session) {
       throw new NotFoundException('Import job not found');
     }
+    this.assertImportSessionAccess(session, context);
 
     const isFinished =
       session.status === 'preview_ready' ||
@@ -1197,11 +1199,13 @@ export class ProductsService {
     };
   }
 
-  async getImportItemsDp(id: string) {
+  async getImportItemsDp(id: string, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
     const session = await this.resolveImportSessionFromStore(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
+    this.assertImportSessionAccess(session, context);
 
     await this.ensureImportPreviewItems(session);
 
@@ -1218,11 +1222,14 @@ export class ProductsService {
       page: number;
       difference: boolean;
     },
+    authorization?: string,
   ) {
+    const context = await this.getRequestContext(authorization);
     const session = await this.resolveImportSessionFromStore(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
+    this.assertImportSessionAccess(session, context);
 
     await this.ensureImportPreviewItems(session);
 
@@ -1346,6 +1353,7 @@ export class ProductsService {
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
+    this.assertImportSessionAccess(session, context);
 
     await this.ensureImportPreviewItems(session);
 
@@ -1440,11 +1448,22 @@ export class ProductsService {
   getStocktakingById(
     id: string,
     query: { page: number; limit: number; type?: string },
+    authorization?: string,
   ) {
+    return this.getStocktakingByIdWithContext(id, query, authorization);
+  }
+
+  private async getStocktakingByIdWithContext(
+    id: string,
+    query: { page: number; limit: number; type?: string },
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
     const stocktaking = this.resolveStocktakingSession(id);
     if (!stocktaking) {
       throw new NotFoundException('Stocktaking not found');
     }
+    this.assertStocktakingAccess(stocktaking, context);
 
     const safeLimit = Math.max(1, Math.min(query.limit, 1000));
     const safePage = Math.max(1, query.page);
@@ -1460,16 +1479,24 @@ export class ProductsService {
     return {
       count: sourceItems.length,
       items: items.length
-        ? items.map((item) => this.toStocktakingListItemResponse(stocktaking, item))
+        ? items.map((item) =>
+            this.toStocktakingListItemResponse(stocktaking, item),
+          )
         : null,
     };
   }
 
-  getStocktakingLogs(id: string, query: { page: number; limit: number }) {
+  async getStocktakingLogs(
+    id: string,
+    query: { page: number; limit: number },
+    authorization?: string,
+  ) {
+    const context = await this.getRequestContext(authorization);
     const stocktaking = this.resolveStocktakingSession(id);
     if (!stocktaking) {
       throw new NotFoundException('Stocktaking not found');
     }
+    this.assertStocktakingAccess(stocktaking, context);
 
     const safeLimit = Math.max(1, Math.min(query.limit, 100));
     const safePage = Math.max(1, query.page);
@@ -1480,7 +1507,9 @@ export class ProductsService {
 
     return {
       count: stocktaking.logs.length,
-      logs: logs.map((entry) => this.toStocktakingLogResponse(stocktaking, entry)),
+      logs: logs.map((entry) =>
+        this.toStocktakingLogResponse(stocktaking, entry),
+      ),
       users: stocktaking.createdBy.id
         ? [
             {
@@ -1503,7 +1532,11 @@ export class ProductsService {
     }
 
     const context = await this.getRequestContext(authorization);
-    const productBarcode = this.requireString(body.product_barcode, 'product_barcode');
+    this.assertStocktakingAccess(stocktaking, context);
+    const productBarcode = this.requireString(
+      body.product_barcode,
+      'product_barcode',
+    );
     const requestedProductId = this.optionalString(body.product_id) ?? '';
     const requestedValue =
       this.toNumber(body.measurement_value ?? body.quantity ?? 1) ?? 1;
@@ -1521,15 +1554,17 @@ export class ProductsService {
     item.last_scan_num = Math.trunc(Date.now() / 1000);
 
     const session = this.resolveImportSession(stocktaking.importId);
-    const importItem = session?.items.find((candidate) => candidate.id === item.importItemId);
+    const importItem = session?.items.find(
+      (candidate) => candidate.id === item.importItemId,
+    );
     const productInfo =
       importItem?.product_info && !stocktaking.useImportProperties
         ? importItem.product_info
         : null;
     const productName =
       !stocktaking.useImportProperties && productInfo
-        ? this.optionalString((productInfo as Record<string, unknown>).name) ??
-          item.product_name
+        ? (this.optionalString((productInfo as Record<string, unknown>).name) ??
+          item.product_name)
         : item.product_name;
 
     return {
@@ -1603,6 +1638,9 @@ export class ProductsService {
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
+    const context = await this.getRequestContext(authorization);
+    this.assertStocktakingAccess(stocktaking, context);
+    this.assertImportSessionAccess(session, context);
 
     if (stocktaking.acceptedAt && session.result) {
       return {
@@ -1616,7 +1654,10 @@ export class ProductsService {
     const result = await this.commitImport(session.id, authorization, {
       forceWithCheckAccept: true,
     });
-    stocktaking.acceptedAt = this.formatDateTime(new Date(), stocktaking.companyId);
+    stocktaking.acceptedAt = this.formatDateTime(
+      new Date(),
+      stocktaking.companyId,
+    );
 
     return {
       ...result,
@@ -1638,6 +1679,7 @@ export class ProductsService {
 
     const context = await this.getRequestContext(authorization);
     const writeContext = this.requireCatalogWriteContext(context);
+    this.assertImportSessionAccess(session, writeContext);
 
     if (session.mode === 'with_check' && !options?.forceWithCheckAccept) {
       throw new BadRequestException(
@@ -1703,11 +1745,13 @@ export class ProductsService {
     };
   }
 
-  async cancelImport(id: string) {
+  async cancelImport(id: string, authorization?: string) {
+    const context = await this.getRequestContext(authorization);
     const session = await this.resolveImportSessionFromStore(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
+    this.assertImportSessionAccess(session, context);
 
     session.status = 'cancelled';
     session.updatedAt = this.formatDateTime(new Date());
@@ -1741,6 +1785,7 @@ export class ProductsService {
 
     const context = await this.getRequestContext(authorization);
     const writeContext = this.requireCatalogWriteContext(context);
+    this.assertImportSessionAccess(session, writeContext);
 
     const movements = await this.prisma.stockMovement.findMany({
       where: {
@@ -1771,7 +1816,10 @@ export class ProductsService {
         select: { id: true, name: true },
       }),
       this.prisma.productStock.findMany({
-        where: { productId: { in: productIds }, branchCode: session.branchCode },
+        where: {
+          productId: { in: productIds },
+          branchCode: session.branchCode,
+        },
       }),
     ]);
     const productNameById = new Map(products.map((p) => [p.id, p.name]));
@@ -2054,7 +2102,9 @@ export class ProductsService {
       `,
     );
 
-    return rows[0] ? this.deserializePersistedImportSession(rows[0]) : undefined;
+    return rows[0]
+      ? this.deserializePersistedImportSession(rows[0])
+      : undefined;
   }
 
   private async loadPersistedImportSessionByJobId(jobId: string) {
@@ -2085,7 +2135,9 @@ export class ProductsService {
       `,
     );
 
-    return rows[0] ? this.deserializePersistedImportSession(rows[0]) : undefined;
+    return rows[0]
+      ? this.deserializePersistedImportSession(rows[0])
+      : undefined;
   }
 
   private async listPersistedImportSessions(
@@ -2203,9 +2255,7 @@ export class ProductsService {
   }
 
   private toImportFieldsArray(value: unknown): ImportSession['fields'] {
-    return Array.isArray(value)
-      ? (value as ImportSession['fields'])
-      : [];
+    return Array.isArray(value) ? (value as ImportSession['fields']) : [];
   }
 
   private toImportRowsArray(value: unknown): ImportRowInput[] {
@@ -2793,7 +2843,10 @@ export class ProductsService {
       type: item.scanned_measurement_value > 0 ? 'ok' : '',
       updated_at_int: item.last_scan_num,
       updated_at: item.last_scan_num
-        ? this.formatDateTime(new Date(item.last_scan_num * 1000), stocktaking.companyId)
+        ? this.formatDateTime(
+            new Date(item.last_scan_num * 1000),
+            stocktaking.companyId,
+          )
         : '',
     };
   }
@@ -2909,34 +2962,10 @@ export class ProductsService {
   }
 
   private resolveImportCompanyId(
-    body: Record<string, unknown>,
-    context?: {
-      userType?: string;
-      companyId?: string | null;
-    } | null,
+    _body: Record<string, unknown>,
+    context: CompanyRequestContext,
   ) {
-    if (context?.userType === 'company') {
-      if (!context.companyId) {
-        throw new UnauthorizedException('Company user is missing company');
-      }
-
-      return context.companyId;
-    }
-
-    const requestedCompanyId =
-      this.optionalString(body.company_id) ??
-      this.optionalString(
-        (body.metadata as Record<string, unknown> | undefined)?.company_id,
-      ) ??
-      context?.companyId;
-
-    if (!requestedCompanyId) {
-      throw new BadRequestException(
-        'company_id is required for import requests made by platform users',
-      );
-    }
-
-    return requestedCompanyId;
+    return context.companyId;
   }
 
   async findAll(
@@ -3116,9 +3145,10 @@ export class ProductsService {
       context?.companyId,
     );
 
-    const visibleBranchCodes = resolvedShopBranchCodes?.length
-      ? resolvedShopBranchCodes
-      : context?.allowedBranchCodes;
+    const visibleBranchCodes =
+      resolvedShopBranchCodes !== undefined
+        ? resolvedShopBranchCodes
+        : context.allowedBranchCodes;
 
     const response: Record<string, unknown> = {
       count,
@@ -3130,9 +3160,10 @@ export class ProductsService {
     };
 
     if (statistics) {
-      const visibleBranchCodes = resolvedShopBranchCodes?.length
-        ? resolvedShopBranchCodes
-        : context?.allowedBranchCodes;
+      const visibleBranchCodes =
+        resolvedShopBranchCodes !== undefined
+          ? resolvedShopBranchCodes
+          : context.allowedBranchCodes;
       const productsForStatistics = await this.prisma.product.findMany({
         where,
         select: {
@@ -3232,7 +3263,7 @@ export class ProductsService {
         purchasePrice: true,
         salePrice: true,
         stocks: {
-          ...(resolvedShopBranchCodes?.length
+          ...(resolvedShopBranchCodes !== undefined
             ? {
                 where: {
                   branchCode: {
@@ -3240,15 +3271,13 @@ export class ProductsService {
                   },
                 },
               }
-            : context?.allowedBranchCodes?.length
-              ? {
-                  where: {
-                    branchCode: {
-                      in: context.allowedBranchCodes,
-                    },
+            : {
+                where: {
+                  branchCode: {
+                    in: context.allowedBranchCodes,
                   },
-                }
-              : {}),
+                },
+              }),
           select: {
             quantity: true,
             purchasePrice: true,
@@ -3269,7 +3298,9 @@ export class ProductsService {
     const name = this.requireString(body.name, 'name');
     const sku = this.optionalString(body.sku);
     const barcode = this.optionalString(body.barcode);
-    const photo = normalizeProductPhotoForStorage(this.optionalString(body.photo));
+    const photo = normalizeProductPhotoForStorage(
+      this.optionalString(body.photo),
+    );
     const productType = this.optionalString(body.product_type);
     const variantType = this.optionalString(body.variant_type);
     const unit = this.optionalString(body.unit);
@@ -3806,7 +3837,8 @@ export class ProductsService {
       throw new BadRequestException('measurement_unit_id is required');
     }
 
-    const resolvedMeasurementUnitId = measurementUnitId ?? existingMeasurementUnitId;
+    const resolvedMeasurementUnitId =
+      measurementUnitId ?? existingMeasurementUnitId;
     const measurementUnit = resolvedMeasurementUnitId
       ? await this.resolveMeasurementUnitSnapshot(
           resolvedMeasurementUnitId,
@@ -3844,15 +3876,14 @@ export class ProductsService {
           normalizeProductPhotoForStorage(existingProduct.photo),
         productType,
         variantType: isVariative ? 'variative' : 'simple',
-        unit:
-          this.resolveMeasurementTypeValue(
-            this.optionalString(body.measurement_type) ?? existingProduct.unit,
-            measurementUnit?.short_name ??
-              this.optionalString(
-                (existingProduct.metadata as Record<string, unknown> | null)
-                  ?.measurement_unit_short_name,
-              ),
-          ),
+        unit: this.resolveMeasurementTypeValue(
+          this.optionalString(body.measurement_type) ?? existingProduct.unit,
+          measurementUnit?.short_name ??
+            this.optionalString(
+              (existingProduct.metadata as Record<string, unknown> | null)
+                ?.measurement_unit_short_name,
+            ),
+        ),
         purchasePrice:
           this.toNumber(body.supply_price) ??
           existingProduct.purchasePrice ??
@@ -3864,7 +3895,8 @@ export class ProductsService {
           existingProduct.markupPercent ??
           0,
         productGroupId:
-          this.optionalString(body.product_group_id) ?? existingProduct.productGroupId,
+          this.optionalString(body.product_group_id) ??
+          existingProduct.productGroupId,
         tier: this.resolveProductTier(body.tier) ?? existingProduct.tier,
         quantity: supportsStock
           ? shipmentsWithBranchCodes.length
@@ -3940,7 +3972,8 @@ export class ProductsService {
 
     if (
       supportsStock &&
-      (body.shipments !== undefined || body.shop_measurement_values !== undefined)
+      (body.shipments !== undefined ||
+        body.shop_measurement_values !== undefined)
     ) {
       await this.logManualStockAdjustments(
         existingProduct.stocks,
@@ -4125,9 +4158,13 @@ export class ProductsService {
       // ProductSupplier, ProductStock, ProductSupplyPriceHistory, TransferItem
       // all have onDelete: Cascade in schema and will be removed automatically,
       // but Prisma $transaction doesn't rely on DB cascade — delete them explicitly
-      await tx.productSupplier.deleteMany({ where: { productId: { in: ids } } });
+      await tx.productSupplier.deleteMany({
+        where: { productId: { in: ids } },
+      });
       await tx.productStock.deleteMany({ where: { productId: { in: ids } } });
-      await tx.productSupplyPriceHistory.deleteMany({ where: { productId: { in: ids } } });
+      await tx.productSupplyPriceHistory.deleteMany({
+        where: { productId: { in: ids } },
+      });
       await tx.transferItem.deleteMany({ where: { productId: { in: ids } } });
 
       const { count } = await tx.product.deleteMany({
@@ -4256,28 +4293,29 @@ export class ProductsService {
         quantity: true,
       },
     });
-    const supplyPriceHistory = await this.prisma.productSupplyPriceHistory.findMany({
-      where: {
-        productId: product.id,
-        ...(context?.userType === 'company' && context.allowedShopIds?.length
-          ? {
-              shopId: {
-                in: context.allowedShopIds,
-              },
-            }
-          : {}),
-      },
-      include: {
-        shop: {
-          select: {
-            id: true,
+    const supplyPriceHistory =
+      await this.prisma.productSupplyPriceHistory.findMany({
+        where: {
+          productId: product.id,
+          ...(context?.userType === 'company' && context.allowedShopIds?.length
+            ? {
+                shopId: {
+                  in: context.allowedShopIds,
+                },
+              }
+            : {}),
+        },
+        include: {
+          shop: {
+            select: {
+              id: true,
+            },
           },
         },
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+        orderBy: {
+          createdAt: 'desc',
+        },
+      });
     const acceptedOrderAggregate = await this.prisma.orderItem.aggregate({
       where: {
         productId: product.id,
@@ -4391,7 +4429,13 @@ export class ProductsService {
 
   private toStockMovementListItem(movement: {
     id: string;
-    type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER' | 'ADJUSTMENT';
+    type:
+      | 'SALE'
+      | 'RETURN'
+      | 'WRITE_OFF'
+      | 'PURCHASE'
+      | 'TRANSFER'
+      | 'ADJUSTMENT';
     displayTypeCode: string;
     displayTypeLabel: string;
     quantity: Prisma.Decimal | number;
@@ -4424,7 +4468,8 @@ export class ProductsService {
           movement.order?.orderType,
           movement.order?.status,
         ),
-      product_id: movement.product?.publicId ?? String(movement.product?.id ?? ''),
+      product_id:
+        movement.product?.publicId ?? String(movement.product?.id ?? ''),
       product_name: movement.product?.name ?? '',
       shop_name: movement.shop?.name ?? '',
       before_quantity: Number(movement.beforeQuantity ?? 0),
@@ -4496,10 +4541,7 @@ export class ProductsService {
     throw new BadRequestException('Barcode range exceeded');
   }
 
-  async listTransfers(
-    query: TransferListQuery,
-    authorization?: string,
-  ) {
+  async listTransfers(query: TransferListQuery, authorization?: string) {
     const context = await this.getRequestContext(authorization);
     const transferDb = (this.prisma as any).transfer;
     const safeLimit = Math.max(1, Math.trunc(query.limit || 10));
@@ -4547,10 +4589,7 @@ export class ProductsService {
     };
   }
 
-  async createTransfer(
-    body: Record<string, unknown>,
-    authorization?: string,
-  ) {
+  async createTransfer(body: Record<string, unknown>, authorization?: string) {
     const context = await this.getRequestContext(authorization);
     if (!context?.companyId) {
       throw new UnauthorizedException('Company context is required');
@@ -4664,7 +4703,9 @@ export class ProductsService {
     const arrivalBranchCode = transfer.arrivalShop.branchCode;
     const safeLimit = Math.max(1, Math.trunc(query.limit || 20));
     const safePage = Math.max(1, Math.trunc(query.page || 1));
-    const transferProductIds = transfer.items.map((item: any) => item.productId);
+    const transferProductIds = transfer.items.map(
+      (item: any) => item.productId,
+    );
 
     const where: Prisma.ProductWhereInput = {
       companyId: transfer.companyId,
@@ -4831,7 +4872,9 @@ export class ProductsService {
       '';
     const quantity =
       this.toNumber(
-        body.transfer_measurement_value ?? body.quantity ?? body.measurement_value,
+        body.transfer_measurement_value ??
+          body.quantity ??
+          body.measurement_value,
       ) ?? 0;
 
     if (!productIdentifier) {
@@ -4972,8 +5015,7 @@ export class ProductsService {
           toShopId: transfer.arrivalShopId,
           supplyPrice:
             departureStock.purchasePrice ?? item.product.purchasePrice ?? 0,
-          retailPrice:
-            departureStock.salePrice ?? item.product.salePrice ?? 0,
+          retailPrice: departureStock.salePrice ?? item.product.salePrice ?? 0,
           newRetailPrice:
             departureStock.salePrice ?? item.product.salePrice ?? 0,
           fromRetailPrice:
@@ -5022,7 +5064,8 @@ export class ProductsService {
         const beforeQuantity = arrivalStock?.quantity ?? 0;
         const afterQuantity = beforeQuantity + quantity;
         const departureStock = item.product.stocks.find(
-          (stock: any) => stock.branchCode === transfer.departureShop.branchCode,
+          (stock: any) =>
+            stock.branchCode === transfer.departureShop.branchCode,
         );
         const supplyPrice =
           arrivalStock?.purchasePrice ??
@@ -5122,7 +5165,10 @@ export class ProductsService {
     if (Array.isArray(body.items)) {
       for (const entry of body.items as any[]) {
         if (entry?.item_id && entry?.arrived_quantity !== undefined) {
-          arrivedMap.set(String(entry.item_id), Math.max(0, Number(entry.arrived_quantity) || 0));
+          arrivedMap.set(
+            String(entry.item_id),
+            Math.max(0, Number(entry.arrived_quantity) || 0),
+          );
         }
       }
     }
@@ -5137,20 +5183,35 @@ export class ProductsService {
           : Number(item.quantity ?? 0);
 
         const arrivalStock = await tx.productStock.findFirst({
-          where: { productId: item.productId, branchCode: transfer.arrivalShop.branchCode },
+          where: {
+            productId: item.productId,
+            branchCode: transfer.arrivalShop.branchCode,
+          },
         });
         const beforeQuantity = arrivalStock?.quantity ?? 0;
         const afterQuantity = beforeQuantity + arrivedQty;
         const departureStock = item.product.stocks?.find(
           (s: any) => s.branchCode === transfer.departureShop.branchCode,
         );
-        const supplyPrice = arrivalStock?.purchasePrice ?? departureStock?.purchasePrice ?? item.product.purchasePrice ?? 0;
-        const retailPrice = arrivalStock?.salePrice ?? departureStock?.salePrice ?? item.product.salePrice ?? 0;
+        const supplyPrice =
+          arrivalStock?.purchasePrice ??
+          departureStock?.purchasePrice ??
+          item.product.purchasePrice ??
+          0;
+        const retailPrice =
+          arrivalStock?.salePrice ??
+          departureStock?.salePrice ??
+          item.product.salePrice ??
+          0;
 
         if (arrivalStock) {
           await tx.productStock.update({
             where: { id: arrivalStock.id },
-            data: { quantity: afterQuantity, purchasePrice: supplyPrice, salePrice: retailPrice },
+            data: {
+              quantity: afterQuantity,
+              purchasePrice: supplyPrice,
+              salePrice: retailPrice,
+            },
           });
         } else {
           await tx.productStock.create({
@@ -5195,7 +5256,11 @@ export class ProductsService {
 
       await db.transfer.update({
         where: { id: transfer.id },
-        data: { status: 'ACCEPTED', acceptedAt: new Date(), acceptedById: context.userId },
+        data: {
+          status: 'ACCEPTED',
+          acceptedAt: new Date(),
+          acceptedById: context.userId,
+        },
       });
     });
 
@@ -5208,7 +5273,9 @@ export class ProductsService {
 
     const transfer = await this.findTransferOrThrow(id, context);
     if (!['DRAFT', 'SENT'].includes(transfer.status)) {
-      throw new BadRequestException('Only draft or sent transfers can be cancelled');
+      throw new BadRequestException(
+        'Only draft or sent transfers can be cancelled',
+      );
     }
 
     await this.prisma.$transaction(async (tx) => {
@@ -5219,7 +5286,10 @@ export class ProductsService {
         for (const item of transfer.items) {
           const quantity = Number(item.quantity ?? 0);
           const departureStock = await tx.productStock.findFirst({
-            where: { productId: item.productId, branchCode: transfer.departureShop.branchCode },
+            where: {
+              productId: item.productId,
+              branchCode: transfer.departureShop.branchCode,
+            },
           });
           const beforeQuantity = departureStock?.quantity ?? 0;
           const afterQuantity = beforeQuantity + quantity;
@@ -5254,30 +5324,26 @@ export class ProductsService {
     return this.getTransferById(id, authorization);
   }
 
-  private buildTransferScope(context: any) {
-    if (context?.userType === 'company') {
-      return {
-        companyId: context.companyId,
-        ...(context.allowedShopIds?.length
-          ? {
-              OR: [
-                {
-                  departureShopId: {
-                    in: context.allowedShopIds,
-                  },
+  private buildTransferScope(context: CompanyRequestContext) {
+    return {
+      companyId: context.companyId,
+      ...(context.allowedShopIds.length
+        ? {
+            OR: [
+              {
+                departureShopId: {
+                  in: context.allowedShopIds,
                 },
-                {
-                  arrivalShopId: {
-                    in: context.allowedShopIds,
-                  },
+              },
+              {
+                arrivalShopId: {
+                  in: context.allowedShopIds,
                 },
-              ],
-            }
-          : {}),
-      };
-    }
-
-    return context?.companyId ? { companyId: context.companyId } : {};
+              },
+            ],
+          }
+        : { id: { in: [] } }),
+    };
   }
 
   private transferInclude() {
@@ -5317,7 +5383,10 @@ export class ProductsService {
     };
   }
 
-  private async findTransferOrThrow(id: string, context: any) {
+  private async findTransferOrThrow(
+    id: string,
+    context: CompanyRequestContext,
+  ) {
     const transfer = await (this.prisma as any).transfer.findFirst({
       where: {
         id,
@@ -5354,7 +5423,8 @@ export class ProductsService {
       const departureStock = item.product.stocks.find(
         (stock: any) => stock.branchCode === transfer.departureShop.branchCode,
       );
-      const retailPrice = departureStock?.salePrice ?? item.product.salePrice ?? 0;
+      const retailPrice =
+        departureStock?.salePrice ?? item.product.salePrice ?? 0;
       return sum + retailPrice * Number(item.quantity ?? 0);
     }, 0);
 
@@ -5453,7 +5523,10 @@ export class ProductsService {
       product_id: this.getProductPublicId(product),
       transfer_measurement_value: Number(item?.quantity ?? 0),
       updated_at: item?.updatedAt
-        ? this.formatDate(item.updatedAt, product.companyId ?? transfer.companyId ?? undefined)
+        ? this.formatDate(
+            item.updatedAt,
+            product.companyId ?? transfer.companyId ?? undefined,
+          )
         : '',
       updated_at_int: item?.updatedAt ? Number(item.updatedAt.getTime()) : 0,
       product: this.buildTransferProductPayload(
@@ -5579,8 +5652,12 @@ export class ProductsService {
         has_trigger: false,
         shop_id: departureShop.shop_id,
         total_measurement_value: departureMeasurement,
-        total_min_supply_price: departureMeasurement ? departureSupplyPrice : null,
-        total_max_supply_price: departureMeasurement ? departureSupplyPrice : null,
+        total_min_supply_price: departureMeasurement
+          ? departureSupplyPrice
+          : null,
+        total_max_supply_price: departureMeasurement
+          ? departureSupplyPrice
+          : null,
         total_supply_sum: departureMeasurement * departureSupplyPrice,
         total_active_measurement_value: departureMeasurement,
         total_active_min_supply_price: departureMeasurement
@@ -6044,7 +6121,12 @@ export class ProductsService {
       sku: product.sku ?? '',
       main_image_url: this.normalizeProductPhotoValue(product.photo) ?? '',
       images: product.photo
-        ? [{ url: this.normalizeProductPhotoValue(product.photo) ?? product.photo }]
+        ? [
+            {
+              url:
+                this.normalizeProductPhotoValue(product.photo) ?? product.photo,
+            },
+          ]
         : null,
       barcode: product.barcode ?? '',
       additional_barcodes: null,
@@ -6628,7 +6710,7 @@ export class ProductsService {
       });
     }
 
-    if (resolvedShopIds.length) {
+    if (shopIds !== undefined) {
       and.push({
         stocks: {
           some: {
@@ -6745,9 +6827,7 @@ export class ProductsService {
           ...(wholesalePriceFrom !== undefined
             ? { gte: wholesalePriceFrom }
             : {}),
-          ...(wholesalePriceTo !== undefined
-            ? { lte: wholesalePriceTo }
-            : {}),
+          ...(wholesalePriceTo !== undefined ? { lte: wholesalePriceTo } : {}),
           ...(wholesalePriceFrom === undefined &&
           wholesalePriceTo === undefined &&
           wholesalePrice !== undefined
@@ -6915,12 +6995,12 @@ export class ProductsService {
         smallLeftCount: 0,
       },
     );
-    const measurementUnitsList = [
-      ...measurementUnits.entries(),
-    ].map(([measurementUnit, measurementValue]) => ({
-      measurement_unit: measurementUnit,
-      measurement_value: measurementValue,
-    }));
+    const measurementUnitsList = [...measurementUnits.entries()].map(
+      ([measurementUnit, measurementValue]) => ({
+        measurement_unit: measurementUnit,
+        measurement_value: measurementValue,
+      }),
+    );
 
     return {
       statistics: {
@@ -7476,7 +7556,8 @@ export class ProductsService {
     );
     const currentSupplyPrice =
       existingStock?.purchasePrice ?? product.purchasePrice ?? 0;
-    const currentRetailPrice = existingStock?.salePrice ?? product.salePrice ?? 0;
+    const currentRetailPrice =
+      existingStock?.salePrice ?? product.salePrice ?? 0;
     const currentMeasurementUnit = this.normalizeImportFieldValue(product.unit);
     const fileMeasurementUnit = this.normalizeImportFieldValue(
       row.measurementUnit,
@@ -7917,10 +7998,14 @@ export class ProductsService {
         existingStock?.salePrice ?? existingProduct.salePrice ?? 0;
       const beforeQuantity = existingStock?.quantity ?? 0;
       const afterQuantity = beforeQuantity + row.quantity;
-      const appliedSupplyPrice = this.shouldUseFileValue(onMatchPolicy.supplyPrice)
+      const appliedSupplyPrice = this.shouldUseFileValue(
+        onMatchPolicy.supplyPrice,
+      )
         ? row.supplyPrice
         : previousSupplyPrice;
-      const appliedRetailPrice = this.shouldUseFileValue(onMatchPolicy.retailPrice)
+      const appliedRetailPrice = this.shouldUseFileValue(
+        onMatchPolicy.retailPrice,
+      )
         ? row.retailPrice
         : previousRetailPrice;
 
@@ -8192,7 +8277,9 @@ export class ProductsService {
         }
       }
       if (!sku) {
-        throw new BadRequestException('Could not generate unique SKU for import');
+        throw new BadRequestException(
+          'Could not generate unique SKU for import',
+        );
       }
     }
 
@@ -8252,7 +8339,7 @@ export class ProductsService {
 
   private async buildProductSalesSummary(
     productId: number,
-    context: any,
+    context: CompanyRequestContext,
     options?: {
       fromCreatedAt?: string;
       toCreatedAt?: string;
@@ -8262,22 +8349,13 @@ export class ProductsService {
       options?.fromCreatedAt,
       options?.toCreatedAt,
     );
-    const visibleBranchCodes = context?.allowedBranchCodes?.length
-      ? context.allowedBranchCodes
-      : undefined;
     const saleItems = await this.prisma.saleItem.findMany({
       where: {
         productId,
         sale: {
           isDraft: false,
-          ...(context?.companyId ? { companyId: context.companyId } : {}),
-          ...(visibleBranchCodes?.length
-            ? {
-                branchCode: {
-                  in: visibleBranchCodes,
-                },
-              }
-            : {}),
+          companyId: context.companyId,
+          branchCode: { in: context.allowedBranchCodes },
           ...(createdAtFilter ? { createdAt: createdAtFilter } : {}),
         },
       },
@@ -8320,7 +8398,7 @@ export class ProductsService {
     ];
     const shopLookup = await this.buildShopLookupByBranchCodes(
       branchCodes,
-      context?.companyId,
+      context.companyId,
     );
 
     return {
@@ -8375,7 +8453,7 @@ export class ProductsService {
       movementType?: string;
       shopId?: string;
     },
-    context: any,
+    context: CompanyRequestContext,
   ): Promise<Prisma.StockMovementWhereInput> {
     const and: Prisma.StockMovementWhereInput[] = productId
       ? [{ productId }]
@@ -8385,9 +8463,7 @@ export class ProductsService {
       query.toCreatedAt,
     );
 
-    if (context?.companyId) {
-      and.push({ companyId: context.companyId });
-    }
+    and.push({ companyId: context.companyId });
 
     if (createdAt) {
       and.push({ createdAt });
@@ -8404,13 +8480,13 @@ export class ProductsService {
       query.shopId,
       context,
     );
-    if (resolvedShopIds?.length) {
+    if (resolvedShopIds !== undefined) {
       and.push({
         shopId: {
           in: resolvedShopIds,
         },
       });
-    } else if (context?.userType === 'company' && context.allowedShopIds?.length) {
+    } else {
       and.push({
         shopId: {
           in: context.allowedShopIds,
@@ -8447,7 +8523,10 @@ export class ProductsService {
       : undefined;
   }
 
-  private async resolveMovementShopFilter(shopId: string | undefined, context: any) {
+  private async resolveMovementShopFilter(
+    shopId: string | undefined,
+    context: CompanyRequestContext,
+  ) {
     const normalizedShopId = shopId?.trim();
     if (!normalizedShopId) {
       return undefined;
@@ -8455,7 +8534,7 @@ export class ProductsService {
 
     const shops = await this.prisma.shop.findMany({
       where: {
-        ...(context?.companyId ? { companyId: context.companyId } : {}),
+        companyId: context.companyId,
         OR: [{ id: normalizedShopId }, { branchCode: normalizedShopId }],
       },
       select: {
@@ -8465,11 +8544,7 @@ export class ProductsService {
 
     const resolvedShopIds = shops.map((shop) => shop.id);
     if (!resolvedShopIds.length) {
-      return [normalizedShopId];
-    }
-
-    if (context?.userType !== 'company') {
-      return resolvedShopIds;
+      return [];
     }
 
     return resolvedShopIds.filter((id) => context.allowedShopIds.includes(id));
@@ -8503,7 +8578,13 @@ export class ProductsService {
       shopId: string;
       productId: number;
       orderId?: string;
-      type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER' | 'ADJUSTMENT';
+      type:
+        | 'SALE'
+        | 'RETURN'
+        | 'WRITE_OFF'
+        | 'PURCHASE'
+        | 'TRANSFER'
+        | 'ADJUSTMENT';
       quantity: number;
       beforeQuantity: number;
       afterQuantity: number;
@@ -8617,44 +8698,48 @@ export class ProductsService {
     }
   }
 
-  private toLegacyProductMovementItem(
-    movement: {
+  private toLegacyProductMovementItem(movement: {
+    id: string;
+    type:
+      | 'SALE'
+      | 'RETURN'
+      | 'WRITE_OFF'
+      | 'PURCHASE'
+      | 'TRANSFER'
+      | 'ADJUSTMENT';
+    displayTypeCode: string;
+    displayTypeLabel: string;
+    externalId: string;
+    quantity: Prisma.Decimal | number;
+    loadedMeasurementValue: Prisma.Decimal | number;
+    beforeQuantity: Prisma.Decimal | number;
+    afterQuantity: Prisma.Decimal | number;
+    fromShopId: string;
+    toShopId: string;
+    supplyPrice: Prisma.Decimal | number;
+    retailPrice: Prisma.Decimal | number;
+    newRetailPrice: Prisma.Decimal | number;
+    fromRetailPrice: Prisma.Decimal | number;
+    fromSupplyPrice: Prisma.Decimal | number;
+    createdAt: Date;
+    shop?: {
       id: string;
-      type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER' | 'ADJUSTMENT';
-      displayTypeCode: string;
-      displayTypeLabel: string;
-      externalId: string;
-      quantity: Prisma.Decimal | number;
-      loadedMeasurementValue: Prisma.Decimal | number;
-      beforeQuantity: Prisma.Decimal | number;
-      afterQuantity: Prisma.Decimal | number;
-      fromShopId: string;
-      toShopId: string;
-      supplyPrice: Prisma.Decimal | number;
-      retailPrice: Prisma.Decimal | number;
-      newRetailPrice: Prisma.Decimal | number;
-      fromRetailPrice: Prisma.Decimal | number;
-      fromSupplyPrice: Prisma.Decimal | number;
+      name: string;
+      branchCode: string;
+    } | null;
+    createdBy?: {
+      id: number;
+      firstName: string | null;
+      lastName: string | null;
+    } | null;
+    order?: {
+      id: string;
+      orderNumber: string;
+      orderType: string;
+      status: string;
       createdAt: Date;
-      shop?: {
-        id: string;
-        name: string;
-        branchCode: string;
-      } | null;
-      createdBy?: {
-        id: number;
-        firstName: string | null;
-        lastName: string | null;
-      } | null;
-      order?: {
-        id: string;
-        orderNumber: string;
-        orderType: string;
-        status: string;
-        createdAt: Date;
-      } | null;
-    },
-  ) {
+    } | null;
+  }) {
     return {
       internal_id: 0,
       id: movement.id,
@@ -8672,10 +8757,7 @@ export class ProductsService {
           movement.order?.orderType,
           movement.order?.status,
         ),
-      created_at: this.formatDateTime(
-        movement.createdAt,
-        undefined,
-      ),
+      created_at: this.formatDateTime(movement.createdAt, undefined),
       external_id: movement.externalId || movement.order?.orderNumber || '',
       measurement_value: Number(movement.quantity ?? 0),
       loaded_measurement_value: Number(
@@ -8692,7 +8774,13 @@ export class ProductsService {
   }
 
   private mapProductMovementTypeToCode(
-    type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER' | 'ADJUSTMENT',
+    type:
+      | 'SALE'
+      | 'RETURN'
+      | 'WRITE_OFF'
+      | 'PURCHASE'
+      | 'TRANSFER'
+      | 'ADJUSTMENT',
     orderType?: string,
     orderStatus?: string,
   ) {
@@ -8722,7 +8810,13 @@ export class ProductsService {
   }
 
   private mapProductMovementTypeToLegacyType(
-    type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER' | 'ADJUSTMENT',
+    type:
+      | 'SALE'
+      | 'RETURN'
+      | 'WRITE_OFF'
+      | 'PURCHASE'
+      | 'TRANSFER'
+      | 'ADJUSTMENT',
     orderType?: string,
     orderStatus?: string,
   ) {
@@ -8753,7 +8847,13 @@ export class ProductsService {
 
   private buildProductMovementStats(
     movements: Array<{
-      type: 'SALE' | 'RETURN' | 'WRITE_OFF' | 'PURCHASE' | 'TRANSFER' | 'ADJUSTMENT';
+      type:
+        | 'SALE'
+        | 'RETURN'
+        | 'WRITE_OFF'
+        | 'PURCHASE'
+        | 'TRANSFER'
+        | 'ADJUSTMENT';
       quantity: Prisma.Decimal | number;
     }>,
   ) {
@@ -8841,9 +8941,8 @@ export class ProductsService {
     description: string,
     measurementUnit?: string | null,
   ) {
-    const normalizedMeasurementUnit = this.normalizeMeasurementUnitShortName(
-      measurementUnit,
-    );
+    const normalizedMeasurementUnit =
+      this.normalizeMeasurementUnitShortName(measurementUnit);
     return {
       company_id: companyId,
       description,
@@ -8855,9 +8954,15 @@ export class ProductsService {
     } satisfies Prisma.InputJsonObject;
   }
 
-  private resolveProductTier(value: unknown): 'BUDGET' | 'MID' | 'PREMIUM' | undefined {
+  private resolveProductTier(
+    value: unknown,
+  ): 'BUDGET' | 'MID' | 'PREMIUM' | undefined {
     const normalized = this.optionalString(value)?.toUpperCase();
-    if (normalized === 'BUDGET' || normalized === 'MID' || normalized === 'PREMIUM') {
+    if (
+      normalized === 'BUDGET' ||
+      normalized === 'MID' ||
+      normalized === 'PREMIUM'
+    ) {
       return normalized;
     }
     return undefined;
@@ -8908,17 +9013,11 @@ export class ProductsService {
 
   private applyProductScope(
     where: Prisma.ProductWhereInput | undefined,
-    context: any,
+    context: CompanyRequestContext,
   ) {
-    if (!context || context.userType !== 'company') {
-      return where;
-    }
-
-    const allowedBranchCodes = Array.isArray(context.allowedBranchCodes)
-      ? context.allowedBranchCodes
-          .map((branchCode) => String(branchCode ?? '').trim())
-          .filter(Boolean)
-      : [];
+    const allowedBranchCodes = context.allowedBranchCodes
+      .map((branchCode) => String(branchCode ?? '').trim())
+      .filter(Boolean);
 
     const scopedFilters: Prisma.ProductWhereInput[] = [];
 
@@ -8926,13 +9025,13 @@ export class ProductsService {
       scopedFilters.push(where);
     }
 
-    if (context.companyId) {
-      scopedFilters.push({
-        companyId: context.companyId,
-      });
-    }
+    scopedFilters.push({
+      companyId: context.companyId,
+    });
 
-    if (allowedBranchCodes.length > 0) {
+    if (allowedBranchCodes.length === 0) {
+      scopedFilters.push({ id: { in: [] } });
+    } else {
       scopedFilters.push({
         OR: [
           {
@@ -8964,14 +9063,11 @@ export class ProductsService {
     return { AND: scopedFilters } satisfies Prisma.ProductWhereInput;
   }
 
-  private filterRequestedShopIds(shopIds: string[] | undefined, context: any) {
-    if (!context || context.userType !== 'company') {
-      return shopIds;
-    }
-
-    const allowedShopIds = Array.isArray(context.allowedShopIds)
-      ? context.allowedShopIds
-      : [];
+  private filterRequestedShopIds(
+    shopIds: string[] | undefined,
+    context: CompanyRequestContext,
+  ) {
+    const allowedShopIds = context.allowedShopIds;
 
     if (!shopIds?.length) {
       return allowedShopIds;
@@ -8980,70 +9076,52 @@ export class ProductsService {
     return shopIds.filter((shopId) => allowedShopIds.includes(shopId));
   }
 
-  private requireCatalogWriteContext(context: any): {
-    userId: number;
-    fullName: string;
-    userType: string;
-    companyId?: string | null;
-    allowedShopIds: string[];
-    allowedBranchCodes: string[];
-  } {
-    if (!context) {
-      throw new UnauthorizedException('Authorization is required');
-    }
-
-    if (context.userType !== 'company' && context.userType !== 'platform') {
-      throw new UnauthorizedException('Unsupported user type');
-    }
-
+  private requireCatalogWriteContext(context: CompanyRequestContext) {
     return context;
   }
 
-  private resolveProductCompanyId(
-    body: Record<string, unknown>,
-    context?: {
-      userType?: string;
-      companyId?: string | null;
-    } | null,
+  private assertImportSessionAccess(
+    session: Pick<ImportSession, 'companyId' | 'shopId'>,
+    context: CompanyRequestContext,
   ) {
-    if (context?.userType === 'company') {
-      if (!context.companyId) {
-        throw new UnauthorizedException('Company user is missing company');
-      }
-
-      return context.companyId;
+    if (
+      session.companyId !== context.companyId ||
+      !context.allowedShopIds.includes(session.shopId)
+    ) {
+      throw new NotFoundException('Import session not found');
     }
+  }
 
-    const requestedCompanyId =
-      this.optionalString(body.company_id) ??
-      this.optionalString(
-        (body.metadata as Record<string, unknown> | undefined)?.company_id,
-      ) ??
-      context?.companyId ??
-      COMPANY_ID;
-
-    if (!requestedCompanyId) {
-      throw new BadRequestException('company_id is required');
+  private assertStocktakingAccess(
+    stocktaking: Pick<StocktakingSession, 'companyId' | 'shopId'>,
+    context: CompanyRequestContext,
+  ) {
+    if (
+      stocktaking.companyId !== context.companyId ||
+      !context.allowedShopIds.includes(stocktaking.shopId)
+    ) {
+      throw new NotFoundException('Stocktaking not found');
     }
+  }
 
-    return requestedCompanyId;
+  private resolveProductCompanyId(
+    _body: Record<string, unknown>,
+    context: CompanyRequestContext,
+  ) {
+    return context.companyId;
   }
 
   private async resolveBranchCodesForFilter(
     shopIds: string[] | undefined,
-    context: any,
+    context: CompanyRequestContext,
   ) {
     if (!shopIds?.length) {
       return undefined;
     }
 
     const resolvedBranchCodes = new Set<string>();
-    const allowedShopIds = Array.isArray(context?.allowedShopIds)
-      ? context.allowedShopIds
-      : [];
-    const allowedBranchCodes = Array.isArray(context?.allowedBranchCodes)
-      ? context.allowedBranchCodes
-      : [];
+    const allowedShopIds = context.allowedShopIds;
+    const allowedBranchCodes = context.allowedBranchCodes;
     const normalizedIdentifiers = shopIds
       .map((shopId) => shopId.trim())
       .filter((shopId) => shopId.length > 0);
@@ -9060,11 +9138,8 @@ export class ProductsService {
 
     const dbResolvedShops = await this.prisma.shop.findMany({
       where: {
-        ...(context?.userType === 'company' && context.companyId
-          ? {
-              companyId: context.companyId,
-            }
-          : {}),
+        companyId: context.companyId,
+        branchCode: { in: context.allowedBranchCodes },
         OR: [
           {
             id: {
@@ -9086,8 +9161,6 @@ export class ProductsService {
 
     for (const shop of dbResolvedShops) {
       if (
-        !context?.userType ||
-        context.userType !== 'company' ||
         allowedShopIds.includes(shop.id) ||
         allowedBranchCodes.includes(shop.branchCode)
       ) {
@@ -9098,12 +9171,7 @@ export class ProductsService {
     for (const identifier of normalizedIdentifiers) {
       const legacyBranchCode = this.resolveBranchCodeByShopId(identifier);
 
-      if (
-        legacyBranchCode &&
-        (!context?.userType ||
-          context.userType !== 'company' ||
-          allowedBranchCodes.includes(legacyBranchCode))
-      ) {
+      if (legacyBranchCode && allowedBranchCodes.includes(legacyBranchCode)) {
         resolvedBranchCodes.add(legacyBranchCode);
       }
     }
@@ -9111,11 +9179,10 @@ export class ProductsService {
     return [...resolvedBranchCodes];
   }
 
-  private filterStockPayloadByContext(stocks: unknown[], context: any) {
-    if (!context || context.userType !== 'company') {
-      return stocks;
-    }
-
+  private filterStockPayloadByContext(
+    stocks: unknown[],
+    context: CompanyRequestContext,
+  ) {
     return stocks.filter((stock) => {
       if (!stock || typeof stock !== 'object') {
         return false;
@@ -9145,7 +9212,7 @@ export class ProductsService {
       hasTrigger: boolean;
       smallLeftMeasurementValue: number;
     }>,
-    context: any,
+    context: CompanyRequestContext,
   ) {
     const normalizedIdentifiers = [
       ...new Set(
@@ -9157,40 +9224,38 @@ export class ProductsService {
 
     const resolvedShops = new Map<string, { id: string; branchCode: string }>();
 
-    if (context?.userType === 'company') {
-      const matchingShops = normalizedIdentifiers.length
-        ? await this.prisma.shop.findMany({
-            where: {
-              companyId: context.companyId,
-              OR: [
-                {
-                  id: {
-                    in: normalizedIdentifiers,
-                  },
+    const matchingShops = normalizedIdentifiers.length
+      ? await this.prisma.shop.findMany({
+          where: {
+            companyId: context.companyId,
+            OR: [
+              {
+                id: {
+                  in: normalizedIdentifiers,
                 },
-                {
-                  branchCode: {
-                    in: normalizedIdentifiers,
-                  },
+              },
+              {
+                branchCode: {
+                  in: normalizedIdentifiers,
                 },
-              ],
-            },
-            select: {
-              id: true,
-              branchCode: true,
-            },
-          })
-        : [];
+              },
+            ],
+          },
+          select: {
+            id: true,
+            branchCode: true,
+          },
+        })
+      : [];
 
-      for (const shop of matchingShops) {
-        if (
-          context.allowedShopIds.includes(shop.id) ||
-          context.allowedBranchCodes.includes(shop.branchCode)
-        ) {
-          const resolved = { id: shop.id, branchCode: shop.branchCode };
-          resolvedShops.set(shop.id, resolved);
-          resolvedShops.set(shop.branchCode, resolved);
-        }
+    for (const shop of matchingShops) {
+      if (
+        context.allowedShopIds.includes(shop.id) ||
+        context.allowedBranchCodes.includes(shop.branchCode)
+      ) {
+        const resolved = { id: shop.id, branchCode: shop.branchCode };
+        resolvedShops.set(shop.id, resolved);
+        resolvedShops.set(shop.branchCode, resolved);
       }
     }
 
@@ -9198,7 +9263,7 @@ export class ProductsService {
       .filter((identifier) => !resolvedShops.has(identifier))
       .map((identifier) => this.resolveBranchCodeByShopId(identifier))
       .filter((value): value is string => !!value);
-    if (context?.userType === 'company' && legacyBranchCodes.length) {
+    if (legacyBranchCodes.length) {
       const legacyShops = await this.prisma.shop.findMany({
         where: {
           companyId: context.companyId,
@@ -9241,10 +9306,7 @@ export class ProductsService {
         );
       }
 
-      if (
-        context?.userType === 'company' &&
-        !context.allowedBranchCodes.includes(resolved.branchCode)
-      ) {
+      if (!context.allowedBranchCodes.includes(resolved.branchCode)) {
         throw new BadRequestException(
           'This user does not have access to the requested shop',
         );
@@ -9270,7 +9332,7 @@ export class ProductsService {
 
   private async resolveBranchCodeForWrite(
     shopIdentifier: string,
-    context: any,
+    context: CompanyRequestContext,
   ) {
     const normalizedIdentifier = shopIdentifier.trim();
 
@@ -9278,71 +9340,32 @@ export class ProductsService {
       throw new BadRequestException('shop_id must be a non-empty string');
     }
 
-    if (context?.userType === 'company') {
-      if (context.allowedBranchCodes.includes(normalizedIdentifier)) {
-        return normalizedIdentifier;
-      }
-
-      const shop = await this.prisma.shop.findFirst({
-        where: {
-          companyId: context.companyId,
-          OR: [
-            { id: normalizedIdentifier },
-            { branchCode: normalizedIdentifier },
-          ],
-        },
-        select: {
-          id: true,
-          branchCode: true,
-        },
-      });
-
-      if (shop) {
-        if (!context.allowedShopIds.includes(shop.id)) {
-          throw new BadRequestException(
-            'This user does not have access to the requested shop',
-          );
-        }
-
-        return shop.branchCode;
-      }
+    if (context.allowedBranchCodes.includes(normalizedIdentifier)) {
+      return normalizedIdentifier;
     }
 
     const shop = await this.prisma.shop.findFirst({
       where: {
+        companyId: context.companyId,
         OR: [
           { id: normalizedIdentifier },
           { branchCode: normalizedIdentifier },
         ],
       },
       select: {
+        id: true,
         branchCode: true,
       },
     });
 
     if (shop) {
-      return shop.branchCode;
-    }
-
-    const shopDirectory = await this.companySettingsService.getShops({
-      page: 1,
-      limit: 1000,
-      companyId: context?.companyId,
-    });
-    const shopFromDirectory = shopDirectory.shops.find((item) => {
-      if (!item || typeof item !== 'object') {
-        return false;
+      if (!context.allowedShopIds.includes(shop.id)) {
+        throw new BadRequestException(
+          'This user does not have access to the requested shop',
+        );
       }
 
-      const candidate = item as Record<string, unknown>;
-      const id = this.optionalString(candidate.id);
-      return id === normalizedIdentifier;
-    });
-    const directoryBranchCode = this.optionalString(
-      (shopFromDirectory as Record<string, unknown> | undefined)?.branch_code,
-    );
-    if (directoryBranchCode) {
-      return directoryBranchCode;
+      return shop.branchCode;
     }
 
     const legacyBranchCode =
@@ -9351,19 +9374,25 @@ export class ProductsService {
       const legacyShop = await this.prisma.shop.findFirst({
         where: {
           branchCode: legacyBranchCode,
-          ...(context?.companyId ? { companyId: context.companyId } : {}),
+          companyId: context.companyId,
         },
         select: {
           id: true,
         },
       });
 
-      if (legacyShop) {
+      if (
+        legacyShop &&
+        (context.allowedShopIds.includes(legacyShop.id) ||
+          context.allowedBranchCodes.includes(legacyBranchCode))
+      ) {
         return legacyBranchCode;
       }
     }
 
-    return normalizedIdentifier;
+    throw new BadRequestException(
+      'This user does not have access to the requested shop',
+    );
   }
 
   private extractVariants(value: unknown) {
@@ -9639,9 +9668,8 @@ export class ProductsService {
     companyId?: string | null,
     fallbackUnit?: string | null,
   ) {
-    const normalizedFallbackUnit = this.normalizeMeasurementUnitShortName(
-      fallbackUnit,
-    );
+    const normalizedFallbackUnit =
+      this.normalizeMeasurementUnitShortName(fallbackUnit);
     const measurementUnitId =
       this.optionalString(metadata.measurement_unit_id) ?? null;
     const measurementUnitShortName =
@@ -9705,14 +9733,9 @@ export class ProductsService {
     }
 
     if (
-      [
-        'unit',
-        'countable',
-        'piece',
-        'pieces',
-        'pcs',
-        'pc',
-      ].includes(normalizedValue.toLowerCase())
+      ['unit', 'countable', 'piece', 'pieces', 'pcs', 'pc'].includes(
+        normalizedValue.toLowerCase(),
+      )
     ) {
       return DEFAULT_MEASUREMENT_UNIT.short_name;
     }
@@ -9727,14 +9750,9 @@ export class ProductsService {
     }
 
     if (
-      [
-        'unit',
-        'countable',
-        'piece',
-        'pieces',
-        'pcs',
-        'pc',
-      ].includes(normalizedValue.toLowerCase())
+      ['unit', 'countable', 'piece', 'pieces', 'pcs', 'pc'].includes(
+        normalizedValue.toLowerCase(),
+      )
     ) {
       return DEFAULT_MEASUREMENT_UNIT.name;
     }

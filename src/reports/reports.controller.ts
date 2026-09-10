@@ -236,10 +236,7 @@ export class ReportsController {
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
   ) {
-    return this.reportsService.getProductGeneralReportApi(
-      query,
-      authorization,
-    );
+    return this.reportsService.getProductGeneralReportApi(query, authorization);
   }
 
   @Get(PRODUCT_GENERAL_TABLE_API_ROUTES)

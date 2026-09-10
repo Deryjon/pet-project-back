@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { CompanyRequestContext } from '../auth/request-context';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReportFilterDto } from './dto/report-filter.dto';
 
@@ -50,7 +51,7 @@ export class ReportsRepository {
 
   async getSaleItemFacts(
     filter: ReportFilterDto,
-    context: any,
+    context: CompanyRequestContext,
   ): Promise<any[]> {
     const { clauses, params } = await this.buildSaleItemWhere(filter, context);
     const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
@@ -107,7 +108,7 @@ export class ReportsRepository {
 
   async getSellerAggregateRows(
     filter: ReportFilterDto,
-    context: any,
+    context: CompanyRequestContext,
   ): Promise<any[]> {
     const { clauses, params } = await this.buildSaleItemWhere(filter, context);
     const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
@@ -152,14 +153,18 @@ export class ReportsRepository {
     return this.db.$queryRawUnsafe(sql, ...params) as Promise<any[]>;
   }
 
-  async resolveBranchCodes(filter: ReportFilterDto, context: any) {
+  async resolveBranchCodes(
+    filter: ReportFilterDto,
+    context: CompanyRequestContext,
+  ) {
     if (!filter.shopIds?.length) {
       return undefined;
     }
 
     const shops = await this.db.shop.findMany({
       where: {
-        ...(context?.companyId ? { companyId: context.companyId } : {}),
+        companyId: context.companyId,
+        branchCode: { in: context.allowedBranchCodes },
         OR: [
           { id: { in: filter.shopIds } },
           { branchCode: { in: filter.shopIds } },
@@ -181,28 +186,27 @@ export class ReportsRepository {
     return seller;
   }
 
-  private async buildSaleItemWhere(filter: ReportFilterDto, context: any) {
+  private async buildSaleItemWhere(
+    filter: ReportFilterDto,
+    context: CompanyRequestContext,
+  ) {
     const clauses: string[] = [
       `s.status IN ('paid', 'returned', 'partially_returned', 'exchanged', 'partially_exchanged')`,
     ];
     const params: unknown[] = [];
 
-    if (context?.companyId) {
-      clauses.push(
-        `s."companyId" = ${this.pushParam(params, context.companyId)}`,
-      );
-    }
+    clauses.push(
+      `s."companyId" = ${this.pushParam(params, context.companyId)}`,
+    );
 
-    if (context?.companyId && Array.isArray(context.allowedBranchCodes)) {
-      if (context.allowedBranchCodes.length) {
-        clauses.push(
-          `s."branchCode" IN (${context.allowedBranchCodes
-            .map((value: string) => this.pushParam(params, value))
-            .join(', ')})`,
-        );
-      } else {
-        clauses.push('FALSE');
-      }
+    if (context.allowedBranchCodes.length) {
+      clauses.push(
+        `s."branchCode" IN (${context.allowedBranchCodes
+          .map((value) => this.pushParam(params, value))
+          .join(', ')})`,
+      );
+    } else {
+      clauses.push('FALSE');
     }
 
     if (filter.from) {

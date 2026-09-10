@@ -17,10 +17,19 @@ describe('Salary company isolation', () => {
       userType: companyId ? 'company' : 'platform',
       userId: 1,
       companyId,
+      fullName: 'Admin',
+      role: 'role-1',
+      crmRoleId: 'role-1',
+      crmRoleName: 'Admin',
+      currentShopId: 'shop-1',
+      currentBranchCode: 'B1',
+      allowedShopIds: ['shop-1'],
+      allowedBranchCodes: ['B1'],
+      canSwitchShops: false,
     };
     const service = new SellerReportsService(
       {
-        getRequestContext: async () => actor,
+        getCompanyRequestContext: async () => actor,
         assertAdminAccess: async () => actor,
       } as any,
       new ReportsRepository(db as any),
