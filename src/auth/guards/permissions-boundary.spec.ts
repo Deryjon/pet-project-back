@@ -29,7 +29,8 @@ const controllers = [
 ];
 
 const permissionAliases: Record<string, string[]> = {
-  'orders.read': ['new-sale', 'order-new', 'all-sales'],
+  'sales.read': ['all-sales', 'orders', 'show-all-sales', 'show_deleted_orders', 'orders-other-shops'],
+  'orders.read': ['new-sale', 'order-new', 'all-sales', 'orders', 'show-all-sales', 'show_deleted_orders', 'orders-other-shops'],
   'orders.create': ['new-sale', 'order-new'],
   'orders.cancel': ['new-sale', 'order-new', 'all-sales'],
   'orders.complete': ['new-sale', 'order-new'],
@@ -275,6 +276,47 @@ describe('Sales detail read access', () => {
         }),
       } as any;
       await expect(guard.canActivate(context)).resolves.toBe(true);
+    },
+  );
+});
+
+describe('Transaction history access', () => {
+  const historyMethods = ['findAll', 'searchOrders', 'searchOrderStats', 'findOrderAuditLogs', 'findOrder'] as const;
+  const historyPermissions = ['all-sales', 'orders', 'show-all-sales', 'show_deleted_orders', 'orders-other-shops'];
+
+  it.each(historyMethods.flatMap((method) => historyPermissions.map((permission) => [method, permission] as const)))(
+    '%s accepts the transaction page permission %s without a parent permission',
+    async (method, permission) => {
+      const guard = new PermissionsGuard(new Reflector(), {
+        role: { findFirst: async () => ({ isAdmin: false }) },
+        rolePermission: {
+          findMany: async () => getPermissionIdsBySlug(permission).map((permissionId) => ({ permissionId })),
+        },
+      } as any);
+      const context = {
+        getHandler: () => SalesController.prototype[method],
+        getClass: () => SalesController,
+        switchToHttp: () => ({ getRequest: () => ({ user: { crmRoleId: 'cashier-role', companyId: 'own' } }) }),
+      } as any;
+      await expect(guard.canActivate(context)).resolves.toBe(true);
+    },
+  );
+
+  it.each(['new-sale', 'order-new'])(
+    'does not grant transaction history for %s alone',
+    async (permission) => {
+      const guard = new PermissionsGuard(new Reflector(), {
+        role: { findFirst: async () => ({ isAdmin: false }) },
+        rolePermission: {
+          findMany: async () => getPermissionIdsBySlug(permission).map((permissionId) => ({ permissionId })),
+        },
+      } as any);
+      const context = {
+        getHandler: () => SalesController.prototype.findAll,
+        getClass: () => SalesController,
+        switchToHttp: () => ({ getRequest: () => ({ user: { crmRoleId: 'cashier-role', companyId: 'own' } }) }),
+      } as any;
+      await expect(guard.canActivate(context)).rejects.toThrow('Insufficient permissions');
     },
   );
 });

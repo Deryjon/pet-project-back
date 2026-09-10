@@ -25,7 +25,7 @@ export class SalesController {
   constructor(private readonly salesService: SalesService) {}
 
   @Get('sales')
-  @Permissions('all-sales')
+  @Permissions('sales.read')
   findAll(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -68,7 +68,7 @@ export class SalesController {
   }
 
   @Get(['order/:id/audit-logs', 'v2/order/:id/audit-logs'])
-  @Permissions('all-sales')
+  @Permissions('sales.read')
   findOrderAuditLogs(
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
@@ -86,7 +86,7 @@ export class SalesController {
   }
 
   @Get(['order-search', 'v3/order-search'])
-  @Permissions('all-sales')
+  @Permissions('sales.read')
   searchOrders(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,
@@ -95,7 +95,7 @@ export class SalesController {
   }
 
   @Get(['order-search-stats', 'v3/order-search-stats'])
-  @Permissions('all-sales')
+  @Permissions('sales.read')
   searchOrderStats(
     @Query() query: Record<string, string | undefined>,
     @Headers('authorization') authorization?: string,

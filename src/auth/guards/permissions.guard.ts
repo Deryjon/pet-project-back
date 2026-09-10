@@ -10,7 +10,8 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PERMISSIONS_KEY } from '../permissions.decorator';
 
 const LEGACY_PERMISSION_ALIASES: Record<string, string[]> = {
-  'orders.read': ['new-sale', 'order-new', 'all-sales'],
+  'sales.read': ['all-sales', 'orders', 'show-all-sales', 'show_deleted_orders', 'orders-other-shops'],
+  'orders.read': ['new-sale', 'order-new', 'all-sales', 'orders', 'show-all-sales', 'show_deleted_orders', 'orders-other-shops'],
   'orders.create': ['new-sale', 'order-new'],
   'orders.cancel': ['new-sale', 'order-new', 'all-sales'],
   'orders.complete': ['new-sale', 'order-new'],
