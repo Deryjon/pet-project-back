@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { companyContext as testContext } from '../../../test/fixtures/request-context';
 import { OrdersService } from './orders.service';
 
 describe('OrdersService.complete concurrency guards', () => {
@@ -76,24 +77,24 @@ describe('OrdersService.complete concurrency guards', () => {
     const prisma: any = {
       $transaction: jest.fn((operation) => operation(tx)),
     };
-    const users: any = {
-      getCompanyRequestContext: jest.fn(async () => ({
-        userType: 'company',
-        userId: 7,
-        companyId: 'company-1',
-        allowedShopIds: ['shop-1'],
-        allowedBranchCodes: ['001'],
-      })),
-    };
-    return { service: new OrdersService(prisma, users), tx, prisma };
+
+    return { service: new OrdersService(prisma), tx, prisma };
   }
 
   it('allows only one completion and one stock write-off', async () => {
     const { service, tx, prisma } = setup();
 
     const results = await Promise.allSettled([
-      service.complete('order-1', {}, 'Bearer test'),
-      service.complete('order-1', {}, 'Bearer test'),
+      service.complete(
+        'order-1',
+        {},
+        testContext({ allowedBranchCodes: ['001'] }),
+      ),
+      service.complete(
+        'order-1',
+        {},
+        testContext({ allowedBranchCodes: ['001'] }),
+      ),
     ]);
 
     expect(
@@ -111,7 +112,11 @@ describe('OrdersService.complete concurrency guards', () => {
 
   it('uses a conditional decrement that cannot make stock negative', async () => {
     const { service, tx } = setup();
-    await service.complete('order-1', {}, 'Bearer test');
+    await service.complete(
+      'order-1',
+      {},
+      testContext({ allowedBranchCodes: ['001'] }),
+    );
     expect(tx.productStock.updateMany).toHaveBeenCalledWith({
       where: { id: 21, quantity: { gte: 1 } },
       data: { quantity: { decrement: 1 } },
@@ -120,13 +125,15 @@ describe('OrdersService.complete concurrency guards', () => {
 
   it('requires the centralized company context with an available shop', async () => {
     const { service } = setup();
-    const users = (service as any).usersService;
 
-    await service.complete('order-1', {}, 'Bearer test');
-
-    expect(users.getCompanyRequestContext).toHaveBeenCalledWith(
-      'Bearer test',
-      { requireAvailableShop: true },
+    await service.complete(
+      'order-1',
+      {},
+      testContext({ allowedBranchCodes: ['001'] }),
     );
+
+    await expect(
+      service.complete('order-1', {}, testContext({ allowedShopIds: [] })),
+    ).rejects.toThrow('No available shops');
   });
 });

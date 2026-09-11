@@ -1,21 +1,22 @@
-import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
-import { PermissionsGuard } from '../auth/guards/permissions.guard';
-import { Permissions } from '../auth/permissions.decorator';
 import {
   Body,
   Controller,
   Delete,
   Get,
-  Headers,
-  Patch,
-  ParseIntPipe,
-  Query,
   Param,
+  ParseIntPipe,
+  Patch,
   Post,
   Put,
+  Query,
   UseGuards,
 } from '@nestjs/common';
+import { CurrentCompanyContext } from '../auth/company-context.decorator';
+import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { Permissions } from '../auth/permissions.decorator';
+import { CompanyRequestContext } from '../auth/request-context';
 import { SalesService } from './sales.service';
 
 @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
@@ -28,88 +29,92 @@ export class SalesController {
   @Permissions('sales.read')
   findAll(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.findAll(query, authorization);
+    return this.salesService.findAll(query, requestContext);
   }
 
   @Post('new-sale')
   @Permissions('orders.create')
-  createDraft(@Headers('authorization') authorization?: string) {
-    return this.salesService.createDraft(authorization);
+  createDraft(@CurrentCompanyContext() requestContext: CompanyRequestContext) {
+    return this.salesService.createDraft(requestContext);
   }
 
   @Get(['parked-sales', 'v2/parked-sales'])
-  findParkedSales(@Headers('authorization') authorization?: string) {
-    return this.salesService.findParkedSales(authorization);
+  findParkedSales(
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.salesService.findParkedSales(requestContext);
   }
 
   @Get(['draft-sales', 'v2/draft-sales'])
-  findDraftSales(@Headers('authorization') authorization?: string) {
-    return this.salesService.findDraftSales(authorization);
+  findDraftSales(
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.salesService.findDraftSales(requestContext);
   }
 
   @Post(['order', 'v2/order'])
   @Permissions('orders.create')
   createOrder(
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.createOrder(body, authorization);
+    return this.salesService.createOrder(body, requestContext);
   }
 
   @Get(['order/:id', 'v2/order/:id'])
   @Permissions('orders.read')
   findOrder(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.findOrder(id, authorization);
+    return this.salesService.findOrder(id, requestContext);
   }
 
   @Get(['order/:id/audit-logs', 'v2/order/:id/audit-logs'])
   @Permissions('sales.read')
   findOrderAuditLogs(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.findOrderAuditLogs(id, authorization);
+    return this.salesService.findOrderAuditLogs(id, requestContext);
   }
 
   @Get(['order-draft-debt/:id', 'v1/order-draft-debt/:id'])
   @Permissions('orders.read')
   findOrderDraftDebt(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.findOrderDraftDebt(id, authorization);
+    return this.salesService.findOrderDraftDebt(id, requestContext);
   }
 
   @Get(['order-search', 'v3/order-search'])
   @Permissions('sales.read')
   searchOrders(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.searchOrders(query, authorization);
+    return this.salesService.searchOrders(query, requestContext);
   }
 
   @Get(['order-search-stats', 'v3/order-search-stats'])
   @Permissions('sales.read')
   searchOrderStats(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.searchOrderStats(query, authorization);
+    return this.salesService.searchOrderStats(query, requestContext);
   }
 
   @Get(['new-sale/products', 'v2/new-sale/products'])
   findProductsForNewSale(
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-    @Query('search') search?: string,
-    @Query('shop_id') shopId?: string,
-    @Headers('authorization') authorization?: string,
+    @Query('page') page: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @Query('search') search: string | undefined,
+    @Query('shop_id') shopId: string | undefined,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.salesService.findProductsForNewSale(
       {
@@ -118,7 +123,7 @@ export class SalesController {
         search: search?.trim(),
         shopId: shopId?.trim(),
       },
-      authorization,
+      requestContext,
     );
   }
 
@@ -127,9 +132,9 @@ export class SalesController {
   payOrder(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.payOrder(id, body, authorization);
+    return this.salesService.payOrder(id, body, requestContext);
   }
 
   @Post(['order/:id/return', 'v2/order/:id/return'])
@@ -137,9 +142,9 @@ export class SalesController {
   processReturn(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.processReturn(id, body, authorization);
+    return this.salesService.processReturn(id, body, requestContext);
   }
 
   @Post(['order/:id/exchange', 'v2/order/:id/exchange'])
@@ -147,9 +152,9 @@ export class SalesController {
   processExchange(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.processExchange(id, body, authorization);
+    return this.salesService.processExchange(id, body, requestContext);
   }
 
   @Patch(['order/:id/payment-method', 'v2/order/:id/payment-method'])
@@ -157,25 +162,25 @@ export class SalesController {
   updatePaymentMethod(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.updatePaymentMethod(id, body, authorization);
+    return this.salesService.updatePaymentMethod(id, body, requestContext);
   }
 
   @Get('new-sale/:id')
   findDraft(
     @Param('id', ParseIntPipe) id: number,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.findDraft(id, authorization);
+    return this.salesService.findDraft(id, requestContext);
   }
 
   @Get('new-sale/:id/items')
   getDraftItems(
     @Param('id', ParseIntPipe) id: number,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.getDraftItems(id, authorization);
+    return this.salesService.getDraftItems(id, requestContext);
   }
 
   @Post('new-sale/:id/items')
@@ -183,9 +188,9 @@ export class SalesController {
   addItem(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.addItem(id, body, authorization);
+    return this.salesService.addItem(id, body, requestContext);
   }
 
   @Delete([
@@ -197,9 +202,9 @@ export class SalesController {
   removeItem(
     @Param('id', ParseIntPipe) id: number,
     @Param('itemId', ParseIntPipe) itemId: number,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.removeItem(id, itemId, authorization);
+    return this.salesService.removeItem(id, itemId, requestContext);
   }
 
   @Patch([
@@ -212,9 +217,9 @@ export class SalesController {
     @Param('id', ParseIntPipe) id: number,
     @Param('itemId', ParseIntPipe) itemId: number,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.updateItem(id, itemId, body, authorization);
+    return this.salesService.updateItem(id, itemId, body, requestContext);
   }
 
   @Put('new-sale/:id/discount')
@@ -222,9 +227,9 @@ export class SalesController {
   updateDiscount(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.updateDiscount(id, body, authorization);
+    return this.salesService.updateDiscount(id, body, requestContext);
   }
 
   @Patch([
@@ -239,9 +244,9 @@ export class SalesController {
   attachClient(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.attachClient(id, body, authorization);
+    return this.salesService.attachClient(id, body, requestContext);
   }
 
   @Post('new-sale/:id/pay')
@@ -249,9 +254,9 @@ export class SalesController {
   pay(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.pay(id, body, authorization);
+    return this.salesService.pay(id, body, requestContext);
   }
 
   @Post([
@@ -266,9 +271,9 @@ export class SalesController {
   parkDraft(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.parkDraft(id, body, authorization);
+    return this.salesService.parkDraft(id, body, requestContext);
   }
 
   @Post(['leave-sale/:id', 'v1/leave-sale/:id', 'v2/leave-sale/:id'])
@@ -276,9 +281,9 @@ export class SalesController {
   leaveDraft(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.parkDraft(id, body, authorization);
+    return this.salesService.parkDraft(id, body, requestContext);
   }
 
   @Post([
@@ -290,18 +295,18 @@ export class SalesController {
   @Permissions('delay-finish')
   resumeParkedSale(
     @Param('id', ParseIntPipe) id: number,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.resumeParkedSale(id, authorization);
+    return this.salesService.resumeParkedSale(id, requestContext);
   }
 
   @Delete('new-sale/:id')
   @Permissions('orders.cancel')
   remove(
     @Param('id', ParseIntPipe) id: number,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.removeDraft(id, authorization);
+    return this.salesService.removeDraft(id, requestContext);
   }
 
   @Delete(['order/:id', 'v2/order/:id'])
@@ -309,8 +314,8 @@ export class SalesController {
   removeOrder(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.salesService.removeOrder(id, authorization, body);
+    return this.salesService.removeOrder(id, requestContext, body);
   }
 }

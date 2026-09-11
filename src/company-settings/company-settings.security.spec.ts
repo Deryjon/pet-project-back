@@ -1,12 +1,12 @@
 import { INestApplication, UnauthorizedException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import request = require('supertest');
-import { CompanySettingsController } from './company-settings.controller';
-import { CompanySettingsService } from './company-settings.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { ProductsController } from '../products/products.controller';
 import { ProductsService } from '../products/products.service';
 import { UsersService } from '../users/users.service';
-import { PrismaService } from '../prisma/prisma.service';
+import { CompanySettingsController } from './company-settings.controller';
+import { CompanySettingsService } from './company-settings.service';
+import request = require('supertest');
 
 const writeRoutes = [
   ['post', '/company-payment-type'],
@@ -25,6 +25,7 @@ describe('Company API authorization boundary', () => {
   let db: any;
   let settings: CompanySettingsService;
   let products: any;
+  let getRequestContext: jest.Mock;
 
   beforeAll(async () => {
     db = {
@@ -71,6 +72,19 @@ describe('Company API authorization boundary', () => {
       create: jest.fn(async () => ({})),
       createCatalogProduct: jest.fn(async () => ({})),
     };
+    getRequestContext = jest.fn(async (auth: string) => {
+      if (
+        !['Bearer admin', 'Bearer reader', 'Bearer platform'].includes(auth)
+      ) {
+        throw new UnauthorizedException();
+      }
+      return {
+        userType: auth === 'Bearer platform' ? 'platform' : 'company',
+        companyId: 'company-a',
+        crmRoleId: auth === 'Bearer admin' ? 'admin' : 'reader',
+        allowedShopIds: ['shop-a'],
+      };
+    });
     const module = await Test.createTestingModule({
       controllers: [CompanySettingsController, ProductsController],
       providers: [
@@ -79,22 +93,7 @@ describe('Company API authorization boundary', () => {
         { provide: PrismaService, useValue: db },
         {
           provide: UsersService,
-          useValue: {
-            getRequestContext: async (auth: string) => {
-              if (
-                !['Bearer admin', 'Bearer reader', 'Bearer platform'].includes(
-                  auth,
-                )
-              )
-                throw new UnauthorizedException();
-              return {
-                userType: auth === 'Bearer platform' ? 'platform' : 'company',
-                companyId: 'company-a',
-                crmRoleId: auth === 'Bearer admin' ? 'admin' : 'reader',
-                allowedShopIds: ['shop-a'],
-              };
-            },
-          },
+          useValue: { getRequestContext },
         },
       ],
     }).compile();
@@ -136,6 +135,37 @@ describe('Company API authorization boundary', () => {
       .send({ name: 'test' })
       .expect(403);
   });
+  it('resolves authentication once and ignores a spoofed context in the body', async () => {
+    await request(app.getHttpServer())
+      .put('/company')
+      .set('Authorization', 'Bearer admin')
+      .send({ companyContext: { companyId: 'foreign' }, company_id: 'foreign' })
+      .expect(200);
+    expect(getRequestContext).toHaveBeenCalledTimes(1);
+    expect(settings.updateCompany).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-a',
+    );
+  });
+
+  it.each([
+    '/company',
+    '/v1/company',
+    '/company-payment-type',
+    '/v1/company-payment-type',
+  ])(
+    'rejects missing authentication and platform context on %s',
+    async (path) => {
+      await request(app.getHttpServer()).get(path).expect(401);
+      await request(app.getHttpServer())
+        .get(path)
+        .set('Authorization', 'Bearer platform')
+        .expect(403);
+      expect(settings.getCompany).not.toHaveBeenCalled();
+      expect(db.companyPaymentType.findMany).not.toHaveBeenCalled();
+    },
+  );
+
   it('uses the session company for payment reads despite spoofed query', async () => {
     const response = await request(app.getHttpServer())
       .get('/company-payment-type?company_id=foreign')

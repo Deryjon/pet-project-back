@@ -5,10 +5,9 @@ import {
   Delete,
   Get,
   Header,
-  Headers,
   HttpCode,
-  Patch,
   Param,
+  Patch,
   Post,
   Put,
   Query,
@@ -17,10 +16,12 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { CurrentCompanyContext } from '../auth/company-context.decorator';
 import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { Permissions } from '../auth/permissions.decorator';
+import { CompanyRequestContext } from '../auth/request-context';
 import { ProductsService } from './products.service';
 
 @UseGuards(JwtAuthGuard, CompanyAccessGuard)
@@ -29,13 +30,13 @@ export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
   @Get('products/search')
-  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   searchForPos(
-    @Query('q') q?: string,
-    @Query('shopId') shopId?: string,
-    @Query('limit') limit?: string,
-    @Headers('authorization') authorization?: string,
+    @Query('q') q: string | undefined,
+    @Query('shopId') shopId: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.searchForPos(
       {
@@ -43,18 +44,18 @@ export class ProductsController {
         shopId: shopId?.trim(),
         limit: Number(limit) || 20,
       },
-      authorization,
+      requestContext,
     );
   }
 
   @Get('products')
-  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   findAll(
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-    @Query('search') search?: string,
-    @Headers('authorization') authorization?: string,
+    @Query('page') page: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @Query('search') search: string | undefined,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.findAll(
       {
@@ -62,18 +63,18 @@ export class ProductsController {
         limit: Number(limit) || 20,
         search: search?.trim(),
       },
-      authorization,
+      requestContext,
     );
   }
 
   @Post('products')
-  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   create(
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.create(body, authorization);
+    return this.productsService.create(body, requestContext);
   }
 
   @Get('v2/product-characteristic')
@@ -89,9 +90,9 @@ export class ProductsController {
   @Post('v2/imports')
   createImportDraft(
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.createImportDraft(body, authorization);
+    return this.productsService.createImportDraft(body, requestContext);
   }
 
   @Get('v2/imports')
@@ -103,16 +104,16 @@ export class ProductsController {
   @Header('Expires', '0')
   @Header('Surrogate-Control', 'no-store')
   listImports(
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-    @Headers('authorization') authorization?: string,
+    @Query('page') page: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.listImports(
       {
         page: Number(page) || 1,
         limit: Number(limit) || 10,
       },
-      authorization,
+      requestContext,
     );
   }
 
@@ -126,49 +127,49 @@ export class ProductsController {
   @Header('Surrogate-Control', 'no-store')
   getImportById(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.getImportById(id, authorization);
+    return this.productsService.getImportById(id, requestContext);
   }
 
   @Post('v2/imports/:id/validate')
   validateImportDraft(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.validateExcelImport(
       {
         ...body,
         import_id: id,
       },
-      authorization,
+      requestContext,
     );
   }
 
   @Post('v2/excel/validate-import')
   validateExcelImport(
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.validateExcelImport(body, authorization);
+    return this.productsService.validateExcelImport(body, requestContext);
   }
 
   @Get('v2/import-progress/:id')
   getImportProgress(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.getImportProgress(id, authorization);
+    return this.productsService.getImportProgress(id, requestContext);
   }
 
   @Get('v2/import-search/:id')
   async getImportSearch(
     @Param('id') id: string,
-    @Query('limit') limit?: string,
-    @Query('page') page?: string,
-    @Query('difference') difference?: string,
-    @Headers('authorization') authorization?: string,
+    @Query('limit') limit: string | undefined,
+    @Query('page') page: string | undefined,
+    @Query('difference') difference: string | undefined,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.getImportSearch(
       id,
@@ -177,32 +178,32 @@ export class ProductsController {
         page: Number(page) || 1,
         difference: this.toBoolean(difference),
       },
-      authorization,
+      requestContext,
     );
   }
 
   @Get('v2/import-items-dp/:id')
   async getImportItemsDp(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.getImportItemsDp(id, authorization);
+    return this.productsService.getImportItemsDp(id, requestContext);
   }
 
   @Post('v2/import-commit/:id')
   importCommit(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.commitImport(id, authorization);
+    return this.productsService.commitImport(id, requestContext);
   }
 
   @Post('v2/imports/:id/commit')
   commitImportDraft(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.commitImport(id, authorization, {
+    return this.productsService.commitImport(id, requestContext, {
       forceWithCheckAccept: true,
     });
   }
@@ -210,18 +211,18 @@ export class ProductsController {
   @Post('v2/imports/:id/cancel')
   cancelImportDraft(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.cancelImport(id, authorization);
+    return this.productsService.cancelImport(id, requestContext);
   }
 
   @Post('v2/imports/:id/rollback')
   rollbackImport(
     @Param('id') id: string,
     @Query('dry_run') dryRun: string | undefined,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.rollbackImport(id, authorization, {
+    return this.productsService.rollbackImport(id, requestContext, {
       dryRun: dryRun === 'true',
     });
   }
@@ -229,26 +230,26 @@ export class ProductsController {
   @Post('v2/excel/import-without-check')
   importWithoutCheck(
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.importWithoutCheck(body, authorization);
+    return this.productsService.importWithoutCheck(body, requestContext);
   }
 
   @Post('v2/import/inventory')
   createImportInventory(
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.createImportInventory(body, authorization);
+    return this.productsService.createImportInventory(body, requestContext);
   }
 
   @Get('v2/stocktaking/:id')
   getStocktakingById(
     @Param('id') id: string,
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-    @Query('type') type?: string,
-    @Headers('authorization') authorization?: string,
+    @Query('page') page: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @Query('type') type: string | undefined,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.getStocktakingById(
       id,
@@ -257,16 +258,16 @@ export class ProductsController {
         limit: Number(limit) || 10,
         type: type?.trim(),
       },
-      authorization,
+      requestContext,
     );
   }
 
   @Get('v2/stocktaking-logs/:id')
   getStocktakingLogs(
     @Param('id') id: string,
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-    @Headers('authorization') authorization?: string,
+    @Query('page') page: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.getStocktakingLogs(
       id,
@@ -274,7 +275,7 @@ export class ProductsController {
         page: Number(page) || 1,
         limit: Number(limit) || 10,
       },
-      authorization,
+      requestContext,
     );
   }
 
@@ -282,50 +283,50 @@ export class ProductsController {
   setStocktakingProductByBarcode(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.setStocktakingProductByBarcode(
       id,
       body,
-      authorization,
+      requestContext,
     );
   }
 
   @Post('v2/stocktaking/:id/accept')
   acceptStocktakingImport(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.acceptStocktakingImport(id, authorization);
+    return this.productsService.acceptStocktakingImport(id, requestContext);
   }
 
   @Get('v2/product')
-  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   findAllV2(
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-    @Query('search') search?: string,
-    @Query('field_search_key') fieldSearchKey?: string,
-    @Query('statistics') statistics?: string,
-    @Query('brand_ids') brandIds?: string | string[],
-    @Query('supplier_ids') supplierIds?: string | string[],
-    @Query('order') order?: string | string[],
-    @Query('status') status?: string,
-    @Query('archived_list') archivedList?: string,
-    @Query('shop_ids') shopIds?: string | string[],
-    @Query('category_ids') categoryIds?: string | string[],
-    @Query('sku') sku?: string,
-    @Query('measurement_type') measurementType?: string,
-    @Query('supply_price_from') supplyPriceFrom?: string,
-    @Query('supply_price_to') supplyPriceTo?: string,
-    @Query('retail_price_from') retailPriceFrom?: string,
-    @Query('retail_price_to') retailPriceTo?: string,
-    @Query('wholesale_price_from') wholesalePriceFrom?: string,
-    @Query('wholesale_price_to') wholesalePriceTo?: string,
-    @Query('wholesale_price') wholesalePrice?: string,
-    @Query('free_price') freePrice?: string,
-    @Headers('authorization') authorization?: string,
+    @Query('page') page: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @Query('search') search: string | undefined,
+    @Query('field_search_key') fieldSearchKey: string | undefined,
+    @Query('statistics') statistics: string | undefined,
+    @Query('brand_ids') brandIds: string | string[] | undefined,
+    @Query('supplier_ids') supplierIds: string | string[] | undefined,
+    @Query('order') order: string | string[] | undefined,
+    @Query('status') status: string | undefined,
+    @Query('archived_list') archivedList: string | undefined,
+    @Query('shop_ids') shopIds: string | string[] | undefined,
+    @Query('category_ids') categoryIds: string | string[] | undefined,
+    @Query('sku') sku: string | undefined,
+    @Query('measurement_type') measurementType: string | undefined,
+    @Query('supply_price_from') supplyPriceFrom: string | undefined,
+    @Query('supply_price_to') supplyPriceTo: string | undefined,
+    @Query('retail_price_from') retailPriceFrom: string | undefined,
+    @Query('retail_price_to') retailPriceTo: string | undefined,
+    @Query('wholesale_price_from') wholesalePriceFrom: string | undefined,
+    @Query('wholesale_price_to') wholesalePriceTo: string | undefined,
+    @Query('wholesale_price') wholesalePrice: string | undefined,
+    @Query('free_price') freePrice: string | undefined,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.findAllV2Extended(
       {
@@ -351,33 +352,33 @@ export class ProductsController {
         wholesalePrice: this.toNumber(wholesalePrice),
         freePrice: this.toOptionalBoolean(freePrice),
       },
-      authorization,
+      requestContext,
     );
   }
 
   @Get('v2/product-stats')
-  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   getProductStats(
-    @Query('search') search?: string,
-    @Query('field_search_key') fieldSearchKey?: string,
-    @Query('status') status?: string,
-    @Query('archived_list') archivedList?: string,
-    @Query('brand_ids') brandIds?: string | string[],
-    @Query('supplier_ids') supplierIds?: string | string[],
-    @Query('shop_ids') shopIds?: string | string[],
-    @Query('category_ids') categoryIds?: string | string[],
-    @Query('sku') sku?: string,
-    @Query('measurement_type') measurementType?: string,
-    @Query('supply_price_from') supplyPriceFrom?: string,
-    @Query('supply_price_to') supplyPriceTo?: string,
-    @Query('retail_price_from') retailPriceFrom?: string,
-    @Query('retail_price_to') retailPriceTo?: string,
-    @Query('wholesale_price_from') wholesalePriceFrom?: string,
-    @Query('wholesale_price_to') wholesalePriceTo?: string,
-    @Query('wholesale_price') wholesalePrice?: string,
-    @Query('free_price') freePrice?: string,
-    @Headers('authorization') authorization?: string,
+    @Query('search') search: string | undefined,
+    @Query('field_search_key') fieldSearchKey: string | undefined,
+    @Query('status') status: string | undefined,
+    @Query('archived_list') archivedList: string | undefined,
+    @Query('brand_ids') brandIds: string | string[] | undefined,
+    @Query('supplier_ids') supplierIds: string | string[] | undefined,
+    @Query('shop_ids') shopIds: string | string[] | undefined,
+    @Query('category_ids') categoryIds: string | string[] | undefined,
+    @Query('sku') sku: string | undefined,
+    @Query('measurement_type') measurementType: string | undefined,
+    @Query('supply_price_from') supplyPriceFrom: string | undefined,
+    @Query('supply_price_to') supplyPriceTo: string | undefined,
+    @Query('retail_price_from') retailPriceFrom: string | undefined,
+    @Query('retail_price_to') retailPriceTo: string | undefined,
+    @Query('wholesale_price_from') wholesalePriceFrom: string | undefined,
+    @Query('wholesale_price_to') wholesalePriceTo: string | undefined,
+    @Query('wholesale_price') wholesalePrice: string | undefined,
+    @Query('free_price') freePrice: string | undefined,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.getCatalogStatistics(
       {
@@ -399,27 +400,27 @@ export class ProductsController {
         wholesalePrice: this.toNumber(wholesalePrice),
         freePrice: this.toOptionalBoolean(freePrice),
       },
-      authorization,
+      requestContext,
     );
   }
 
   @Get('v2/product/:id')
-  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   getProductById(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.getProductById(id, authorization);
+    return this.productsService.getProductById(id, requestContext);
   }
 
   @Post('v2/product')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   findAllV2Post(
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     if (this.isCatalogCreateRequest(body)) {
       throw new BadRequestException(
@@ -459,24 +460,24 @@ export class ProductsController {
         wholesalePrice: this.toNumber(body.wholesale_price),
         freePrice: this.toOptionalBoolean(body.free_price),
       },
-      authorization,
+      requestContext,
     );
   }
 
   @Post('v2/product/create')
-  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   createCatalogProduct(
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.createCatalogProduct(body, authorization);
+    return this.productsService.createCatalogProduct(body, requestContext);
   }
 
   @Post('v2/product/photo')
   @UseInterceptors(FileInterceptor('photo'))
   uploadProductPhoto(
-    @Headers('authorization') authorization: string | undefined,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
     @UploadedFile()
     file?: {
       originalname: string;
@@ -485,78 +486,80 @@ export class ProductsController {
       buffer: Buffer;
     },
   ) {
-    return this.productsService.uploadProductPhoto(authorization, file);
+    return this.productsService.uploadProductPhoto(requestContext, file);
   }
 
   @Put('v2/product/:id')
   updateCatalogProduct(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.updateCatalogProduct(id, body, authorization);
+    return this.productsService.updateCatalogProduct(id, body, requestContext);
   }
 
   @Patch('v2/product/:id/identifiers')
   patchProductIdentifiers(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.patchProductIdentifiers(
       id,
       body,
-      authorization,
+      requestContext,
     );
   }
 
   @Put('v2/products/bulk/archive')
   bulkArchiveProducts(
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.bulkArchiveProducts(body, authorization);
+    return this.productsService.bulkArchiveProducts(body, requestContext);
   }
 
   @Delete('v2/products/archived')
-  clearAllArchivedProducts(@Headers('authorization') authorization?: string) {
-    return this.productsService.clearAllArchivedProducts(authorization);
+  clearAllArchivedProducts(
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.productsService.clearAllArchivedProducts(requestContext);
   }
 
   @Delete('v2/products/bulk/delete')
   bulkDeleteProducts(
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.bulkDeleteProducts(body, authorization);
+    return this.productsService.bulkDeleteProducts(body, requestContext);
   }
 
   @Post('v2/product/generate-sku')
   generateSku(
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.generateSku(body, authorization);
+    return this.productsService.generateSku(body, requestContext);
   }
 
   @Post('v2/product/generate-barcode')
   generateBarcode(
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.generateBarcode(body, authorization);
+    return this.productsService.generateBarcode(body, requestContext);
   }
 
   @Get('v2/product-movement/:id')
   getProductMovement(
     @Param('id') id: string,
-    @Query('limit') limit?: string,
-    @Query('page') page?: string,
-    @Query('from_created_at') fromCreatedAt?: string,
-    @Query('to_created_at') toCreatedAt?: string,
-    @Query('movement_type') movementType?: string,
-    @Query('shop_id') shopId?: string,
-    @Headers('authorization') authorization?: string,
+    @Query('limit') limit: string | undefined,
+    @Query('page') page: string | undefined,
+    @Query('from_created_at') fromCreatedAt: string | undefined,
+    @Query('to_created_at') toCreatedAt: string | undefined,
+    @Query('movement_type') movementType: string | undefined,
+    @Query('shop_id') shopId: string | undefined,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.getProductMovement(
       id,
@@ -568,20 +571,20 @@ export class ProductsController {
         movementType: movementType?.trim(),
         shopId: shopId?.trim(),
       },
-      authorization,
+      requestContext,
     );
   }
 
   @Get('v2/stock-movements')
   listStockMovements(
-    @Query('limit') limit?: string,
-    @Query('page') page?: string,
-    @Query('from_created_at') fromCreatedAt?: string,
-    @Query('to_created_at') toCreatedAt?: string,
-    @Query('movement_type') movementType?: string,
-    @Query('shop_id') shopId?: string,
-    @Query('product_id') productId?: string,
-    @Headers('authorization') authorization?: string,
+    @Query('limit') limit: string | undefined,
+    @Query('page') page: string | undefined,
+    @Query('from_created_at') fromCreatedAt: string | undefined,
+    @Query('to_created_at') toCreatedAt: string | undefined,
+    @Query('movement_type') movementType: string | undefined,
+    @Query('shop_id') shopId: string | undefined,
+    @Query('product_id') productId: string | undefined,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.listStockMovements(
       {
@@ -593,17 +596,17 @@ export class ProductsController {
         shopId: shopId?.trim(),
         productId: productId?.trim(),
       },
-      authorization,
+      requestContext,
     );
   }
 
   @Post('v2/product-search-with-filters')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   findAllV2Catalog(
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.findAllV2Extended(
       {
@@ -631,17 +634,17 @@ export class ProductsController {
         wholesalePrice: this.toNumber(body.wholesale_price),
         freePrice: this.toOptionalBoolean(body.free_price),
       },
-      authorization,
+      requestContext,
     );
   }
 
   @Post('v2/product-search-stats-with-filters')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   getProductStatsWithFilters(
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.getCatalogStatistics(
       {
@@ -665,51 +668,51 @@ export class ProductsController {
         wholesalePrice: this.toNumber(body.wholesale_price),
         freePrice: this.toOptionalBoolean(body.free_price),
       },
-      authorization,
+      requestContext,
     );
   }
 
   @Get('v2/transfer')
   listTransfers(
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-    @Headers('authorization') authorization?: string,
+    @Query('page') page: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.listTransfers(
       {
         page: Number(page) || 1,
         limit: Number(limit) || 10,
       },
-      authorization,
+      requestContext,
     );
   }
 
   @Get('v2/transfer/:id')
   getTransferById(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.getTransferById(id, authorization);
+    return this.productsService.getTransferById(id, requestContext);
   }
 
   @Post('v2/transfer')
   createTransfer(
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.createTransfer(body, authorization);
+    return this.productsService.createTransfer(body, requestContext);
   }
 
   @Get('v2/transfer-products/:id')
   getTransferProducts(
     @Param('id') id: string,
-    @Query('search') search?: string,
-    @Query('limit') limit?: string,
-    @Query('page') page?: string,
-    @Query('status') status?: string,
-    @Query('statistics') statistics?: string,
-    @Query('product_type_id') productTypeId?: string,
-    @Headers('authorization') authorization?: string,
+    @Query('search') search: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @Query('page') page: string | undefined,
+    @Query('status') status: string | undefined,
+    @Query('statistics') statistics: string | undefined,
+    @Query('product_type_id') productTypeId: string | undefined,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.getTransferProducts(
       id,
@@ -721,17 +724,17 @@ export class ProductsController {
         statistics: this.toBoolean(statistics),
         productTypeId: productTypeId?.trim(),
       },
-      authorization,
+      requestContext,
     );
   }
 
   @Get('v2/transfer-items/:id')
   getTransferItems(
     @Param('id') id: string,
-    @Query('search') search?: string,
-    @Query('limit') limit?: string,
-    @Query('page') page?: string,
-    @Headers('authorization') authorization?: string,
+    @Query('search') search: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @Query('page') page: string | undefined,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.getTransferItems(
       id,
@@ -740,7 +743,7 @@ export class ProductsController {
         limit: Number(limit) || 20,
         page: Number(page) || 1,
       },
-      authorization,
+      requestContext,
     );
   }
 
@@ -748,27 +751,27 @@ export class ProductsController {
   upsertTransferItem(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.upsertTransferItem(id, body, authorization);
+    return this.productsService.upsertTransferItem(id, body, requestContext);
   }
 
   @Post('v2/transfer/:id/send')
   @HttpCode(200)
   sendTransfer(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.sendTransfer(id, authorization);
+    return this.productsService.sendTransfer(id, requestContext);
   }
 
   @Post('v2/transfer/:id/accept')
   @HttpCode(200)
   acceptTransfer(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.acceptTransfer(id, authorization);
+    return this.productsService.acceptTransfer(id, requestContext);
   }
 
   @Post('v2/transfer/:id/accept-verified')
@@ -776,18 +779,22 @@ export class ProductsController {
   acceptTransferVerified(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.acceptTransferVerified(id, body, authorization);
+    return this.productsService.acceptTransferVerified(
+      id,
+      body,
+      requestContext,
+    );
   }
 
   @Post('v2/transfer/:id/cancel')
   @HttpCode(200)
   cancelTransfer(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.cancelTransfer(id, authorization);
+    return this.productsService.cancelTransfer(id, requestContext);
   }
 
   private toStringArray(value: unknown) {

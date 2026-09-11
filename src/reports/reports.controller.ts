@@ -2,13 +2,18 @@ import {
   Body,
   Controller,
   Get,
-  Headers,
   Param,
   Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
+import {
+  CurrentCompanyContext,
+  CurrentRequestContext,
+} from '../auth/company-context.decorator';
+import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { CompanyRequestContext, RequestContext } from '../auth/request-context';
 import { ReportsService } from './reports.service';
 
 const versioned = (routes: string[]) =>
@@ -126,324 +131,366 @@ const STOCK_REPORT_TABLE_API_ROUTES = versioned(['stock-report-table']);
 export class ReportsController {
   constructor(private readonly reportsService: ReportsService) {}
 
+  @UseGuards(CompanyAccessGuard)
   @Get(SUMMARY_REPORT_ROUTES)
   getSummary(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getSummary(query, authorization);
+    return this.reportsService.getSummary(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(GENERAL_REPORT_ROUTES)
   getGeneralReport(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getGeneralReport(query, authorization);
+    return this.reportsService.getGeneralReport(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(GENERAL_REPORT_TABLE_ROUTES)
   getGeneralReportTable(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getGeneralReportTable(query, authorization);
+    return this.reportsService.getGeneralReportTable(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(GENERAL_SALES_REPORT_ROUTES)
   getGeneralSalesReport(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getGeneralSalesReport(query, authorization);
+    return this.reportsService.getGeneralSalesReport(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(GENERAL_PRODUCT_REPORT_ROUTES)
   getGeneralProductReport(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getGeneralProductReport(query, authorization);
+    return this.reportsService.getGeneralProductReport(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(GENERAL_SELLER_REPORT_ROUTES)
   getGeneralSellerReport(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getGeneralSellerReport(query, authorization);
+    return this.reportsService.getGeneralSellerReport(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(GENERAL_CUSTOMER_REPORT_ROUTES)
   getGeneralCustomerReport(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getGeneralCustomerReport(query, authorization);
+    return this.reportsService.getGeneralCustomerReport(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(SHOP_REPORT_ROUTES)
   getShops(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getShops(query, authorization);
+    return this.reportsService.getShops(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(SHOP_DETAIL_REPORT_ROUTES)
   getShopDetail(
     @Param('shopId') shopId: string,
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getShopDetail(shopId, query, authorization);
+    return this.reportsService.getShopDetail(shopId, query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(PRODUCT_REPORT_ROUTES)
   getProducts(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getProducts(query, authorization);
+    return this.reportsService.getProducts(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(PRODUCT_SALES_REPORT_ROUTES)
   getProductSales(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getProductSales(query, authorization);
+    return this.reportsService.getProductSales(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(PRODUCT_SALES_REPORT_API_ROUTES)
   getProductSalesReportApi(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getProductSalesReportApi(query, authorization);
+    return this.reportsService.getProductSalesReportApi(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(PRODUCT_EFFECTIVENESS_REPORT_ROUTES)
   getProductEffectiveness(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getProductEffectiveness(query, authorization);
+    return this.reportsService.getProductEffectiveness(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(PRODUCT_GENERAL_REPORT_API_ROUTES)
   getProductGeneralReportApi(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getProductGeneralReportApi(query, authorization);
+    return this.reportsService.getProductGeneralReportApi(
+      query,
+      requestContext,
+    );
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(PRODUCT_GENERAL_TABLE_API_ROUTES)
   getProductGeneralTableApi(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getProductGeneralTableApi(query, authorization);
+    return this.reportsService.getProductGeneralTableApi(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(PRODUCT_PERFORMANCE_REPORT_API_ROUTES)
   getProductPerformanceReportApi(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.reportsService.getProductPerformanceReportApi(
       query,
-      authorization,
+      requestContext,
     );
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(REPORT_PRODUCT_PERFORMANCE_TABLE_API_ROUTES)
   getReportProductPerformanceTableApi(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.reportsService.getReportProductPerformanceTableApi(
       query,
-      authorization,
+      requestContext,
     );
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(REPORT_PRODUCT_PERFORMANCE_TOTALS_API_ROUTES)
   getReportProductPerformanceTotalsApi(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.reportsService.getReportProductPerformanceTotalsApi(
       query,
-      authorization,
+      requestContext,
     );
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(PRODUCT_IMPORT_REPORT_ROUTES)
   getProductImports(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getProductImports(query, authorization);
+    return this.reportsService.getProductImports(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(IMPORT_REPORT_TABLE_API_ROUTES)
   getImportReportTableApi(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getImportReportTableApi(query, authorization);
+    return this.reportsService.getImportReportTableApi(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(IMPORT_REPORT_TOTALS_API_ROUTES)
   getImportReportTotalsApi(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getImportReportTotalsApi(query, authorization);
+    return this.reportsService.getImportReportTotalsApi(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(PRODUCT_SUPPLIER_REPORT_ROUTES)
   getProductSuppliers(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getProductSuppliers(query, authorization);
+    return this.reportsService.getProductSuppliers(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(PRODUCT_SELLS_BY_SUPPLIERS_TABLE_API_ROUTES)
   getProductSellsBySuppliersTableApi(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.reportsService.getProductSellsBySuppliersTableApi(
       query,
-      authorization,
+      requestContext,
     );
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(PRODUCT_STOCK_REPORT_ROUTES)
   getProductStocks(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getProductStocks(query, authorization);
+    return this.reportsService.getProductStocks(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(STOCK_REPORT_TABLE_API_ROUTES)
   getStockReportTableApi(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getStockReportTableApi(query, authorization);
+    return this.reportsService.getStockReportTableApi(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(INVENTORY_RESULT_REPORT_ROUTES)
   getInventoryResults(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getInventoryResults(query, authorization);
+    return this.reportsService.getInventoryResults(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(ORDER_RETURN_REPORT_ROUTES)
   getOrderReturns(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getOrderReturns(query, authorization);
+    return this.reportsService.getOrderReturns(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(WRITE_OFF_REPORT_ROUTES)
   getWriteOffs(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getWriteOffs(query, authorization);
+    return this.reportsService.getWriteOffs(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(ABC_ANALYSIS_REPORT_ROUTES)
   getAbcAnalysis(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getAbcAnalysis(query, authorization);
+    return this.reportsService.getAbcAnalysis(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(TRANSFER_REPORT_ROUTES)
   getTransfers(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getTransfers(query, authorization);
+    return this.reportsService.getTransfers(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(SELLER_REPORT_ROUTES)
   getSellers(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getSellers(query, authorization);
+    return this.reportsService.getSellers(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(SELLER_SALES_REPORT_ROUTES)
   getSellerSales(
     @Param('sellerId') sellerId: string,
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getSellerSales(sellerId, query, authorization);
+    return this.reportsService.getSellerSales(sellerId, query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(SELLER_DETAIL_REPORT_ROUTES)
   getSellerDetail(
     @Param('sellerId') sellerId: string,
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getSellerDetail(sellerId, query, authorization);
+    return this.reportsService.getSellerDetail(sellerId, query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(CUSTOMER_REPORT_ROUTES)
   getCustomers(
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getCustomers(query, authorization);
+    return this.reportsService.getCustomers(query, requestContext);
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(SELLER_SALARY_SETTINGS_ROUTES)
   getSellerSalarySettings(
     @Param('sellerId') sellerId: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.reportsService.getSellerSalarySettings(sellerId, authorization);
+    return this.reportsService.getSellerSalarySettings(
+      sellerId,
+      requestContext,
+    );
   }
 
   @Put(SELLER_SALARY_SETTINGS_ROUTES)
   updateSellerSalarySettings(
     @Param('sellerId') sellerId: string,
     @Body() body: Record<string, unknown>,
-    @Headers('authorization') authorization?: string,
+    @CurrentRequestContext() requestContext: RequestContext,
   ) {
     return this.reportsService.updateSellerSalarySettings(
       sellerId,
       body,
-      authorization,
+      requestContext,
     );
   }
 
+  @UseGuards(CompanyAccessGuard)
   @Get(SELLER_SALARY_REPORT_ROUTES)
   getSellerSalaryReport(
     @Param('sellerId') sellerId: string,
     @Query() query: Record<string, string | undefined>,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.reportsService.getSellerSalaryReport(
       sellerId,
       query,
-      authorization,
+      requestContext,
     );
   }
 }

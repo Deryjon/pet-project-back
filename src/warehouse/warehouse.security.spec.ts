@@ -1,3 +1,4 @@
+import { companyContext as testContext } from '../../test/fixtures/request-context';
 import { WarehouseService } from './warehouse.service';
 
 describe('Warehouse company and shop isolation', () => {
@@ -29,19 +30,21 @@ describe('Warehouse company and shop isolation', () => {
       },
       $transaction: jest.fn((operation) => operation(db)),
     };
-    service = new WarehouseService(db, {
-      getCompanyRequestContext: jest.fn().mockResolvedValue({
-        userType: 'company',
-        companyId: 'own',
-        userId: 1,
-        allowedShopIds: ['allowed'],
-      }),
-    } as any);
+    service = new WarehouseService(db);
   });
   it.each(['getInventorySession', 'applyInventory'] as const)(
     'scopes %s to company and allowed shops',
     async (method) => {
-      await expect(service[method]('foreign', 'Bearer test')).rejects.toThrow();
+      await expect(
+        service[method](
+          'foreign',
+          testContext({
+            companyId: 'own',
+            userId: 1,
+            allowedShopIds: ['allowed'],
+          }),
+        ),
+      ).rejects.toThrow();
       expect(db.inventorySession.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
           where: {
@@ -59,14 +62,25 @@ describe('Warehouse company and shop isolation', () => {
       service.addInventoryItem(
         'foreign',
         { product_id: 1, actual_quantity: 2 },
-        'Bearer test',
+        testContext({
+          companyId: 'own',
+          userId: 1,
+          allowedShopIds: ['allowed'],
+        }),
       ),
     ).rejects.toThrow('Session not found');
     expect(db.inventoryItem.upsert).not.toHaveBeenCalled();
   });
   it('rejects creating inventory for an unavailable shop', async () => {
     await expect(
-      service.createInventorySession({ shop_id: 'foreign' }, 'Bearer test'),
+      service.createInventorySession(
+        { shop_id: 'foreign' },
+        testContext({
+          companyId: 'own',
+          userId: 1,
+          allowedShopIds: ['allowed'],
+        }),
+      ),
     ).rejects.toThrow('Shop is not available');
     expect(db.inventorySession.create).not.toHaveBeenCalled();
   });
@@ -78,7 +92,11 @@ describe('Warehouse company and shop isolation', () => {
         service.addInventoryItem(
           'own',
           { product_id: 1, actual_quantity },
-          'Bearer test',
+          testContext({
+            companyId: 'own',
+            userId: 1,
+            allowedShopIds: ['allowed'],
+          }),
         ),
       ).rejects.toThrow('actual_quantity is invalid');
       expect(db.inventoryItem.upsert).not.toHaveBeenCalled();
@@ -90,7 +108,11 @@ describe('Warehouse company and shop isolation', () => {
       service.addInventoryItem(
         'own',
         { product_id: 99, actual_quantity: 2 },
-        'Bearer test',
+        testContext({
+          companyId: 'own',
+          userId: 1,
+          allowedShopIds: ['allowed'],
+        }),
       ),
     ).rejects.toThrow('Product not found');
     expect(db.product.findFirst).toHaveBeenCalledWith({
@@ -100,7 +122,11 @@ describe('Warehouse company and shop isolation', () => {
     expect(db.inventoryItem.upsert).not.toHaveBeenCalled();
   });
   it('limits movement lists to accessible shops', async () => {
-    await service.listMovements('PURCHASE', {}, 'Bearer test');
+    await service.listMovements(
+      'PURCHASE',
+      {},
+      testContext({ companyId: 'own', userId: 1, allowedShopIds: ['allowed'] }),
+    );
     expect(db.stockMovement.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
@@ -112,14 +138,12 @@ describe('Warehouse company and shop isolation', () => {
     );
   });
   it('does not remove filtering for a user with no shops', async () => {
-    const noShops = new WarehouseService(db, {
-      getCompanyRequestContext: async () => ({
-        userType: 'company',
-        companyId: 'own',
-        allowedShopIds: [],
-      }),
-    } as any);
-    await noShops.listMovements('PURCHASE', {}, 'Bearer test');
+    const noShops = new WarehouseService(db);
+    await noShops.listMovements(
+      'PURCHASE',
+      {},
+      testContext({ companyId: 'own', allowedShopIds: [] }),
+    );
     expect(db.stockMovement.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { type: 'PURCHASE', companyId: 'own', shopId: { in: [] } },
@@ -128,7 +152,10 @@ describe('Warehouse company and shop isolation', () => {
   });
 
   it('filters revaluations before pagination and uses the same predicate for total', async () => {
-    await service.listRevaluations({}, 'Bearer test');
+    await service.listRevaluations(
+      {},
+      testContext({ companyId: 'own', userId: 1, allowedShopIds: ['allowed'] }),
+    );
     const expectedWhere = {
       companyId: 'own',
       shopId: { in: ['allowed'] },
@@ -158,7 +185,14 @@ describe('Warehouse company and shop isolation', () => {
     db.stockMovement.create.mockResolvedValue({ id: 'movement-1' });
 
     await expect(
-      service.applyInventory('inventory-1', 'Bearer test'),
+      service.applyInventory(
+        'inventory-1',
+        testContext({
+          companyId: 'own',
+          userId: 1,
+          allowedShopIds: ['allowed'],
+        }),
+      ),
     ).resolves.toEqual({
       success: true,
       id: 'inventory-1',
@@ -204,7 +238,14 @@ describe('Warehouse company and shop isolation', () => {
     db.inventorySession.updateMany.mockResolvedValue({ count: 0 });
 
     await expect(
-      service.applyInventory('inventory-1', 'Bearer test'),
+      service.applyInventory(
+        'inventory-1',
+        testContext({
+          companyId: 'own',
+          userId: 1,
+          allowedShopIds: ['allowed'],
+        }),
+      ),
     ).rejects.toThrow('already being applied');
     expect(db.productStock.findMany).not.toHaveBeenCalled();
     expect(db.stockMovement.create).not.toHaveBeenCalled();

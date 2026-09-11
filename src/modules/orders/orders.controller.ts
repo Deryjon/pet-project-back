@@ -3,16 +3,17 @@ import {
   Controller,
   Delete,
   Get,
-  Headers,
   Param,
   Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { CurrentCompanyContext } from '../../auth/company-context.decorator';
 import { CompanyAccessGuard } from '../../auth/guards/company-access.guard';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard';
 import { Permissions } from '../../auth/permissions.decorator';
+import { CompanyRequestContext } from '../../auth/request-context';
 import { AddOrderItemDto } from './dto/add-order-item.dto';
 import { AddPaymentDto } from './dto/add-payment.dto';
 import { ApplyDiscountDto } from './dto/apply-discount.dto';
@@ -32,18 +33,18 @@ export class OrdersController {
   @Permissions('orders.create')
   create(
     @Body() dto: CreateOrderDto,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.ordersService.createDraft(dto, authorization);
+    return this.ordersService.createDraft(dto, requestContext);
   }
 
   @Get(':id')
   @Permissions('orders.read')
   findOne(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.ordersService.findOne(id, authorization);
+    return this.ordersService.findOne(id, requestContext);
   }
 
   @Post(':id/items')
@@ -51,9 +52,9 @@ export class OrdersController {
   addItem(
     @Param('id') id: string,
     @Body() dto: AddOrderItemDto,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.ordersService.addItem(id, dto, authorization);
+    return this.ordersService.addItem(id, dto, requestContext);
   }
 
   @Patch(':id/items/:itemId')
@@ -62,13 +63,13 @@ export class OrdersController {
     @Param('id') id: string,
     @Param('itemId') itemId: string,
     @Body() dto: UpdateOrderItemDto,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.ordersService.updateItemQuantity(
       id,
       itemId,
       dto,
-      authorization,
+      requestContext,
     );
   }
 
@@ -77,9 +78,9 @@ export class OrdersController {
   removeItem(
     @Param('id') id: string,
     @Param('itemId') itemId: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.ordersService.removeItem(id, itemId, authorization);
+    return this.ordersService.removeItem(id, itemId, requestContext);
   }
 
   @Post(':id/payments')
@@ -87,9 +88,9 @@ export class OrdersController {
   addPayment(
     @Param('id') id: string,
     @Body() dto: AddPaymentDto,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.ordersService.addPayment(id, dto, authorization);
+    return this.ordersService.addPayment(id, dto, requestContext);
   }
 
   @Delete(':id/payments/:paymentId')
@@ -97,9 +98,9 @@ export class OrdersController {
   removePayment(
     @Param('id') id: string,
     @Param('paymentId') paymentId: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.ordersService.removePayment(id, paymentId, authorization);
+    return this.ordersService.removePayment(id, paymentId, requestContext);
   }
 
   @Patch(':id/discount')
@@ -107,9 +108,9 @@ export class OrdersController {
   applyDiscount(
     @Param('id') id: string,
     @Body() dto: ApplyDiscountDto,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.ordersService.applyDiscount(id, dto, authorization);
+    return this.ordersService.applyDiscount(id, dto, requestContext);
   }
 
   @Patch(':id/customer')
@@ -117,9 +118,9 @@ export class OrdersController {
   attachCustomer(
     @Param('id') id: string,
     @Body() dto: AttachCustomerDto,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.ordersService.attachCustomer(id, dto, authorization);
+    return this.ordersService.attachCustomer(id, dto, requestContext);
   }
 
   @Patch(':id/comment')
@@ -127,36 +128,36 @@ export class OrdersController {
   updateComment(
     @Param('id') id: string,
     @Body() dto: UpdateOrderCommentDto,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.ordersService.updateComment(id, dto, authorization);
+    return this.ordersService.updateComment(id, dto, requestContext);
   }
 
   @Post(':id/cancel')
   @Permissions('orders.cancel')
   cancel(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.ordersService.cancel(id, authorization);
+    return this.ordersService.cancel(id, requestContext);
   }
 
   @Post(':id/park')
   @Permissions('orders.create')
   park(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.ordersService.park(id, authorization);
+    return this.ordersService.park(id, requestContext);
   }
 
   @Post(':id/resume')
   @Permissions('orders.create')
   resume(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.ordersService.resume(id, authorization);
+    return this.ordersService.resume(id, requestContext);
   }
 
   @Post(':id/complete')
@@ -164,8 +165,8 @@ export class OrdersController {
   complete(
     @Param('id') id: string,
     @Body() dto: CompleteOrderDto,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.ordersService.complete(id, dto, authorization);
+    return this.ordersService.complete(id, dto, requestContext);
   }
 }

@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { companyContext as testContext } from '../../test/fixtures/request-context';
 import { ClientsService } from './clients.service';
 
 describe('ClientsService.repayDebt concurrency guard', () => {
@@ -55,28 +56,21 @@ describe('ClientsService.repayDebt concurrency guard', () => {
     const companySettings: any = {
       toIsoForCompany: jest.fn((date) => date.toISOString()),
     };
-    const users: any = {
-      getCompanyRequestContext: jest.fn(async () => ({
-        userType: 'company',
-        companyId: 'company-1',
-        userId: 7,
-        allowedShopIds: ['shop-1'],
-      })),
-    };
-    const service = new ClientsService(prisma, companySettings, users);
+
+    const service = new ClientsService(prisma, companySettings);
 
     const results = await Promise.allSettled([
       service.repayDebt(
         'client-1',
         'debt-1',
         { amount_uzs: 60 },
-        'Bearer test',
+        testContext(),
       ),
       service.repayDebt(
         'client-1',
         'debt-1',
         { amount_uzs: 60 },
-        'Bearer test',
+        testContext(),
       ),
     ]);
 

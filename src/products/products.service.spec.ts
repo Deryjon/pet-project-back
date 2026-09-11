@@ -1,7 +1,7 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { CompanyRequestContext } from '../auth/request-context';
 import { ProductsService } from './products.service';
 
-const companyContext = {
+const companyContext: CompanyRequestContext = {
   userId: 1,
   fullName: 'Catalog user',
   userType: 'company',
@@ -25,13 +25,7 @@ describe('ProductsService identifier generation', () => {
       },
     };
 
-    const service = new ProductsService(
-      prisma as any,
-      {} as any,
-      {
-        getCompanyRequestContext: jest.fn().mockResolvedValue(companyContext),
-      } as any,
-    );
+    const service = new ProductsService(prisma as any, {} as any);
 
     return { prisma, service };
   };
@@ -46,7 +40,7 @@ describe('ProductsService identifier generation', () => {
     prisma.product.findFirst.mockResolvedValue(null);
 
     await expect(
-      service.generateSku({ company_id: 'foreign' }, 'Bearer valid'),
+      service.generateSku({ company_id: 'foreign' }, companyContext),
     ).resolves.toEqual({
       sku: 'SKU-00011',
     });
@@ -65,7 +59,7 @@ describe('ProductsService identifier generation', () => {
     prisma.product.findFirst.mockResolvedValue(null);
 
     await expect(
-      service.generateBarcode({ company_id: 'foreign' }, 'Bearer valid'),
+      service.generateBarcode({ company_id: 'foreign' }, companyContext),
     ).resolves.toEqual({
       barcode: '2000000000015',
     });
@@ -77,7 +71,7 @@ describe('ProductsService identifier generation', () => {
     prisma.product.findFirst.mockResolvedValue(null);
 
     await expect(
-      service.generateBarcode({ company_id: 'foreign' }, 'Bearer valid'),
+      service.generateBarcode({ company_id: 'foreign' }, companyContext),
     ).resolves.toEqual({
       barcode: '2000000000008',
     });
@@ -86,20 +80,13 @@ describe('ProductsService identifier generation', () => {
 describe('Legacy product creation authorization', () => {
   it('rejects calls without authorization before writing a product', async () => {
     const prisma = { product: { create: jest.fn() } };
-    const service = new ProductsService(
-      prisma as any,
-      {} as any,
-      {
-        getCompanyRequestContext: jest
-          .fn()
-          .mockRejectedValue(
-            new UnauthorizedException('Authorization is required'),
-          ),
-      } as any,
-    );
+    const service = new ProductsService(prisma as any, {} as any);
     await expect(
-      service.create({ name: 'Cable', company_id: 'foreign' }),
-    ).rejects.toThrow('Authorization is required');
+      service.create(
+        { name: 'Cable', company_id: 'foreign' },
+        undefined as any,
+      ),
+    ).rejects.toThrow('Only company users');
     expect(prisma.product.create).not.toHaveBeenCalled();
   });
   it('uses the authenticated company even when the request supplies another ID', async () => {
@@ -109,22 +96,13 @@ describe('Legacy product creation authorization', () => {
         findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 1 }),
       },
     };
-    const service = new ProductsService(
-      prisma as any,
-      {} as any,
-      {
-        getCompanyRequestContext: jest.fn().mockResolvedValue({
-          ...companyContext,
-          companyId: 'own',
-        }),
-      } as any,
-    );
+    const service = new ProductsService(prisma as any, {} as any);
     jest
       .spyOn(service as any, 'toProductResponse')
       .mockImplementation((value) => value);
     await service.create(
       { name: 'Cable', company_id: 'foreign' },
-      'Bearer user',
+      { ...companyContext, companyId: 'own' },
     );
     expect(prisma.product.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ company: { connect: { id: 'own' } } }),

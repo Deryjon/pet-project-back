@@ -1,43 +1,42 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import {
+  CompanyRequestContext,
+  requireCompanyContext,
+} from '../../auth/request-context';
 import { PrismaService } from '../../prisma/prisma.service';
-import { UsersService } from '../../users/users.service';
 import { ImportNormalizerService } from './import-normalizer.service';
 
 @Injectable()
 export class SupplierDirectoryService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly users: UsersService,
     private readonly normalizer: ImportNormalizerService,
   ) {}
-  private async company(auth?: string) {
-    const context = await this.users.getRequestContext(auth);
-    if (!context.companyId)
-      throw new ForbiddenException('Company context required');
+  private async company(requestContext: CompanyRequestContext) {
+    const context = requireCompanyContext(requestContext);
     return context.companyId;
   }
-  async list(auth?: string) {
-    const companyId = await this.company(auth);
+  async list(requestContext: CompanyRequestContext) {
+    const companyId = await this.company(requestContext);
     return this.prisma.supplier.findMany({
       where: { companyId },
       orderBy: { name: 'asc' },
     });
   }
-  async get(id: number, auth?: string) {
-    const companyId = await this.company(auth);
+  async get(id: number, requestContext: CompanyRequestContext) {
+    const companyId = await this.company(requestContext);
     const supplier = await this.prisma.supplier.findFirst({
       where: { id, companyId },
     });
     if (!supplier) throw new NotFoundException('Supplier not found');
     return supplier;
   }
-  async create(body: any, auth?: string) {
-    const companyId = await this.company(auth);
+  async create(body: any, requestContext: CompanyRequestContext) {
+    const companyId = await this.company(requestContext);
     const name = String(body.name || '').trim();
     if (!name) throw new BadRequestException('name is required');
     return this.prisma.supplier.create({
@@ -51,25 +50,29 @@ export class SupplierDirectoryService {
       },
     });
   }
-  async update(id: number, body: any, auth?: string) {
-    await this.get(id, auth);
+  async update(id: number, body: any, requestContext: CompanyRequestContext) {
+    await this.get(id, requestContext);
     const data: any = {};
     for (const key of ['name', 'phone', 'telegram', 'comment', 'isActive'])
       if (body[key] !== undefined) data[key] = body[key];
     return this.prisma.supplier.update({ where: { id }, data });
   }
-  async aliases(id: number, auth?: string) {
-    const companyId = await this.company(auth);
-    await this.get(id, auth);
+  async aliases(id: number, requestContext: CompanyRequestContext) {
+    const companyId = await this.company(requestContext);
+    await this.get(id, requestContext);
     return this.prisma.supplierProductAlias.findMany({
       where: { companyId, supplierId: id, product: { companyId } },
       include: { product: true },
       orderBy: { updatedAt: 'desc' },
     });
   }
-  async createAlias(id: number, body: any, auth?: string) {
-    const companyId = await this.company(auth);
-    await this.get(id, auth);
+  async createAlias(
+    id: number,
+    body: any,
+    requestContext: CompanyRequestContext,
+  ) {
+    const companyId = await this.company(requestContext);
+    await this.get(id, requestContext);
     const product = await this.prisma.product.findFirst({
       where: { id: Number(body.productId), companyId },
     });
@@ -89,8 +92,13 @@ export class SupplierDirectoryService {
       },
     });
   }
-  async updateAlias(id: number, aliasId: string, body: any, auth?: string) {
-    const companyId = await this.company(auth);
+  async updateAlias(
+    id: number,
+    aliasId: string,
+    body: any,
+    requestContext: CompanyRequestContext,
+  ) {
+    const companyId = await this.company(requestContext);
     const alias = await this.prisma.supplierProductAlias.findFirst({
       where: { id: aliasId, supplierId: id, companyId },
     });
@@ -126,8 +134,12 @@ export class SupplierDirectoryService {
       },
     });
   }
-  async deleteAlias(id: number, aliasId: string, auth?: string) {
-    const companyId = await this.company(auth);
+  async deleteAlias(
+    id: number,
+    aliasId: string,
+    requestContext: CompanyRequestContext,
+  ) {
+    const companyId = await this.company(requestContext);
     const result = await this.prisma.supplierProductAlias.deleteMany({
       where: { id: aliasId, supplierId: id, companyId },
     });

@@ -1,13 +1,15 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import { CompanyRequestContext } from '../auth/request-context';
+import {
+  CompanyRequestContext,
+  requireCompanyContext,
+} from '../auth/request-context';
 import {
   getSaleItemNetSales,
   getSignedSaleAmount,
 } from '../common/money-calculations';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { UsersService } from '../users/users.service';
 
 const granularityLabels: Record<string, string> = {
   hour: 'по часам',
@@ -22,7 +24,6 @@ export class DashboardService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly usersService: UsersService,
     private readonly companySettingsService: CompanySettingsService,
   ) {}
 
@@ -38,10 +39,9 @@ export class DashboardService {
       reportPeriod?: string;
       branchCode?: string;
     },
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context =
-      await this.usersService.getCompanyRequestContext(authorization);
+    const context = await requireCompanyContext(requestContext);
     const startDate = this.parseStartDate(query.startDate);
     const reportPeriod = (query.reportPeriod ?? '').trim().toLowerCase();
     const detalization = (query.detalization ?? 'hour').trim().toLowerCase();
@@ -330,10 +330,9 @@ export class DashboardService {
 
   async saveDashboardSetting(
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context =
-      await this.usersService.getCompanyRequestContext(authorization);
+    const context = await requireCompanyContext(requestContext);
     const id = randomUUID();
     this.dashboardSettingsStore.set(id, {
       ...body,

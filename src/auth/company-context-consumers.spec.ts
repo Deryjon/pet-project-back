@@ -1,9 +1,10 @@
+import { ClientsService } from '../clients/clients.service';
 import { CashboxesService } from '../modules/cashboxes/cashboxes.service';
 import { PaymentTypesService } from '../modules/payments/payment-types.service';
-import { ClientsService } from '../clients/clients.service';
+import { CompanyRequestContext } from './request-context';
 
 describe('company context consumers', () => {
-  const companyContext = {
+  const companyContext: CompanyRequestContext = {
     userId: 7,
     fullName: 'Cashier',
     userType: 'company',
@@ -19,24 +20,16 @@ describe('company context consumers', () => {
   };
 
   it('requires an available shop for cashbox access', async () => {
-    const getCompanyRequestContext = jest
-      .fn()
-      .mockResolvedValue(companyContext);
     const prisma = {
       cashbox: { findMany: jest.fn().mockResolvedValue([]) },
     };
-    const service = new CashboxesService(
-      prisma as any,
-      {
-        getCompanyRequestContext,
-      } as any,
-    );
+    const service = new CashboxesService(prisma as any);
 
-    await service.findAll(undefined, 'Bearer valid');
+    await service.findAll(undefined, companyContext);
 
-    expect(getCompanyRequestContext).toHaveBeenCalledWith('Bearer valid', {
-      requireAvailableShop: true,
-    });
+    await expect(
+      service.findAll(undefined, { ...companyContext, allowedShopIds: [] }),
+    ).rejects.toThrow('No available shops');
     expect(prisma.cashbox.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
@@ -48,25 +41,16 @@ describe('company context consumers', () => {
   });
 
   it('scopes payment types through the mandatory company context', async () => {
-    const getCompanyRequestContext = jest
-      .fn()
-      .mockResolvedValue(companyContext);
     const prisma = {
       paymentType: {
         upsert: jest.fn().mockResolvedValue({}),
         findMany: jest.fn().mockResolvedValue([]),
       },
     };
-    const service = new PaymentTypesService(
-      prisma as any,
-      {
-        getCompanyRequestContext,
-      } as any,
-    );
+    const service = new PaymentTypesService(prisma as any);
 
-    await service.findAll('Bearer valid');
+    await service.findAll(companyContext);
 
-    expect(getCompanyRequestContext).toHaveBeenCalledWith('Bearer valid');
     expect(prisma.paymentType.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { companyId: 'company-1', isActive: true },
@@ -90,17 +74,9 @@ describe('company context consumers', () => {
         Promise.all(operations),
       ),
     };
-    const service = new ClientsService(
-      prisma as any,
-      {} as any,
-      {
-        getCompanyRequestContext: jest
-          .fn()
-          .mockResolvedValue(contextWithoutShops),
-      } as any,
-    );
+    const service = new ClientsService(prisma as any, {} as any);
 
-    await service.getFilters('Bearer valid');
+    await service.getFilters(contextWithoutShops);
 
     expect(prisma.shop.findMany).toHaveBeenCalledWith({
       where: { companyId: 'company-1', id: { in: [] } },

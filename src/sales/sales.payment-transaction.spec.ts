@@ -1,4 +1,5 @@
 import { ConflictException } from '@nestjs/common';
+import { companyContext as testContext } from '../../test/fixtures/request-context';
 import { SalesService } from './sales.service';
 
 describe('SalesService legacy payment transaction', () => {
@@ -38,12 +39,7 @@ describe('SalesService legacy payment transaction', () => {
       ),
     };
     const telegram = { notifySale: jest.fn().mockResolvedValue(undefined) };
-    const service = new SalesService(
-      prisma as any,
-      {} as any,
-      {} as any,
-      telegram as any,
-    );
+    const service = new SalesService(prisma as any, {} as any, telegram as any);
     const stockPosting = {
       companyId: 'company-1',
       branchCode: 'B1',
@@ -103,7 +99,7 @@ describe('SalesService legacy payment transaction', () => {
     const { service, prisma, tx, writeOff, notifyCrossings, stockPosting } =
       setup();
 
-    await service.pay(41, {}, 'Bearer test');
+    await service.pay(41, {}, testContext());
 
     expect(tx.sale.updateMany).toHaveBeenCalledWith({
       where: { id: 41, isDraft: true },
@@ -125,7 +121,7 @@ describe('SalesService legacy payment transaction', () => {
   it('does not write off stock when another request already claimed the draft', async () => {
     const { service, writeOff, notifyCrossings } = setup(0);
 
-    await expect(service.pay(41, {}, 'Bearer test')).rejects.toBeInstanceOf(
+    await expect(service.pay(41, {}, testContext())).rejects.toBeInstanceOf(
       ConflictException,
     );
     expect(writeOff).not.toHaveBeenCalled();
@@ -135,7 +131,7 @@ describe('SalesService legacy payment transaction', () => {
   it('uses the same atomic transaction for the order-payment compatibility route', async () => {
     const { service, prisma, tx, writeOff } = setup();
 
-    await service.payOrder('41', {}, 'Bearer test');
+    await service.payOrder('41', {}, testContext());
 
     expect(writeOff).toHaveBeenCalledWith(sale, undefined, tx, false);
     expect(tx.sale.updateMany).toHaveBeenCalledWith({

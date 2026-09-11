@@ -6,9 +6,12 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { UAParser } from 'ua-parser-js';
+import {
+  CompanyRequestContext,
+  requireCompanyContext,
+} from '../auth/request-context';
 import { PlatformService } from '../platform/platform.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { UsersService } from '../users/users.service';
 
 function randomToken(length = 8): string {
   const chars =
@@ -35,7 +38,6 @@ export class TelegramService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly usersService: UsersService,
     private readonly platformService: PlatformService,
   ) {}
 
@@ -55,9 +57,10 @@ export class TelegramService {
     }
   }
 
-  async generateLinkToken(authorization: string): Promise<{ link: string }> {
-    const context =
-      await this.usersService.getCompanyRequestContext(authorization);
+  async generateLinkToken(
+    requestContext: CompanyRequestContext,
+  ): Promise<{ link: string }> {
+    const context = await requireCompanyContext(requestContext);
 
     const user = await this.prisma.user.findUnique({
       where: { id: Number(context.userId) },
@@ -462,9 +465,8 @@ export class TelegramService {
     return Math.round(value).toLocaleString('ru-RU').replace(/\s/g, ' ');
   }
 
-  async getSubscribers(authorization: string) {
-    const context =
-      await this.usersService.getCompanyRequestContext(authorization);
+  async getSubscribers(requestContext: CompanyRequestContext) {
+    const context = await requireCompanyContext(requestContext);
 
     const subscribers = await this.prisma.telegramSubscriber.findMany({
       where: { companyId: context.companyId },
@@ -497,10 +499,9 @@ export class TelegramService {
       notifyOnLowStock?: boolean;
       branchCode?: string | null;
     },
-    authorization: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context =
-      await this.usersService.getCompanyRequestContext(authorization);
+    const context = await requireCompanyContext(requestContext);
 
     if (
       typeof body.branchCode === 'string' &&
@@ -534,9 +535,8 @@ export class TelegramService {
     });
   }
 
-  async deleteSubscriber(id: string, authorization: string) {
-    const context =
-      await this.usersService.getCompanyRequestContext(authorization);
+  async deleteSubscriber(id: string, requestContext: CompanyRequestContext) {
+    const context = await requireCompanyContext(requestContext);
 
     const sub = await this.prisma.telegramSubscriber.findFirst({
       where: { id, companyId: context.companyId },

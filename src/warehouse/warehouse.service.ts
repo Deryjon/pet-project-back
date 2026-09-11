@@ -1,24 +1,24 @@
 import {
-  Injectable,
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import {
+  CompanyRequestContext,
+  requireCompanyContext,
+} from '../auth/request-context';
 import { runSerializableTransaction } from '../common/serializable-transaction';
 import { PrismaService } from '../prisma/prisma.service';
-import { UsersService } from '../users/users.service';
 
 @Injectable()
 export class WarehouseService {
-  constructor(
-    private readonly db: PrismaService,
-    private readonly usersService: UsersService,
-  ) {}
+  constructor(private readonly db: PrismaService) {}
 
-  private async context(auth?: string) {
-    return this.usersService.getCompanyRequestContext(auth);
+  private async context(requestContext: CompanyRequestContext) {
+    return requireCompanyContext(requestContext);
   }
 
   private scope(context: { companyId: string; allowedShopIds: string[] }) {
@@ -31,9 +31,9 @@ export class WarehouseService {
   async listMovements(
     type: string,
     query: Record<string, string>,
-    auth?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.context(auth);
+    const context = await this.context(requestContext);
     const page = Math.max(1, Number(query.page) || 1);
     const limit = Math.min(Math.max(1, Number(query.limit) || 10), 100);
     const search = query.search?.trim();
@@ -89,8 +89,11 @@ export class WarehouseService {
     };
   }
 
-  async listRevaluations(query: Record<string, string>, auth?: string) {
-    const context = await this.context(auth);
+  async listRevaluations(
+    query: Record<string, string>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.context(requestContext);
     const page = Math.max(1, Number(query.page) || 1);
     const limit = Math.min(Math.max(1, Number(query.limit) || 10), 100);
 
@@ -139,8 +142,11 @@ export class WarehouseService {
     };
   }
 
-  async listInventorySessions(query: Record<string, string>, auth?: string) {
-    const context = await this.context(auth);
+  async listInventorySessions(
+    query: Record<string, string>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.context(requestContext);
     const page = Math.max(1, Number(query.page) || 1);
     const limit = Math.min(Math.max(1, Number(query.limit) || 10), 100);
     const where: any = this.scope(context);
@@ -190,8 +196,8 @@ export class WarehouseService {
     };
   }
 
-  async getInventorySession(id: string, auth?: string) {
-    const context = await this.context(auth);
+  async getInventorySession(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.context(requestContext);
     const session = await this.db.inventorySession.findFirst({
       where: { id, ...this.scope(context) },
       include: {
@@ -225,8 +231,11 @@ export class WarehouseService {
     };
   }
 
-  async createInventorySession(body: Record<string, unknown>, auth?: string) {
-    const context = await this.context(auth);
+  async createInventorySession(
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.context(requestContext);
     const shopId = String(body.shop_id || '').trim();
     if (!shopId) throw new BadRequestException('shop_id required');
     if (!context.allowedShopIds.includes(shopId))
@@ -261,9 +270,9 @@ export class WarehouseService {
   async addInventoryItem(
     sessionId: string,
     body: Record<string, unknown>,
-    auth?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.context(auth);
+    const context = await this.context(requestContext);
     const session = await this.db.inventorySession.findFirst({
       where: { id: sessionId, ...this.scope(context) },
     });
@@ -331,8 +340,11 @@ export class WarehouseService {
     };
   }
 
-  async applyInventory(sessionId: string, auth?: string) {
-    const context = await this.context(auth);
+  async applyInventory(
+    sessionId: string,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.context(requestContext);
     await runSerializableTransaction(this.db, async (tx) => {
       const session = await tx.inventorySession.findFirst({
         where: { id: sessionId, ...this.scope(context) },

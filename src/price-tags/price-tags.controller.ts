@@ -1,28 +1,23 @@
-import {
-  Controller,
-  Get,
-  Headers,
-  Param,
-  Query,
-  UseGuards,
-} from '@nestjs/common';
-import { PriceTagsService } from './price-tags.service';
-import { CompanySettingsService } from '../company-settings/company-settings.service';
-import { UsersService } from '../users/users.service';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import { CurrentCompanyContext } from '../auth/company-context.decorator';
 import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import {
+  CompanyRequestContext,
+  requireCompanyContext,
+} from '../auth/request-context';
+import { CompanySettingsService } from '../company-settings/company-settings.service';
+import { PriceTagsService } from './price-tags.service';
 
 @Controller()
 export class PriceTagsController {
   constructor(
     private readonly priceTagsService: PriceTagsService,
     private readonly companySettingsService: CompanySettingsService,
-    private readonly usersService: UsersService,
   ) {}
 
-  private async requireCompanyId(authorization?: string) {
-    const context =
-      await this.usersService.getCompanyRequestContext(authorization);
+  private async requireCompanyId(requestContext: CompanyRequestContext) {
+    const context = await requireCompanyContext(requestContext);
     return context.companyId;
   }
 
@@ -32,9 +27,9 @@ export class PriceTagsController {
     @Query('productIds') productIds: string,
     @Query('copies') copies: string | undefined,
     @Query('branchId') branchId: string | undefined,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    const companyId = await this.requireCompanyId(authorization);
+    const companyId = await this.requireCompanyId(requestContext);
     if (!productIds) {
       return { products: [] };
     }
@@ -52,9 +47,9 @@ export class PriceTagsController {
   @UseGuards(JwtAuthGuard, CompanyAccessGuard)
   async getPriceTagTemplates(
     @Param('branchId') _branchId: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    const companyId = await this.requireCompanyId(authorization);
+    const companyId = await this.requireCompanyId(requestContext);
     return this.companySettingsService.getPriceTags(companyId);
   }
 }

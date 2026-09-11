@@ -1,3 +1,4 @@
+import { companyContext as testContext } from '../../../test/fixtures/request-context';
 import { ImportMatcherService } from './import-matcher.service';
 import { ImportNormalizerService } from './import-normalizer.service';
 import { SupplierInvoiceService } from './supplier-invoice.service';
@@ -185,11 +186,6 @@ describe('Import matching', () => {
     db.product.findMany.mockResolvedValue([{ id: 1, name: 'alpha beta' }]);
     const service = new SupplierInvoiceService(
       db,
-      {
-        getRequestContext: jest
-          .fn()
-          .mockResolvedValue({ companyId: 'company' }),
-      } as any,
       matcher,
       normalizer,
       {} as any,
@@ -207,7 +203,10 @@ describe('Import matching', () => {
         { id: 'review', rawName: 'alpha beta' },
       ],
     } as any);
-    const result = await service.autoMatch('invoice');
+    const result = await service.autoMatch(
+      'invoice',
+      testContext({ companyId: 'company', userId: 1 }),
+    );
     expect(result.summary).toEqual({
       total: 2,
       matched: 0,

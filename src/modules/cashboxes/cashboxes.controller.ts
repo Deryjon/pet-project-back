@@ -1,16 +1,10 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Headers,
-  Post,
-  Query,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import { CurrentCompanyContext } from '../../auth/company-context.decorator';
 import { CompanyAccessGuard } from '../../auth/guards/company-access.guard';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard';
 import { Permissions } from '../../auth/permissions.decorator';
+import { CompanyRequestContext } from '../../auth/request-context';
 import { CashboxesService } from './cashboxes.service';
 import { CreateCashboxDto } from './dto/create-cashbox.dto';
 
@@ -23,17 +17,17 @@ export class CashboxesController {
   @Permissions('cashbox-create')
   create(
     @Body() dto: CreateCashboxDto,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.cashboxesService.create(dto, authorization);
+    return this.cashboxesService.create(dto, requestContext);
   }
 
   @Get()
   @Permissions('cashboxes.read')
   findAll(
-    @Query('shopId') shopId?: string,
-    @Headers('authorization') authorization?: string,
+    @Query('shopId') shopId: string | undefined,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.cashboxesService.findAll(shopId, authorization);
+    return this.cashboxesService.findAll(shopId, requestContext);
   }
 }

@@ -1,10 +1,11 @@
 import { ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { SalesService } from './sales.service';
+import { companyContext as testContext } from '../../test/fixtures/request-context';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { UsersService } from '../users/users.service';
+import { SalesService } from './sales.service';
 
 /**
  * Characterization tests for the sale total/discount/rounding math, written
@@ -52,7 +53,6 @@ describe('SalesService money calculations', () => {
     const service = new SalesService(
       prisma,
       companySettingsService,
-      usersService,
       telegramService,
     );
 
@@ -482,13 +482,15 @@ describe('SalesService money calculations', () => {
   });
 
   describe('writeOffSaleItemsFromStock (low-stock notifications)', () => {
-    function createServiceWithStock(stockRow: {
-      id: number;
-      quantity: number;
-      lowStockNotifiedAt: Date | null;
-      purchasePrice?: number | null;
-      salePrice?: number | null;
-    } | null) {
+    function createServiceWithStock(
+      stockRow: {
+        id: number;
+        quantity: number;
+        lowStockNotifiedAt: Date | null;
+        purchasePrice?: number | null;
+        salePrice?: number | null;
+      } | null,
+    ) {
       const productStockUpdate = jest.fn().mockResolvedValue({ count: 1 });
       const stockMovementCreate = jest.fn();
       const notifyLowStock = jest.fn().mockResolvedValue(undefined);
@@ -503,9 +505,11 @@ describe('SalesService money calculations', () => {
           aggregate: jest.fn().mockResolvedValue({ _sum: { quantity: 0 } }),
         },
         product: {
-          findMany: jest.fn().mockResolvedValue([
-            { id: 1, name: 'Test product', sku: 'SKU-1', barcode: null },
-          ]),
+          findMany: jest
+            .fn()
+            .mockResolvedValue([
+              { id: 1, name: 'Test product', sku: 'SKU-1', barcode: null },
+            ]),
           update: jest.fn(),
         },
         stockMovement: {
@@ -526,11 +530,16 @@ describe('SalesService money calculations', () => {
       const service = new SalesService(
         prisma,
         companySettingsService,
-        usersService,
         telegramService,
       );
 
-      return { service, prisma, productStockUpdate, notifyLowStock, telegramService };
+      return {
+        service,
+        prisma,
+        productStockUpdate,
+        notifyLowStock,
+        telegramService,
+      };
     }
 
     const sale = {
@@ -543,11 +552,12 @@ describe('SalesService money calculations', () => {
     };
 
     it('notifies and arms the flag when stock crosses below the threshold', async () => {
-      const { service, productStockUpdate, notifyLowStock } = createServiceWithStock({
-        id: 55,
-        quantity: 6,
-        lowStockNotifiedAt: null,
-      });
+      const { service, productStockUpdate, notifyLowStock } =
+        createServiceWithStock({
+          id: 55,
+          quantity: 6,
+          lowStockNotifiedAt: null,
+        });
 
       await (service as any).writeOffSaleItemsFromStock(sale);
 
@@ -575,15 +585,16 @@ describe('SalesService money calculations', () => {
       await expect(
         (service as any).writeOffSaleItemsFromStock(sale),
       ).rejects.toBeInstanceOf(ConflictException);
-      expect((prisma.stockMovement.create as jest.Mock)).not.toHaveBeenCalled();
+      expect(prisma.stockMovement.create as jest.Mock).not.toHaveBeenCalled();
     });
 
     it('does not re-notify when already armed and still below threshold', async () => {
-      const { service, productStockUpdate, notifyLowStock } = createServiceWithStock({
-        id: 55,
-        quantity: 4,
-        lowStockNotifiedAt: new Date('2026-01-01'),
-      });
+      const { service, productStockUpdate, notifyLowStock } =
+        createServiceWithStock({
+          id: 55,
+          quantity: 4,
+          lowStockNotifiedAt: new Date('2026-01-01'),
+        });
 
       await (service as any).writeOffSaleItemsFromStock(sale);
 
@@ -593,11 +604,12 @@ describe('SalesService money calculations', () => {
     });
 
     it('re-arms (clears the flag) once stock rises back above the threshold', async () => {
-      const { service, productStockUpdate, notifyLowStock } = createServiceWithStock({
-        id: 55,
-        quantity: 20,
-        lowStockNotifiedAt: new Date('2026-01-01'),
-      });
+      const { service, productStockUpdate, notifyLowStock } =
+        createServiceWithStock({
+          id: 55,
+          quantity: 20,
+          lowStockNotifiedAt: new Date('2026-01-01'),
+        });
 
       // A sale that somehow still leaves stock above threshold shouldn't happen via a
       // decrement, so simulate the "rising back above" case via a tiny decrement that
@@ -666,7 +678,6 @@ describe('SalesService money calculations', () => {
       const service = new SalesService(
         prisma,
         {} as CompanySettingsService,
-        {} as UsersService,
         telegramService,
       );
 
@@ -800,9 +811,11 @@ describe('SalesService money calculations', () => {
           delete: saleDelete,
         },
       });
-      jest.spyOn(service as any, 'restoreSaleStock').mockResolvedValue(undefined);
+      jest
+        .spyOn(service as any, 'restoreSaleStock')
+        .mockResolvedValue(undefined);
 
-      await service.removeOrder(String(sale.id));
+      await service.removeOrder(String(sale.id), testContext());
 
       expect((prisma.sale as any).count).toHaveBeenCalledWith({
         where: {
@@ -851,7 +864,9 @@ describe('SalesService money calculations', () => {
           create: auditCreate,
         },
       });
-      jest.spyOn(service as any, 'restoreSaleStock').mockResolvedValue(undefined);
+      jest
+        .spyOn(service as any, 'restoreSaleStock')
+        .mockResolvedValue(undefined);
       jest.spyOn(service as any, 'getRequestContext').mockResolvedValue({
         userId: 44,
         userType: 'company',
@@ -859,7 +874,7 @@ describe('SalesService money calculations', () => {
         allowedBranchCodes: ['B1'],
       });
 
-      await service.removeOrder(String(sale.id), 'Bearer token', {
+      await service.removeOrder(String(sale.id), testContext(), {
         cancel_reason: 'Ошибка кассира',
       });
 
@@ -943,12 +958,17 @@ describe('SalesService money calculations', () => {
       jest
         .spyOn(service as any, 'resolveAdjustmentDeletionGroup')
         .mockResolvedValue(groupedAdjustments);
-      jest.spyOn(service as any, 'applyStockDelta').mockResolvedValue(undefined);
+      jest
+        .spyOn(service as any, 'applyStockDelta')
+        .mockResolvedValue(undefined);
       jest
         .spyOn(service as any, 'syncProductsQuantity')
         .mockResolvedValue(undefined);
 
-      const result = await service.removeOrder(String(adjustment.id));
+      const result = await service.removeOrder(
+        String(adjustment.id),
+        testContext(),
+      );
 
       expect(saleUpdateMany).toHaveBeenCalledWith({
         where: { id: { in: [202, 203] } },

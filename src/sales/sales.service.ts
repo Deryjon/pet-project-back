@@ -1,20 +1,22 @@
 import {
   BadRequestException,
   ConflictException,
-  InternalServerErrorException,
   Injectable,
+  InternalServerErrorException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ClientDebtStatus, Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
-import { CompanyRequestContext } from '../auth/request-context';
+import {
+  CompanyRequestContext,
+  requireCompanyContext,
+} from '../auth/request-context';
+import { postSaleStockDecrease } from '../common/sale-stock-posting';
+import { runSerializableTransaction } from '../common/serializable-transaction';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
-import { UsersService } from '../users/users.service';
-import { postSaleStockDecrease } from '../common/sale-stock-posting';
-import { runSerializableTransaction } from '../common/serializable-transaction';
 
 const COMPANY_ID = process.env.COMPANY_ID ?? '';
 const DEFAULT_PRODUCT_TYPE_ID =
@@ -49,12 +51,11 @@ export class SalesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly companySettingsService: CompanySettingsService,
-    private readonly usersService: UsersService,
     private readonly telegramService: TelegramService,
   ) {}
 
-  private async getRequestContext(authorization?: string) {
-    return this.usersService.getCompanyRequestContext(authorization);
+  private async getRequestContext(requestContext: CompanyRequestContext) {
+    return requireCompanyContext(requestContext);
   }
 
   private extractMeasurementUnitShortName(metadata: unknown) {
@@ -135,9 +136,9 @@ export class SalesService {
 
   async findAll(
     query: Record<string, string | undefined> = {},
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const safePage = Math.max(1, Number(query.page) || 1);
     const safeLimit = Math.min(Math.max(1, Number(query.limit) || 10), 100);
 
@@ -202,19 +203,19 @@ export class SalesService {
     };
   }
 
-  async createDraft(authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async createDraft(requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
     const sale = await this.getOrCreateOpenSale(context);
 
     return this.toDraftSummary(sale);
   }
 
-  async findParkedSales(authorization?: string) {
-    return this.findDraftSales(authorization);
+  async findParkedSales(requestContext: CompanyRequestContext) {
+    return this.findDraftSales(requestContext);
   }
 
-  async findDraftSales(authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async findDraftSales(requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
     const sales = await this.prisma.sale.findMany({
       where: {
         AND: [
@@ -253,8 +254,11 @@ export class SalesService {
     );
   }
 
-  async createOrder(body: Record<string, unknown>, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async createOrder(
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getRequestContext(requestContext);
     const shopId = this.optionalString(body.shop_id) ?? '';
     const sale = await this.getOrCreateOpenSale(context, shopId);
 
@@ -276,8 +280,8 @@ export class SalesService {
     };
   }
 
-  async findOrder(id: string, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async findOrder(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
     const saleId = this.parseEntityId(id, 'order id');
     const sale = await this.prisma.sale.findUnique({
       where: { id: saleId },
@@ -309,8 +313,8 @@ export class SalesService {
     return this.toV2OrderResponse(sale, context, shopLookup);
   }
 
-  async findOrderAuditLogs(id: string, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async findOrderAuditLogs(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
     const saleId = this.parseEntityId(id, 'order id');
     const sale = await this.prisma.sale.findUnique({
       where: { id: saleId },
@@ -384,8 +388,8 @@ export class SalesService {
     };
   }
 
-  async findOrderDraftDebt(id: string, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async findOrderDraftDebt(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
     const saleId = this.parseOptionalEntityId(id);
 
     if (!saleId) {
@@ -417,9 +421,9 @@ export class SalesService {
 
   async searchOrders(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const safePage = Math.max(1, Number(query.page) || 1);
     const safeLimit = Math.min(Math.max(1, Number(query.limit) || 50), 100);
     const where = this.buildOrderSearchWhere(query, context);
@@ -476,11 +480,11 @@ export class SalesService {
     };
   }
 
-  async searchOrderStats( 
+  async searchOrderStats(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const where = this.buildOrderSearchWhere(query, context);
 
     const sales = await this.prisma.sale.findMany({
@@ -545,7 +549,10 @@ export class SalesService {
       }
 
       const extraPaymentsRaw = (sale as any).extraPayments;
-      const extraPaymentsList: Array<{ payment_method: string; amount: number }> =
+      const extraPaymentsList: Array<{
+        payment_method: string;
+        amount: number;
+      }> =
         Array.isArray(extraPaymentsRaw) && extraPaymentsRaw.length > 0
           ? (extraPaymentsRaw as any[]).filter(
               (p) =>
@@ -606,9 +613,9 @@ export class SalesService {
       search?: string;
       shopId?: string;
     },
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const safePage = Math.max(1, args.page);
     const safeLimit = Math.min(Math.max(1, args.limit), 100);
     const branchCode = await this.resolveScopedBranchCode(args.shopId, context);
@@ -769,9 +776,9 @@ export class SalesService {
   async payOrder(
     id: string,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const saleId = this.parseEntityId(id, 'order id');
     const sale = await this.prisma.sale.findUnique({
       where: { id: saleId },
@@ -906,9 +913,9 @@ export class SalesService {
 
     await this.notifySaleStockCrossings(stockPosting);
 
-    this.telegramService.notifySale(paidSale).catch((err) =>
-      this.logger.error('Telegram notifySale failed', err),
-    );
+    this.telegramService
+      .notifySale(paidSale)
+      .catch((err) => this.logger.error('Telegram notifySale failed', err));
 
     return {
       order_type: 'SALE',
@@ -919,9 +926,9 @@ export class SalesService {
   async updatePaymentMethod(
     id: string,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const saleId = this.parseEntityId(id, 'order id');
     const sale = await this.prisma.sale.findUnique({
       where: { id: saleId },
@@ -977,8 +984,10 @@ export class SalesService {
       resolvedSellerId = seller.id;
     }
 
-    let extraPayments: Array<{ payment_method: string; amount: number }> | null =
-      null;
+    let extraPayments: Array<{
+      payment_method: string;
+      amount: number;
+    }> | null = null;
     if (paymentsInput.length > 1) {
       extraPayments = (
         await Promise.all(
@@ -1026,15 +1035,20 @@ export class SalesService {
       context?.companyId,
     );
 
-    return this.toSaleListItem(updatedSale, context, undefined, paymentTypeLookup);
+    return this.toSaleListItem(
+      updatedSale,
+      context,
+      undefined,
+      paymentTypeLookup,
+    );
   }
 
   async processReturn(
     id: string,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const originalSale = await this.findBaseSaleForAdjustment(id, context);
     const sellerId = await this.resolveSellerIdForAdjustment(
       originalSale,
@@ -1092,9 +1106,9 @@ export class SalesService {
   async processExchange(
     id: string,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const originalSale = await this.findBaseSaleForAdjustment(id, context);
     const sellerId = await this.resolveSellerIdForAdjustment(
       originalSale,
@@ -1180,7 +1194,10 @@ export class SalesService {
         await this.syncProductsQuantity([...returnItems, ...exchangeItems], tx);
         await this.refreshBaseSaleStatus(originalSale.id, tx);
 
-        return { returnSale: createdReturnSale, exchangeSale: createdExchangeSale };
+        return {
+          returnSale: createdReturnSale,
+          exchangeSale: createdExchangeSale,
+        };
       },
     );
 
@@ -1201,15 +1218,15 @@ export class SalesService {
     };
   }
 
-  async findDraft(id: number, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async findDraft(id: number, requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
     const sale = await this.findSaleOrThrow(id);
     this.assertSaleAccess(sale, context);
     return this.toDraftResponse(sale);
   }
 
-  async getDraftItems(id: number, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async getDraftItems(id: number, requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
     const sale = await this.findSaleOrThrow(id);
     this.assertSaleAccess(sale, context);
     return this.toDraftResponse(sale).items;
@@ -1218,9 +1235,9 @@ export class SalesService {
   async addItem(
     id: number,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const productId = this.toInt(body.product_id);
     const quantity = this.toNumber(body.quantity) ?? 1;
     const salePrice = this.toNumber(body.sale_price);
@@ -1306,11 +1323,15 @@ export class SalesService {
     }
 
     await this.recalculateSale(id);
-    return this.findDraft(id, authorization);
+    return this.findDraft(id, requestContext);
   }
 
-  async removeItem(id: number, itemId: number, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async removeItem(
+    id: number,
+    itemId: number,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getRequestContext(requestContext);
     const sale = await this.findSaleOrThrow(id);
     this.assertSaleAccess(sale, context);
 
@@ -1334,16 +1355,16 @@ export class SalesService {
     });
 
     await this.recalculateSale(id);
-    return this.findDraft(id, authorization);
+    return this.findDraft(id, requestContext);
   }
 
   async updateItem(
     id: number,
     itemId: number,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const sale = await this.findSaleOrThrow(id);
     this.assertSaleAccess(sale, context);
 
@@ -1391,21 +1412,20 @@ export class SalesService {
         finalPrice: quantity * salePrice,
         supplyPriceAtSale: quantity * purchasePrice,
         profitAtSale: quantity * salePrice - quantity * purchasePrice,
-        markupAtSale:
-          purchasePrice > 0 ? salePrice / purchasePrice : null,
+        markupAtSale: purchasePrice > 0 ? salePrice / purchasePrice : null,
       },
     });
 
     await this.recalculateSale(id);
-    return this.findDraft(id, authorization);
+    return this.findDraft(id, requestContext);
   }
 
   async updateDiscount(
     id: number,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const sale = await this.findSaleOrThrow(id);
     this.assertSaleAccess(sale, context);
 
@@ -1425,15 +1445,15 @@ export class SalesService {
     });
 
     await this.recalculateSale(id);
-    return this.findDraft(id, authorization);
+    return this.findDraft(id, requestContext);
   }
 
   async attachClient(
     id: number,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const sale = await this.findSaleOrThrow(id);
     this.assertSaleAccess(sale, context);
 
@@ -1464,11 +1484,15 @@ export class SalesService {
       },
     });
 
-    return this.findDraft(id, authorization);
+    return this.findDraft(id, requestContext);
   }
 
-  async pay(id: number, body: Record<string, unknown>, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async pay(
+    id: number,
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getRequestContext(requestContext);
     const sale = await this.findSaleOrThrow(id);
     this.assertSaleAccess(sale, context);
 
@@ -1484,7 +1508,8 @@ export class SalesService {
         context,
       )) ?? sale.branchCode;
 
-    const requestedSellerId = this.toInt(body.user_id) ?? this.toInt(body.seller_id);
+    const requestedSellerId =
+      this.toInt(body.user_id) ?? this.toInt(body.seller_id);
     let resolvedSellerId: number | null = sale.userId ?? null;
     if (requestedSellerId) {
       const seller = await this.prisma.user.findFirst({
@@ -1520,7 +1545,8 @@ export class SalesService {
 
     const primaryMethodRaw =
       this.optionalString(
-        paymentsInput[0]?.company_payment_type_id ?? paymentsInput[0]?.payment_method,
+        paymentsInput[0]?.company_payment_type_id ??
+          paymentsInput[0]?.payment_method,
       ) ?? this.optionalString(body.payment_method);
 
     const paymentMethod = await this.resolvePaymentMethod(
@@ -1612,9 +1638,9 @@ export class SalesService {
 
     await this.notifySaleStockCrossings(stockPosting);
 
-    this.telegramService.notifySale(updatedSale).catch((err) =>
-      this.logger.error('Telegram notifySale failed', err),
-    );
+    this.telegramService
+      .notifySale(updatedSale)
+      .catch((err) => this.logger.error('Telegram notifySale failed', err));
 
     return this.toSaleListItem(updatedSale, context);
   }
@@ -1622,9 +1648,9 @@ export class SalesService {
   async parkDraft(
     id: number,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const sale = await this.findSaleOrThrow(id);
     this.assertSaleAccess(sale, context);
 
@@ -1681,8 +1707,8 @@ export class SalesService {
     };
   }
 
-  async resumeParkedSale(id: number, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async resumeParkedSale(id: number, requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
     const sale = await this.findSaleOrThrow(id);
     this.assertSaleAccess(sale, context);
 
@@ -1715,8 +1741,8 @@ export class SalesService {
     return this.toDraftResponse(updatedSale);
   }
 
-  async removeDraft(id: number, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async removeDraft(id: number, requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
     const sale = await this.findSaleOrThrow(id);
     this.assertSaleAccess(sale, context);
 
@@ -1732,10 +1758,10 @@ export class SalesService {
 
   async removeOrder(
     id: string,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
     body: Record<string, unknown> = {},
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const cancelReason =
       this.optionalString(body.cancel_reason) ??
       this.optionalString(body.cancelReason) ??
@@ -2293,10 +2319,15 @@ export class SalesService {
         : null;
 
       const requestedSalePrice = this.toNumber(record.sale_price);
-      const retailUnitPrice = Number(stock?.salePrice ?? product.salePrice ?? 0);
+      const retailUnitPrice = Number(
+        stock?.salePrice ?? product.salePrice ?? 0,
+      );
       const salePrice = requestedSalePrice ?? retailUnitPrice;
 
-      if (salePrice < 0 || (salePrice === 0 && requestedSalePrice === undefined)) {
+      if (
+        salePrice < 0 ||
+        (salePrice === 0 && requestedSalePrice === undefined)
+      ) {
         throw new BadRequestException(
           `Sale price for product ${productId} must be zero or greater`,
         );
@@ -3002,7 +3033,8 @@ export class SalesService {
       return;
     }
 
-    const lowStockSettings = await this.telegramService.getLowStockThresholdSettings();
+    const lowStockSettings =
+      await this.telegramService.getLowStockThresholdSettings();
     const postItems = async (tx: Prisma.TransactionClient) => {
       const lowStockCrossings: Array<{
         productId: number;
@@ -3084,11 +3116,15 @@ export class SalesService {
 
     const products = await this.prisma.product.findMany({
       where: {
-        id: { in: result.lowStockCrossings.map((crossing) => crossing.productId) },
+        id: {
+          in: result.lowStockCrossings.map((crossing) => crossing.productId),
+        },
       },
       select: { id: true, name: true, sku: true, barcode: true },
     });
-    const productById = new Map(products.map((product) => [product.id, product]));
+    const productById = new Map(
+      products.map((product) => [product.id, product]),
+    );
 
     await Promise.all(
       result.lowStockCrossings.map((crossing) => {
@@ -3354,9 +3390,7 @@ export class SalesService {
       .filter((sale) => sale.items.length === 0)
       .map((sale) => sale.id);
     const draftIds = openSales
-      .filter(
-        (sale) => sale.items.length > 0 && sale.id !== reusableSaleId,
-      )
+      .filter((sale) => sale.items.length > 0 && sale.id !== reusableSaleId)
       .map((sale) => sale.id);
 
     if (deleteIds.length) {
@@ -3484,7 +3518,10 @@ export class SalesService {
       this.optionalString(body.customerId);
 
     if (rawClientId) {
-      const client = await this.findClientForSaleOrThrow(rawClientId, companyId);
+      const client = await this.findClientForSaleOrThrow(
+        rawClientId,
+        companyId,
+      );
       return {
         clientId: client.id,
         clientName: this.buildClientDisplayName(client),
@@ -3714,16 +3751,23 @@ export class SalesService {
       client_id: sale.clientId ?? null,
       customer_id: sale.clientId ?? '',
       client_name: sale.clientName,
-      extra_payments: Array.isArray(sale.extraPayments) && (sale.extraPayments as unknown[]).length > 1
-        ? (sale.extraPayments as Array<{ payment_method: string; amount: number }>).map((ep) => {
-            const epPayment = paymentTypeLookup?.get(ep.payment_method);
-            return {
-              payment_method: ep.payment_method,
-              amount: ep.amount,
-              payment_name: epPayment?.name ?? ep.payment_method,
-            };
-          })
-        : null,
+      extra_payments:
+        Array.isArray(sale.extraPayments) &&
+        (sale.extraPayments as unknown[]).length > 1
+          ? (
+              sale.extraPayments as Array<{
+                payment_method: string;
+                amount: number;
+              }>
+            ).map((ep) => {
+              const epPayment = paymentTypeLookup?.get(ep.payment_method);
+              return {
+                payment_method: ep.payment_method,
+                amount: ep.amount,
+                payment_name: epPayment?.name ?? ep.payment_method,
+              };
+            })
+          : null,
       items: sale.items.map((item) => ({
         id: item.id,
         product_id: item.productId,
@@ -3737,7 +3781,8 @@ export class SalesService {
         total: this.getFinalizedItemAmount(item),
         amount: this.getFinalizedItemAmount(item),
         final_price: this.getFinalizedItemAmount(item),
-        original_total: Number(item.retailPriceAtSale) || Number(item.lineTotal),
+        original_total:
+          Number(item.retailPriceAtSale) || Number(item.lineTotal),
         discount_amount: Number(item.discountAmount) || 0,
       })),
     };
@@ -3811,7 +3856,8 @@ export class SalesService {
         lineTotal: Number(item.lineTotal),
         discountAmount:
           item.discountAmount != null ? Number(item.discountAmount) : undefined,
-        finalPrice: item.finalPrice != null ? Number(item.finalPrice) : undefined,
+        finalPrice:
+          item.finalPrice != null ? Number(item.finalPrice) : undefined,
       })),
     };
     const shop = this.resolveShopByBranchCode(
@@ -3825,31 +3871,38 @@ export class SalesService {
       ? paymentTypeLookup.get(sale.paymentMethod)
       : undefined;
     const retailTotal = sale.items.reduce(
-      (sum, item) => sum + (item.lineTotal || item.quantity * item.salePrice || 0),
+      (sum, item) =>
+        sum + (item.lineTotal || item.quantity * item.salePrice || 0),
       0,
     );
     const orderItems = sale.items.map((item, index) => {
-      const baseTotal = Number(item.lineTotal || item.quantity * item.salePrice || 0);
+      const baseTotal = Number(
+        item.lineTotal || item.quantity * item.salePrice || 0,
+      );
       const percentPart = baseTotal * ((sale.discountPercent || 0) / 100);
       const flatPart =
-        retailTotal > 0 ? ((sale.discountAmount || 0) * baseTotal) / retailTotal : 0;
-      const fallbackDiscountAmount = Number((percentPart + flatPart).toFixed(2));
+        retailTotal > 0
+          ? ((sale.discountAmount || 0) * baseTotal) / retailTotal
+          : 0;
+      const fallbackDiscountAmount = Number(
+        (percentPart + flatPart).toFixed(2),
+      );
       const discountAmount = Number(
-        (
-          sale.isDraft
-            ? fallbackDiscountAmount
-            : (item.discountAmount ?? fallbackDiscountAmount)
+        (sale.isDraft
+          ? fallbackDiscountAmount
+          : (item.discountAmount ?? fallbackDiscountAmount)
         ).toFixed(2),
       );
       const finalPrice = Number(
-        (
-          sale.isDraft
-            ? Math.max(0, baseTotal - fallbackDiscountAmount)
-            : (item.finalPrice ?? Math.max(0, baseTotal - discountAmount))
+        (sale.isDraft
+          ? Math.max(0, baseTotal - fallbackDiscountAmount)
+          : (item.finalPrice ?? Math.max(0, baseTotal - discountAmount))
         ).toFixed(2),
       );
       const discountPercent =
-        baseTotal > 0 ? Number(((discountAmount / baseTotal) * 100).toFixed(2)) : 0;
+        baseTotal > 0
+          ? Number(((discountAmount / baseTotal) * 100).toFixed(2))
+          : 0;
 
       return {
         id: String(item.id),
@@ -3867,7 +3920,9 @@ export class SalesService {
               },
             ]
           : [],
-        product: item.product ? this.toOrderProductResponse(item.product) : null,
+        product: item.product
+          ? this.toOrderProductResponse(item.product)
+          : null,
         product_id: item.productId ? String(item.productId) : '',
         product_type_id: item.product?.productType ?? DEFAULT_PRODUCT_TYPE_ID,
         product_variant_id: '',
@@ -3885,7 +3940,8 @@ export class SalesService {
         discount_amount: discountAmount,
         discount_percent: discountPercent,
         measurement_value: item.quantity,
-        returned_measurement_value: sale.saleType === 'return' ? item.quantity : 0,
+        returned_measurement_value:
+          sale.saleType === 'return' ? item.quantity : 0,
         measurement_type: this.resolveMeasurementType(
           item.product?.unit,
           this.extractMeasurementUnitShortName(item.product?.metadata),
@@ -3907,14 +3963,15 @@ export class SalesService {
       };
     });
     const totalDiscountAmount = Number(
-      orderItems.reduce((sum, item) => sum + item.discount_amount, 0).toFixed(2),
+      orderItems
+        .reduce((sum, item) => sum + item.discount_amount, 0)
+        .toFixed(2),
     );
     const paidAmount = Number(this.getSalePayableAmount(sale).toFixed(2));
     const totalPrice = Number(
-      (
-        sale.isDraft
-          ? orderItems.reduce((sum, item) => sum + item.total_price, 0)
-          : paidAmount
+      (sale.isDraft
+        ? orderItems.reduce((sum, item) => sum + item.total_price, 0)
+        : paidAmount
       ).toFixed(2),
     );
     const hasDiscount =
@@ -4080,11 +4137,15 @@ export class SalesService {
       created_at: this.formatDateTime(sale.createdAt, context?.companyId),
       extra_payments: (() => {
         const extraPaymentsRaw = (sale as any).extraPayments;
-        if (!Array.isArray(extraPaymentsRaw) || extraPaymentsRaw.length < 2) return null;
+        if (!Array.isArray(extraPaymentsRaw) || extraPaymentsRaw.length < 2)
+          return null;
         return (extraPaymentsRaw as any[])
           .filter(
             (p) =>
-              p && typeof p === 'object' && typeof p.payment_method === 'string' && Number(p.amount) > 0,
+              p &&
+              typeof p === 'object' &&
+              typeof p.payment_method === 'string' &&
+              Number(p.amount) > 0,
           )
           .map((ep) => {
             const epPayment = paymentTypeLookup.get(ep.payment_method);
@@ -4109,7 +4170,9 @@ export class SalesService {
       epos_logs: null,
       finished_at: '',
       display_finished_at: '',
-      sold_at: sale.isDraft ? '' : this.formatDateTime(sale.updatedAt, context?.companyId),
+      sold_at: sale.isDraft
+        ? ''
+        : this.formatDateTime(sale.updatedAt, context?.companyId),
       display_sold_at: '',
       display_deleted_at: '',
       order_debt_payments: null,
@@ -4256,7 +4319,7 @@ export class SalesService {
       retail_price: selectedRetailPrice,
       supply_price: selectedSupplyPrice,
       description:
-      typeof metadata?.description === 'string'
+        typeof metadata?.description === 'string'
           ? metadata.description
           : undefined,
       measurement_type: this.resolveMeasurementType(
@@ -4474,7 +4537,9 @@ export class SalesService {
     const scope = this.normalizeFilterValue(query.scope);
     const shop = this.normalizeFilterValue(query.shop_id ?? query.shop);
     const seller = this.normalizeFilterValue(query.seller ?? query.seller_id);
-    const cashier = this.normalizeFilterValue(query.cashier ?? query.cashier_id);
+    const cashier = this.normalizeFilterValue(
+      query.cashier ?? query.cashier_id,
+    );
     const payment = this.normalizeFilterValue(
       query.payment_method ?? query.payment,
     );
@@ -4482,12 +4547,12 @@ export class SalesService {
     const maxAmount = this.toNumber(query.amount_to);
 
     return sales.filter((sale) => {
-      const sellerName = this.normalizeFilterValue(this.buildSaleUserName(sale.user));
-      const sellerValues = [
-        sellerName,
-        sale.userId,
-        sale.user?.id,
-      ].map((value) => this.normalizeFilterValue(value));
+      const sellerName = this.normalizeFilterValue(
+        this.buildSaleUserName(sale.user),
+      );
+      const sellerValues = [sellerName, sale.userId, sale.user?.id].map(
+        (value) => this.normalizeFilterValue(value),
+      );
       const shopInfo = sale.branchCode
         ? this.resolveShopByBranchCode(sale.branchCode, shopLookup)
         : null;
@@ -4536,14 +4601,20 @@ export class SalesService {
         return false;
       }
 
-      if (shop && shop !== 'all' && !shopValues.some((value) => value === shop)) {
+      if (
+        shop &&
+        shop !== 'all' &&
+        !shopValues.some((value) => value === shop)
+      ) {
         return false;
       }
 
       if (
         seller &&
         seller !== 'all' &&
-        !sellerValues.some((value) => value === seller || value.includes(seller))
+        !sellerValues.some(
+          (value) => value === seller || value.includes(seller),
+        )
       ) {
         return false;
       }
@@ -4551,7 +4622,9 @@ export class SalesService {
       if (
         cashier &&
         cashier !== 'all' &&
-        !sellerValues.some((value) => value === cashier || value.includes(cashier))
+        !sellerValues.some(
+          (value) => value === cashier || value.includes(cashier),
+        )
       ) {
         return false;
       }
@@ -4666,7 +4739,8 @@ export class SalesService {
       }
     }
 
-    const sortRu = (items: string[]) => items.sort((a, b) => a.localeCompare(b, 'ru'));
+    const sortRu = (items: string[]) =>
+      items.sort((a, b) => a.localeCompare(b, 'ru'));
 
     return {
       shops: sortRu([...shops]),
@@ -4730,9 +4804,7 @@ export class SalesService {
                 : 0,
           }))
           .filter(
-            (
-              payment,
-            ): payment is { payment_method: string; amount: number } =>
+            (payment): payment is { payment_method: string; amount: number } =>
               Boolean(payment.payment_method) &&
               Number.isFinite(payment.amount) &&
               payment.amount > 0,
@@ -4741,7 +4813,9 @@ export class SalesService {
   }
 
   private normalizeFilterValue(value: unknown) {
-    return String(value ?? '').trim().toLowerCase();
+    return String(value ?? '')
+      .trim()
+      .toLowerCase();
   }
 
   private buildSaleUserName(user: unknown) {
@@ -5014,7 +5088,7 @@ export class SalesService {
       ? await tx.shop.findFirst({
           where: {
             branchCode: sale.branchCode,
-            ...(sale.companyId ?? context?.companyId
+            ...((sale.companyId ?? context?.companyId)
               ? { companyId: sale.companyId ?? context?.companyId ?? undefined }
               : {}),
           },
@@ -5102,10 +5176,7 @@ export class SalesService {
     });
   }
 
-  private parseDebtPayload(
-    body: Record<string, unknown>,
-    saleAmount: number,
-  ) {
+  private parseDebtPayload(body: Record<string, unknown>, saleAmount: number) {
     const debtRecord =
       body.debt && typeof body.debt === 'object' && !Array.isArray(body.debt)
         ? (body.debt as Record<string, unknown>)
@@ -5121,11 +5192,17 @@ export class SalesService {
         ? body.debt
         : undefined);
     const dueDateValue =
-      debtRecord?.due_date ?? debtRecord?.debt_due_date ?? body.due_date ?? body.debt_due_date;
+      debtRecord?.due_date ??
+      debtRecord?.debt_due_date ??
+      body.due_date ??
+      body.debt_due_date;
     const commentValue =
-      debtRecord?.comment ?? debtRecord?.debt_comment ?? body.comment ?? body.debt_comment ?? body.note;
-    const receiptUrlValue =
-      debtRecord?.receipt_url ?? body.receipt_url;
+      debtRecord?.comment ??
+      debtRecord?.debt_comment ??
+      body.comment ??
+      body.debt_comment ??
+      body.note;
+    const receiptUrlValue = debtRecord?.receipt_url ?? body.receipt_url;
 
     const explicitAmount = this.toNumber(amountValue);
     const dueDate = this.parseNullableDebtDate(dueDateValue);

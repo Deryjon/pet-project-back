@@ -3,7 +3,6 @@ import {
   Controller,
   Delete,
   Get,
-  Headers,
   Param,
   ParseIntPipe,
   Post,
@@ -11,25 +10,25 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { ReceiptsService } from './receipts.service';
-import { UsersService } from '../users/users.service';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { CurrentCompanyContext } from '../auth/company-context.decorator';
 import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { Permissions } from '../auth/permissions.decorator';
-import { UpdateChequeSettingsDto } from './dto/update-cheque-settings.dto';
+import {
+  CompanyRequestContext,
+  requireCompanyContext,
+} from '../auth/request-context';
 import { CreateChequeTemplateDto } from './dto/create-cheque-template.dto';
+import { UpdateChequeSettingsDto } from './dto/update-cheque-settings.dto';
+import { ReceiptsService } from './receipts.service';
 
 @Controller()
 export class ReceiptsController {
-  constructor(
-    private readonly receiptsService: ReceiptsService,
-    private readonly usersService: UsersService,
-  ) {}
+  constructor(private readonly receiptsService: ReceiptsService) {}
 
-  private async requireCompanyId(authorization?: string) {
-    const context =
-      await this.usersService.getCompanyRequestContext(authorization);
+  private async requireCompanyId(requestContext: CompanyRequestContext) {
+    const context = await requireCompanyContext(requestContext);
     return context.companyId;
   }
 
@@ -37,9 +36,9 @@ export class ReceiptsController {
   @UseGuards(JwtAuthGuard, CompanyAccessGuard)
   async getReceiptByNumber(
     @Param('number') number: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    const companyId = await this.requireCompanyId(authorization);
+    const companyId = await this.requireCompanyId(requestContext);
     return this.receiptsService.getByNumber(number, companyId);
   }
 
@@ -47,9 +46,9 @@ export class ReceiptsController {
   @UseGuards(JwtAuthGuard, CompanyAccessGuard)
   async getReceipt(
     @Param('saleId', ParseIntPipe) saleId: number,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    const companyId = await this.requireCompanyId(authorization);
+    const companyId = await this.requireCompanyId(requestContext);
     return this.receiptsService.getOrCreateForSale(saleId, companyId);
   }
 
@@ -57,9 +56,9 @@ export class ReceiptsController {
   @UseGuards(JwtAuthGuard, CompanyAccessGuard)
   async createReceipt(
     @Body('sale_id', ParseIntPipe) saleId: number,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    const companyId = await this.requireCompanyId(authorization);
+    const companyId = await this.requireCompanyId(requestContext);
     return this.receiptsService.getOrCreateForSale(saleId, companyId);
   }
 
@@ -67,9 +66,9 @@ export class ReceiptsController {
   @UseGuards(JwtAuthGuard, CompanyAccessGuard)
   async markPrinted(
     @Param('saleId', ParseIntPipe) saleId: number,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    const companyId = await this.requireCompanyId(authorization);
+    const companyId = await this.requireCompanyId(requestContext);
     return this.receiptsService.markPrinted(saleId, companyId);
   }
 
@@ -78,8 +77,10 @@ export class ReceiptsController {
   // Read-only: the template actually used to render/print receipts (isDefault=true).
   @Get(['cheque-settings', 'v1/cheque-settings'])
   @UseGuards(JwtAuthGuard, CompanyAccessGuard)
-  async getChequeSettings(@Headers('authorization') authorization?: string) {
-    const companyId = await this.requireCompanyId(authorization);
+  async getChequeSettings(
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    const companyId = await this.requireCompanyId(requestContext);
     return this.receiptsService.getChequeSettings(companyId);
   }
 
@@ -87,9 +88,9 @@ export class ReceiptsController {
   @UseGuards(JwtAuthGuard, CompanyAccessGuard)
   async listCheque(
     @Query() query: { name?: string; page?: string; limit?: string },
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    const companyId = await this.requireCompanyId(authorization);
+    const companyId = await this.requireCompanyId(requestContext);
     return this.receiptsService.listChequeTemplates(companyId, query);
   }
 
@@ -97,9 +98,9 @@ export class ReceiptsController {
   @UseGuards(JwtAuthGuard, CompanyAccessGuard)
   async getChequeById(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    const companyId = await this.requireCompanyId(authorization);
+    const companyId = await this.requireCompanyId(requestContext);
     return this.receiptsService.getChequeTemplateById(companyId, id);
   }
 
@@ -108,9 +109,9 @@ export class ReceiptsController {
   @Permissions('cheque-edit')
   async createCheque(
     @Body() dto: CreateChequeTemplateDto,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    const companyId = await this.requireCompanyId(authorization);
+    const companyId = await this.requireCompanyId(requestContext);
     return this.receiptsService.createChequeTemplate(companyId, dto.name);
   }
 
@@ -120,9 +121,9 @@ export class ReceiptsController {
   async updateChequeById(
     @Param('id') id: string,
     @Body() dto: UpdateChequeSettingsDto,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    const companyId = await this.requireCompanyId(authorization);
+    const companyId = await this.requireCompanyId(requestContext);
     return this.receiptsService.updateChequeTemplate(companyId, id, dto);
   }
 
@@ -131,9 +132,9 @@ export class ReceiptsController {
   @Permissions('cheque-edit')
   async deleteChequeById(
     @Param('id') id: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    const companyId = await this.requireCompanyId(authorization);
+    const companyId = await this.requireCompanyId(requestContext);
     return this.receiptsService.deleteChequeTemplate(companyId, id);
   }
 }

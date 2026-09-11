@@ -11,10 +11,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { timingSafeEqual } from 'crypto';
+import { CurrentCompanyContext } from '../auth/company-context.decorator';
 import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { Permissions } from '../auth/permissions.decorator';
+import { CompanyRequestContext } from '../auth/request-context';
 import { TelegramService } from './telegram.service';
 
 @Controller()
@@ -49,15 +51,17 @@ export class TelegramController {
   @Post('telegram/generate-link')
   @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
   @Permissions('telegram-notification')
-  generateLink(@Headers('authorization') authorization: string) {
-    return this.telegramService.generateLinkToken(authorization);
+  generateLink(@CurrentCompanyContext() requestContext: CompanyRequestContext) {
+    return this.telegramService.generateLinkToken(requestContext);
   }
 
   @Get('telegram/subscribers')
   @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
   @Permissions('telegram-notification')
-  getSubscribers(@Headers('authorization') authorization: string) {
-    return this.telegramService.getSubscribers(authorization);
+  getSubscribers(
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.telegramService.getSubscribers(requestContext);
   }
 
   @Patch('telegram/subscribers/:id')
@@ -73,9 +77,9 @@ export class TelegramController {
       notifyOnLowStock?: boolean;
       branchCode?: string | null;
     },
-    @Headers('authorization') authorization: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.telegramService.updateSubscriber(id, body, authorization);
+    return this.telegramService.updateSubscriber(id, body, requestContext);
   }
 
   @Delete('telegram/subscribers/:id')
@@ -83,8 +87,8 @@ export class TelegramController {
   @Permissions('telegram-notification')
   deleteSubscriber(
     @Param('id') id: string,
-    @Headers('authorization') authorization: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.telegramService.deleteSubscriber(id, authorization);
+    return this.telegramService.deleteSubscriber(id, requestContext);
   }
 }

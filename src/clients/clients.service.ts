@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -10,12 +9,14 @@ import {
   ClientGender,
   Prisma,
 } from '@prisma/client';
-import { CompanyRequestContext } from '../auth/request-context';
-import { CompanySettingsService } from '../company-settings/company-settings.service';
+import {
+  CompanyRequestContext,
+  requireCompanyContext,
+} from '../auth/request-context';
 import { resolveProductPhotoUrl } from '../common/product-photo.util';
 import { runSerializableTransaction } from '../common/serializable-transaction';
+import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { UsersService } from '../users/users.service';
 
 type CompanyClientContext = CompanyRequestContext;
 type ClientListRecord = Prisma.ClientGetPayload<{
@@ -31,14 +32,13 @@ export class ClientsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly companySettingsService: CompanySettingsService,
-    private readonly usersService: UsersService,
   ) {}
 
   async findAll(
     query: Record<string, string | string[] | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const page = this.parsePositiveInt(query.page, 1);
     const limit = Math.min(this.parsePositiveInt(query.limit, 10), 100);
     const clients = await this.prisma.client.findMany({
@@ -65,9 +65,9 @@ export class ClientsService {
 
   async findCustomersList(
     query: Record<string, string | string[] | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const page = this.parsePositiveInt(query.page, 1);
     const limit = Math.min(this.parsePositiveInt(query.limit, 10), 100);
     const clients = await this.prisma.client.findMany({
@@ -99,8 +99,8 @@ export class ClientsService {
     };
   }
 
-  async getCustomersStats(authorization?: string) {
-    const context = await this.getContext(authorization);
+  async getCustomersStats(requestContext: CompanyRequestContext) {
+    const context = await this.getContext(requestContext);
     const stats = await this.getListStats(context);
 
     return {
@@ -110,8 +110,11 @@ export class ClientsService {
     };
   }
 
-  async createClient(body: Record<string, unknown>, authorization?: string) {
-    const context = await this.getContext(authorization);
+  async createClient(
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getContext(requestContext);
     const shopId = await this.resolveRegistrationShopId(
       body.registration_shop_id,
       context,
@@ -173,15 +176,15 @@ export class ClientsService {
       return created;
     });
 
-    return this.findOne(client.id, authorization);
+    return this.findOne(client.id, requestContext);
   }
 
   async updateClient(
     id: string,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     await this.findClientOrThrow(id, context.companyId);
     const shopId =
       body.registration_shop_id !== undefined
@@ -299,11 +302,11 @@ export class ClientsService {
       }
     });
 
-    return this.findOne(id, authorization);
+    return this.findOne(id, requestContext);
   }
 
-  async findOne(id: string, authorization?: string) {
-    const context = await this.getContext(authorization);
+  async findOne(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getContext(requestContext);
     const client = await this.findClientOrThrow(id, context.companyId);
 
     return {
@@ -337,8 +340,8 @@ export class ClientsService {
     };
   }
 
-  async findCustomerCard(id: string, authorization?: string) {
-    const context = await this.getContext(authorization);
+  async findCustomerCard(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getContext(requestContext);
     const client = await this.prisma.client.findFirst({
       where: { id, companyId: context.companyId },
       include: {
@@ -358,8 +361,8 @@ export class ClientsService {
     return this.toCustomerDetailResponse(client as any, dashboard);
   }
 
-  async getNotes(id: string, authorization?: string) {
-    const context = await this.getContext(authorization);
+  async getNotes(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getContext(requestContext);
     await this.findClientOrThrow(id, context.companyId);
     const notes = await this.prisma.clientNote.findMany({
       where: { companyId: context.companyId, clientId: id },
@@ -373,9 +376,9 @@ export class ClientsService {
   async createNote(
     id: string,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     await this.findClientOrThrow(id, context.companyId);
     const note = await this.prisma.clientNote.create({
       data: {
@@ -393,9 +396,9 @@ export class ClientsService {
   async getHistory(
     id: string,
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const client = await this.findClientOrThrow(id, context.companyId);
     const page = this.parsePositiveInt(query.page, 1);
     const limit = Math.min(this.parsePositiveInt(query.limit, 20), 100);
@@ -510,8 +513,8 @@ export class ClientsService {
     };
   }
 
-  async getPreferences(id: string, authorization?: string) {
-    const context = await this.getContext(authorization);
+  async getPreferences(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getContext(requestContext);
     await this.findClientOrThrow(id, context.companyId);
     const items = await this.prisma.saleItem.findMany({
       where: {
@@ -556,16 +559,16 @@ export class ClientsService {
     );
   }
 
-  async getDebts(id: string, authorization?: string) {
-    return this.getClientDebts(id, {}, authorization);
+  async getDebts(id: string, requestContext: CompanyRequestContext) {
+    return this.getClientDebts(id, {}, requestContext);
   }
 
   async getClientDebts(
     id: string,
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     await this.findClientOrThrow(id, context.companyId);
     const debts = await this.prisma.clientDebt.findMany({
       where: this.buildDebtWhere(query, context, { clientId: id }),
@@ -595,9 +598,9 @@ export class ClientsService {
 
   async getAllDebts(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const page = this.parsePositiveInt(query.page, 1);
     const limit = Math.min(this.parsePositiveInt(query.limit, 20), 100);
     const debts = await this.prisma.clientDebt.findMany({
@@ -636,9 +639,9 @@ export class ClientsService {
   async createDebt(
     clientId: string,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     await this.findClientOrThrow(clientId, context.companyId);
     const shopId =
       body.shop_id !== undefined
@@ -697,9 +700,9 @@ export class ClientsService {
     clientId: string,
     debtId: string,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     await this.findClientOrThrow(clientId, context.companyId);
     const amount = new Prisma.Decimal(
       this.requirePositiveNumber(body.amount_uzs ?? body.amount, 'amount_uzs'),
@@ -807,8 +810,8 @@ export class ClientsService {
     };
   }
 
-  async getCards(id: string, authorization?: string) {
-    const context = await this.getContext(authorization);
+  async getCards(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getContext(requestContext);
     await this.findClientOrThrow(id, context.companyId);
     const cards = await this.prisma.clientCard.findMany({
       where: { companyId: context.companyId, clientId: id },
@@ -839,9 +842,9 @@ export class ClientsService {
   async createCard(
     id: string,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     await this.findClientOrThrow(id, context.companyId);
     const card = await this.prisma.clientCard.create({
       data: {
@@ -866,8 +869,8 @@ export class ClientsService {
     };
   }
 
-  async getGroups(authorization?: string) {
-    const context = await this.getContext(authorization);
+  async getGroups(requestContext: CompanyRequestContext) {
+    const context = await this.getContext(requestContext);
     const groups = await this.prisma.clientGroup.findMany({
       where: { companyId: context.companyId },
       orderBy: { name: 'asc' },
@@ -876,8 +879,11 @@ export class ClientsService {
     return groups.map((group) => ({ id: group.id, name: group.name }));
   }
 
-  async createGroup(body: Record<string, unknown>, authorization?: string) {
-    const context = await this.getContext(authorization);
+  async createGroup(
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getContext(requestContext);
     const group = await this.prisma.clientGroup.create({
       data: {
         companyId: context.companyId,
@@ -888,8 +894,8 @@ export class ClientsService {
     return { id: group.id, name: group.name };
   }
 
-  async getTags(authorization?: string) {
-    const context = await this.getContext(authorization);
+  async getTags(requestContext: CompanyRequestContext) {
+    const context = await this.getContext(requestContext);
     const tags = await this.prisma.clientTag.findMany({
       where: { companyId: context.companyId },
       orderBy: { name: 'asc' },
@@ -898,8 +904,11 @@ export class ClientsService {
     return tags.map((tag) => ({ id: tag.id, name: tag.name }));
   }
 
-  async createTag(body: Record<string, unknown>, authorization?: string) {
-    const context = await this.getContext(authorization);
+  async createTag(
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getContext(requestContext);
     const tag = await this.prisma.clientTag.create({
       data: {
         companyId: context.companyId,
@@ -910,8 +919,8 @@ export class ClientsService {
     return { id: tag.id, name: tag.name };
   }
 
-  async getFilters(authorization?: string) {
-    const context = await this.getContext(authorization);
+  async getFilters(requestContext: CompanyRequestContext) {
+    const context = await this.getContext(requestContext);
     const [groups, tags, shops] = await this.prisma.$transaction([
       this.prisma.clientGroup.findMany({
         where: { companyId: context.companyId },
@@ -939,9 +948,9 @@ export class ClientsService {
   }
 
   private async getContext(
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ): Promise<CompanyClientContext> {
-    return this.usersService.getCompanyRequestContext(authorization);
+    return requireCompanyContext(requestContext);
   }
 
   private async generateClientCode(

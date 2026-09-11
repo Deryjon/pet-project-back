@@ -35,5 +35,8 @@ jobs:
       - run: npm run prisma:migrate:deploy
       - run: npm run build:typecheck
       - run: npm test -- --runInBand
+      - run: npm run test:postgres
+        env:
+          POSTGRES_TEST_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
       - run: npm run ocr:test
       - run: npm run build

@@ -1,15 +1,15 @@
 import { GUARDS_METADATA } from '@nestjs/common/constants';
-import { CompanyAccessGuard } from './guards/company-access.guard';
-import { JwtAuthGuard } from './guards/jwt-auth.guard';
-import { PermissionsGuard } from './guards/permissions.guard';
-import { PERMISSIONS_KEY } from './permissions.decorator';
-import { CompanyRequestContext } from './request-context';
 import { ProductsController } from '../products/products.controller';
 import { ProductsService } from '../products/products.service';
 import { ReportsController } from '../reports/reports.controller';
 import { ReportsService } from '../reports/reports.service';
 import { TelegramController } from '../telegram/telegram.controller';
 import { TelegramService } from '../telegram/telegram.service';
+import { CompanyAccessGuard } from './guards/company-access.guard';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { PermissionsGuard } from './guards/permissions.guard';
+import { PERMISSIONS_KEY } from './permissions.decorator';
+import { CompanyRequestContext } from './request-context';
 
 describe('stage 12 company boundary', () => {
   const context: CompanyRequestContext = {
@@ -40,7 +40,7 @@ describe('stage 12 company boundary', () => {
   });
 
   it('keeps an empty product branch scope empty', () => {
-    const service = new ProductsService({} as any, {} as any, {} as any);
+    const service = new ProductsService({} as any, {} as any);
     const scoped = (service as any).applyProductScope(
       { archivedAt: null },
       {
@@ -62,7 +62,7 @@ describe('stage 12 company boundary', () => {
   });
 
   it('keeps empty transfer and movement scopes empty', async () => {
-    const service = new ProductsService({} as any, {} as any, {} as any);
+    const service = new ProductsService({} as any, {} as any);
     const emptyContext = {
       ...context,
       currentShopId: null,
@@ -87,7 +87,6 @@ describe('stage 12 company boundary', () => {
     const service = new ProductsService(
       { shop: { findFirst } } as any,
       {} as any,
-      {} as any,
     );
 
     await expect(
@@ -100,7 +99,7 @@ describe('stage 12 company boundary', () => {
     );
   });
 
-  it('forwards authorization to legacy import and stocktaking reads', async () => {
+  it('forwards the checked context to legacy import and stocktaking reads', async () => {
     const products = {
       getImportProgress: jest.fn(),
       getImportItemsDp: jest.fn(),
@@ -111,44 +110,27 @@ describe('stage 12 company boundary', () => {
     };
     const controller = new ProductsController(products as any);
 
-    await controller.getImportProgress('import-1', 'Bearer valid');
-    await controller.getImportItemsDp('import-1', 'Bearer valid');
-    await controller.getImportSearch(
-      'import-1',
-      '20',
-      '1',
-      'false',
-      'Bearer valid',
-    );
-    await controller.cancelImportDraft('import-1', 'Bearer valid');
+    await controller.getImportProgress('import-1', context);
+    await controller.getImportItemsDp('import-1', context);
+    await controller.getImportSearch('import-1', '20', '1', 'false', context);
+    await controller.cancelImportDraft('import-1', context);
     await controller.getStocktakingById(
       'stocktaking-1',
       '1',
       '10',
       undefined,
-      'Bearer valid',
+      context,
     );
-    await controller.getStocktakingLogs(
-      'stocktaking-1',
-      '1',
-      '10',
-      'Bearer valid',
-    );
+    await controller.getStocktakingLogs('stocktaking-1', '1', '10', context);
 
     for (const method of Object.values(products)) {
       expect(method).toHaveBeenCalled();
-      expect(method.mock.calls[0]).toContain('Bearer valid');
+      expect(method.mock.calls[0]).toContain(context);
     }
   });
 
   it('hides a foreign import session before returning its items', async () => {
-    const service = new ProductsService(
-      {} as any,
-      {} as any,
-      {
-        getCompanyRequestContext: jest.fn().mockResolvedValue(context),
-      } as any,
-    );
+    const service = new ProductsService({} as any, {} as any);
     jest
       .spyOn(service as any, 'resolveImportSessionFromStore')
       .mockResolvedValue({ companyId: 'company-foreign', shopId: 'shop-2' });
@@ -158,7 +140,7 @@ describe('stage 12 company boundary', () => {
     );
 
     await expect(
-      service.getImportItemsDp('foreign-import', 'Bearer valid'),
+      service.getImportItemsDp('foreign-import', context),
     ).rejects.toThrow('Import session not found');
     expect(ensurePreview).not.toHaveBeenCalled();
   });
@@ -179,9 +161,9 @@ describe('stage 12 company boundary', () => {
       {} as any,
     );
 
-    await service.getSummary({}, 'Bearer valid');
+    await service.getSummary({}, context);
 
-    expect(getCompanyRequestContext).toHaveBeenCalledWith('Bearer valid');
+    expect(getCompanyRequestContext).not.toHaveBeenCalled();
     expect(getSaleItemFacts).toHaveBeenCalledWith({}, context);
   });
 
@@ -224,7 +206,7 @@ describe('stage 12 company boundary', () => {
     );
 
     await expect(
-      service.getShopDetail('shop-foreign', {}, 'Bearer valid'),
+      service.getShopDetail('shop-foreign', {}, context),
     ).rejects.toThrow('Shop not found');
     expect(findFirst).toHaveBeenCalledWith({
       where: {
@@ -258,18 +240,11 @@ describe('stage 12 company boundary', () => {
     const findFirst = jest.fn();
     const service = new TelegramService(
       { telegramSubscriber: { findFirst } } as any,
-      {
-        getCompanyRequestContext: jest.fn().mockResolvedValue(context),
-      } as any,
       {} as any,
     );
 
     await expect(
-      service.updateSubscriber(
-        'subscriber-1',
-        { branchCode: 'B2' },
-        'Bearer valid',
-      ),
+      service.updateSubscriber('subscriber-1', { branchCode: 'B2' }, context),
     ).rejects.toThrow('Филиал недоступен');
     expect(findFirst).not.toHaveBeenCalled();
   });

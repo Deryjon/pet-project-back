@@ -1,0 +1,7 @@
+{
+  "rootDir": "../..",
+  "testRegex": "test/postgres/.*\\.integration\\.ts$",
+  "transform": { "^.+\\.ts$": "ts-jest" },
+  "testEnvironment": "node",
+  "testTimeout": 30000
+}

@@ -8,8 +8,11 @@ import {
 import { Prisma } from '@prisma/client';
 import { promises as fs } from 'fs';
 import { resolve, sep } from 'path';
+import {
+  CompanyRequestContext,
+  requireCompanyContext,
+} from '../../auth/request-context';
 import { PrismaService } from '../../prisma/prisma.service';
-import { UsersService } from '../../users/users.service';
 import { ImportMatcherService } from './import-matcher.service';
 import { ImportNormalizerService } from './import-normalizer.service';
 import { InvoiceRecognitionService } from './invoice-recognition.service';
@@ -18,15 +21,12 @@ import { InvoiceRecognitionService } from './invoice-recognition.service';
 export class SupplierInvoiceService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly users: UsersService,
     private readonly matcher: ImportMatcherService,
     private readonly normalizer: ImportNormalizerService,
     private readonly recognition: InvoiceRecognitionService,
   ) {}
-  private async context(auth?: string) {
-    const ctx = await this.users.getRequestContext(auth);
-    if (!ctx.companyId)
-      throw new ForbiddenException('Company context required');
+  private async context(requestContext: CompanyRequestContext) {
+    const ctx = requireCompanyContext(requestContext);
     return { ...ctx, companyId: ctx.companyId };
   }
 
@@ -39,10 +39,10 @@ export class SupplierInvoiceService {
       path: string;
       filename: string;
     }>,
-    auth?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const ctx = await this.context(auth);
-    const invoice = await this.get(id, auth);
+    const ctx = await this.context(requestContext);
+    const invoice = await this.get(id, requestContext);
     if (!['DRAFT', 'PROCESSING', 'REVIEW', 'READY'].includes(invoice.status))
       throw new BadRequestException('Invoice files can no longer be changed');
     if (!files.length) throw new BadRequestException('files are required');
@@ -65,8 +65,12 @@ export class SupplierInvoiceService {
     });
   }
 
-  async readFile(id: string, fileIndex: number, auth?: string) {
-    const invoice = await this.get(id, auth);
+  async readFile(
+    id: string,
+    fileIndex: number,
+    requestContext: CompanyRequestContext,
+  ) {
+    const invoice = await this.get(id, requestContext);
     const files = Array.isArray(invoice.originalFiles)
       ? invoice.originalFiles
       : [];
@@ -93,9 +97,9 @@ export class SupplierInvoiceService {
     }
   }
 
-  async recognize(id: string, auth?: string) {
-    const ctx = await this.context(auth);
-    const invoice = await this.get(id, auth);
+  async recognize(id: string, requestContext: CompanyRequestContext) {
+    const ctx = await this.context(requestContext);
+    const invoice = await this.get(id, requestContext);
     this.assertEditable(invoice);
     const files = Array.isArray(invoice.originalFiles)
       ? invoice.originalFiles
@@ -255,8 +259,8 @@ export class SupplierInvoiceService {
     });
   }
 
-  async create(body: any, auth?: string) {
-    const ctx = await this.context(auth);
+  async create(body: any, requestContext: CompanyRequestContext) {
+    const ctx = await this.context(requestContext);
     const supplierId = this.num(body.supplierId, 'supplierId');
     const supplier = await this.prisma.supplier.findFirst({
       where: { id: supplierId, companyId: ctx.companyId, isActive: true },
@@ -289,8 +293,8 @@ export class SupplierInvoiceService {
       return { invoice, duplicateWarning: duplicate };
     });
   }
-  async list(query: any, auth?: string) {
-    const ctx = await this.context(auth);
+  async list(query: any, requestContext: CompanyRequestContext) {
+    const ctx = await this.context(requestContext);
     const page = Math.max(1, Number(query.page) || 1),
       limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
     const where: any = {
@@ -310,8 +314,8 @@ export class SupplierInvoiceService {
     ]);
     return { data, meta: { page, limit, total } };
   }
-  async get(id: string, auth?: string) {
-    const ctx = await this.context(auth);
+  async get(id: string, requestContext: CompanyRequestContext) {
+    const ctx = await this.context(requestContext);
     const invoice = await (this.prisma as any).supplierInvoice.findFirst({
       where: { id, companyId: ctx.companyId },
       include: this.include(),
@@ -327,9 +331,9 @@ export class SupplierInvoiceService {
         : [],
     };
   }
-  async addItems(id: string, body: any, auth?: string) {
-    const ctx = await this.context(auth);
-    const invoice = await this.get(id, auth);
+  async addItems(id: string, body: any, requestContext: CompanyRequestContext) {
+    const ctx = await this.context(requestContext);
+    const invoice = await this.get(id, requestContext);
     this.assertEditable(invoice);
     const rows = this.prepareItems(body.items);
     return this.prisma.$transaction(async (tx: any) => {
@@ -347,9 +351,14 @@ export class SupplierInvoiceService {
       });
     });
   }
-  async updateItem(id: string, itemId: string, body: any, auth?: string) {
-    const ctx = await this.context(auth);
-    const invoice = await this.get(id, auth);
+  async updateItem(
+    id: string,
+    itemId: string,
+    body: any,
+    requestContext: CompanyRequestContext,
+  ) {
+    const ctx = await this.context(requestContext);
+    const invoice = await this.get(id, requestContext);
     this.assertEditable(invoice);
     const existing = await (this.prisma as any).supplierInvoiceItem.findFirst({
       where: { id: itemId, invoiceId: id },
@@ -379,9 +388,13 @@ export class SupplierInvoiceService {
       return item;
     });
   }
-  async deleteItem(id: string, itemId: string, auth?: string) {
-    const ctx = await this.context(auth);
-    const invoice = await this.get(id, auth);
+  async deleteItem(
+    id: string,
+    itemId: string,
+    requestContext: CompanyRequestContext,
+  ) {
+    const ctx = await this.context(requestContext);
+    const invoice = await this.get(id, requestContext);
     this.assertEditable(invoice);
     const item = invoice.items.find((entry: any) => entry.id === itemId);
     if (!item) throw new NotFoundException('Invoice item not found');
@@ -405,9 +418,9 @@ export class SupplierInvoiceService {
       });
     });
   }
-  async autoMatch(id: string, auth?: string) {
-    const ctx = await this.context(auth);
-    const invoice = await this.get(id, auth);
+  async autoMatch(id: string, requestContext: CompanyRequestContext) {
+    const ctx = await this.context(requestContext);
+    const invoice = await this.get(id, requestContext);
     this.assertEditable(invoice);
     const results: any[] = [];
     const matches = await this.matcher.matchMany(
@@ -447,9 +460,14 @@ export class SupplierInvoiceService {
     };
     return { summary, items: results };
   }
-  async matchItem(id: string, itemId: string, body: any, auth?: string) {
-    const ctx = await this.context(auth);
-    const invoice = await this.get(id, auth);
+  async matchItem(
+    id: string,
+    itemId: string,
+    body: any,
+    requestContext: CompanyRequestContext,
+  ) {
+    const ctx = await this.context(requestContext);
+    const invoice = await this.get(id, requestContext);
     this.assertEditable(invoice);
     const item = invoice.items.find((entry: any) => entry.id === itemId);
     if (!item) throw new NotFoundException('Invoice item not found');
@@ -517,9 +535,13 @@ export class SupplierInvoiceService {
     });
   }
 
-  async mergeItems(id: string, body: any, auth?: string) {
-    const ctx = await this.context(auth);
-    const invoice = await this.get(id, auth);
+  async mergeItems(
+    id: string,
+    body: any,
+    requestContext: CompanyRequestContext,
+  ) {
+    const ctx = await this.context(requestContext);
+    const invoice = await this.get(id, requestContext);
     if (!['REVIEW', 'DRAFT', 'READY'].includes(invoice.status)) {
       throw new BadRequestException('Items can only be merged during review');
     }
@@ -588,9 +610,9 @@ export class SupplierInvoiceService {
       });
     });
   }
-  async allocate(id: string, body: any, auth?: string) {
-    const ctx = await this.context(auth);
-    const invoice = await this.get(id, auth);
+  async allocate(id: string, body: any, requestContext: CompanyRequestContext) {
+    const ctx = await this.context(requestContext);
+    const invoice = await this.get(id, requestContext);
     this.assertEditable(invoice);
     const allocations = Array.isArray(body.allocations) ? body.allocations : [];
     if (!allocations.length)
@@ -630,8 +652,8 @@ export class SupplierInvoiceService {
       });
     });
   }
-  async markReady(id: string, auth?: string) {
-    const invoice = await this.get(id, auth);
+  async markReady(id: string, requestContext: CompanyRequestContext) {
+    const invoice = await this.get(id, requestContext);
     this.assertEditable(invoice);
     if (!invoice.items.length)
       throw new BadRequestException('Invoice has no items');
@@ -650,8 +672,8 @@ export class SupplierInvoiceService {
       data: { status: 'READY' },
     });
   }
-  async commit(id: string, body: any, auth?: string) {
-    const ctx = await this.context(auth);
+  async commit(id: string, body: any, requestContext: CompanyRequestContext) {
+    const ctx = await this.context(requestContext);
     return this.prisma.$transaction(
       async (tx: any) => {
         const invoice = await tx.supplierInvoice.findFirst({
@@ -796,8 +818,8 @@ export class SupplierInvoiceService {
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   }
-  async cancel(id: string, auth?: string) {
-    await this.get(id, auth);
+  async cancel(id: string, requestContext: CompanyRequestContext) {
+    await this.get(id, requestContext);
     const result = await (this.prisma as any).supplierInvoice.updateMany({
       where: { id, status: { in: ['DRAFT', 'PROCESSING', 'REVIEW', 'READY'] } },
       data: { status: 'CANCELLED' },
@@ -806,8 +828,8 @@ export class SupplierInvoiceService {
       throw new ConflictException('Invoice cannot be cancelled');
     return { id, status: 'CANCELLED' };
   }
-  async rollback(id: string, auth?: string) {
-    const ctx = await this.context(auth);
+  async rollback(id: string, requestContext: CompanyRequestContext) {
+    const ctx = await this.context(requestContext);
     return this.prisma.$transaction(
       async (tx: any) => {
         const invoice = await tx.supplierInvoice.findFirst({

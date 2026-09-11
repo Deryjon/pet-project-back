@@ -1,23 +1,23 @@
-import {
-  ConflictException,
-  Injectable,
-} from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import {
+  CompanyRequestContext,
+  requireCompanyContext,
+} from '../../auth/request-context';
 import { PrismaService } from '../../prisma/prisma.service';
-import { UsersService } from '../../users/users.service';
 import { CreatePaymentTypeDto } from './dto/create-payment-type.dto';
 
 @Injectable()
 export class PaymentTypesService {
   private static readonly DEFAULT_DEBT_PAYMENT_TYPE_NAME = 'Долг';
 
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly usersService: UsersService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: CreatePaymentTypeDto, authorization?: string) {
-    const context = await this.getCompanyContext(authorization);
+  async create(
+    dto: CreatePaymentTypeDto,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getCompanyContext(requestContext);
     await this.ensureDefaultPaymentTypes(context.companyId);
 
     try {
@@ -44,8 +44,8 @@ export class PaymentTypesService {
     }
   }
 
-  async findAll(authorization?: string) {
-    const context = await this.getCompanyContext(authorization);
+  async findAll(requestContext: CompanyRequestContext) {
+    const context = await this.getCompanyContext(requestContext);
     await this.ensureDefaultPaymentTypes(context.companyId);
     const paymentTypes = await this.prisma.paymentType.findMany({
       where: {
@@ -62,8 +62,8 @@ export class PaymentTypesService {
     );
   }
 
-  private async getCompanyContext(authorization?: string) {
-    return this.usersService.getCompanyRequestContext(authorization);
+  private async getCompanyContext(requestContext: CompanyRequestContext) {
+    return requireCompanyContext(requestContext);
   }
 
   private toPaymentTypeResponse(paymentType: {

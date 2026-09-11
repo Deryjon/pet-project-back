@@ -3,8 +3,12 @@ import {
   ForbiddenException,
   Injectable,
 } from '@nestjs/common';
+import {
+  CompanyRequestContext,
+  RequestContext,
+  requireCompanyContext,
+} from '../auth/request-context';
 import { UsersService } from '../users/users.service';
-import { CompanyRequestContext } from '../auth/request-context';
 import { ReportFilterDto } from './dto/report-filter.dto';
 import { ReportsMapper } from './reports.mapper';
 import { ReportsRepository } from './reports.repository';
@@ -19,8 +23,11 @@ export class SellerReportsService {
     private readonly salaryService: SalaryService,
   ) {}
 
-  async getSellers(filter: ReportFilterDto, authorization?: string) {
-    const context = await this.getContext(authorization);
+  async getSellers(
+    filter: ReportFilterDto,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getContext(requestContext);
     const aggregateRows = await this.reportsRepository.getSellerAggregateRows(
       filter,
       context,
@@ -117,11 +124,11 @@ export class SellerReportsService {
   async getSellerSales(
     sellerId: string,
     filter: ReportFilterDto,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
     const parsedSellerId = this.parseSellerId(sellerId);
-    const context = await this.getContext(authorization);
-    await this.assertSellerVisibility(parsedSellerId, context, authorization);
+    const context = await this.getContext(requestContext);
+    await this.assertSellerVisibility(parsedSellerId, context, requestContext);
     await this.reportsRepository.requireSeller(
       parsedSellerId,
       context?.companyId ?? undefined,
@@ -194,10 +201,13 @@ export class SellerReportsService {
     };
   }
 
-  async getSellerSalarySettings(sellerId: string, authorization?: string) {
+  async getSellerSalarySettings(
+    sellerId: string,
+    requestContext: CompanyRequestContext,
+  ) {
     const parsedSellerId = this.parseSellerId(sellerId);
-    const context = await this.getContext(authorization);
-    await this.assertSellerVisibility(parsedSellerId, context, authorization);
+    const context = await this.getContext(requestContext);
+    await this.assertSellerVisibility(parsedSellerId, context, requestContext);
     const seller = await this.reportsRepository.requireSeller(
       parsedSellerId,
       context?.companyId ?? undefined,
@@ -219,10 +229,10 @@ export class SellerReportsService {
   async updateSellerSalarySettings(
     sellerId: string,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: RequestContext,
   ) {
     const parsedSellerId = this.parseSellerId(sellerId);
-    const context = await this.usersService.assertAdminAccess(authorization);
+    const context = await this.usersService.assertAdminContext(requestContext);
     if (context.userType !== 'platform' && !context.companyId) {
       throw new ForbiddenException('Company context required');
     }
@@ -258,11 +268,11 @@ export class SellerReportsService {
   async getSellerSalaryReport(
     sellerId: string,
     filter: ReportFilterDto,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
     const parsedSellerId = this.parseSellerId(sellerId);
-    const context = await this.getContext(authorization);
-    await this.assertSellerVisibility(parsedSellerId, context, authorization);
+    const context = await this.getContext(requestContext);
+    await this.assertSellerVisibility(parsedSellerId, context, requestContext);
     const seller = await this.reportsRepository.requireSeller(
       parsedSellerId,
       context?.companyId ?? undefined,
@@ -343,19 +353,19 @@ export class SellerReportsService {
     };
   }
 
-  private async getContext(authorization?: string) {
-    return this.usersService.getCompanyRequestContext(authorization);
+  private async getContext(requestContext: CompanyRequestContext) {
+    return requireCompanyContext(requestContext);
   }
 
   private async assertSellerVisibility(
     sellerId: number,
     context: CompanyRequestContext,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
     if (context?.userId === sellerId) {
       return;
     }
-    await this.usersService.assertAdminAccess(authorization);
+    await this.usersService.assertAdminContext(requestContext);
   }
 
   private parseSellerId(value: string) {

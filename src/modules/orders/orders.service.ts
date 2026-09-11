@@ -5,10 +5,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { PrismaService } from '../../prisma/prisma.service';
-import { runSerializableTransaction } from '../../common/serializable-transaction';
+import {
+  CompanyRequestContext,
+  requireCompanyContext,
+} from '../../auth/request-context';
 import { postSaleStockDecrease } from '../../common/sale-stock-posting';
-import { UsersService } from '../../users/users.service';
+import { runSerializableTransaction } from '../../common/serializable-transaction';
+import { PrismaService } from '../../prisma/prisma.service';
 import { AddOrderItemDto } from './dto/add-order-item.dto';
 import { AddPaymentDto } from './dto/add-payment.dto';
 import { ApplyDiscountDto } from './dto/apply-discount.dto';
@@ -20,13 +23,13 @@ import { UpdateOrderItemDto } from './dto/update-order-item.dto';
 
 @Injectable()
 export class OrdersService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly usersService: UsersService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
-  async createDraft(dto: CreateOrderDto, authorization?: string) {
-    const context = await this.getCompanyContext(authorization);
+  async createDraft(
+    dto: CreateOrderDto,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getCompanyContext(requestContext);
     const shop = await this.findAccessibleShop(dto.shopId, context);
     const cashbox = dto.cashboxId
       ? await this.findCashboxOrThrow(dto.cashboxId, shop.id, context.companyId)
@@ -65,8 +68,8 @@ export class OrdersService {
     return this.toOrderResponse(order);
   }
 
-  async findOne(id: string, authorization?: string) {
-    const context = await this.getCompanyContext(authorization);
+  async findOne(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getCompanyContext(requestContext);
     const order = await this.prisma.order.findFirst({
       where: {
         id,
@@ -86,8 +89,12 @@ export class OrdersService {
     return this.toOrderResponse(order);
   }
 
-  async addItem(id: string, dto: AddOrderItemDto, authorization?: string) {
-    const context = await this.getCompanyContext(authorization);
+  async addItem(
+    id: string,
+    dto: AddOrderItemDto,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getCompanyContext(requestContext);
     const order = await this.findEditableOrderOrThrow(id, context);
     const product = await this.findProductForOrderOrThrow(
       dto.productId,
@@ -156,9 +163,9 @@ export class OrdersService {
     id: string,
     itemId: string,
     dto: UpdateOrderItemDto,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getCompanyContext(authorization);
+    const context = await this.getCompanyContext(requestContext);
     const order = await this.findEditableOrderOrThrow(id, context);
     const quantity = new Prisma.Decimal(dto.quantity);
 
@@ -203,8 +210,12 @@ export class OrdersService {
     return this.toOrderResponse(updatedOrder);
   }
 
-  async removeItem(id: string, itemId: string, authorization?: string) {
-    const context = await this.getCompanyContext(authorization);
+  async removeItem(
+    id: string,
+    itemId: string,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getCompanyContext(requestContext);
     const order = await this.findEditableOrderOrThrow(id, context);
 
     const updatedOrder = await this.prisma.$transaction(async (tx) => {
@@ -232,8 +243,12 @@ export class OrdersService {
     return this.toOrderResponse(updatedOrder);
   }
 
-  async addPayment(id: string, dto: AddPaymentDto, authorization?: string) {
-    const context = await this.getCompanyContext(authorization);
+  async addPayment(
+    id: string,
+    dto: AddPaymentDto,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getCompanyContext(requestContext);
     const order = await this.findEditableOrderOrThrow(id, context);
     const paymentType = await this.findPaymentTypeOrThrow(
       dto.paymentTypeId,
@@ -268,8 +283,12 @@ export class OrdersService {
     return this.toOrderResponse(updatedOrder);
   }
 
-  async removePayment(id: string, paymentId: string, authorization?: string) {
-    const context = await this.getCompanyContext(authorization);
+  async removePayment(
+    id: string,
+    paymentId: string,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getCompanyContext(requestContext);
     const order = await this.findEditableOrderOrThrow(id, context);
 
     const updatedOrder = await this.prisma.$transaction(async (tx) => {
@@ -300,9 +319,9 @@ export class OrdersService {
   async applyDiscount(
     id: string,
     dto: ApplyDiscountDto,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getCompanyContext(authorization);
+    const context = await this.getCompanyContext(requestContext);
     const order = await this.findEditableOrderWithItemsOrThrow(id, context);
     const discountAmount = new Prisma.Decimal(dto.discountAmount);
     const itemsTotal = this.sumOrderItemsTotal(order.items);
@@ -336,9 +355,9 @@ export class OrdersService {
   async attachCustomer(
     id: string,
     dto: AttachCustomerDto,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getCompanyContext(authorization);
+    const context = await this.getCompanyContext(requestContext);
     const order = await this.findEditableOrderOrThrow(id, context);
     const customerId = (dto.customerId ?? dto.clientId ?? '').trim();
 
@@ -367,9 +386,9 @@ export class OrdersService {
   async updateComment(
     id: string,
     dto: UpdateOrderCommentDto,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getCompanyContext(authorization);
+    const context = await this.getCompanyContext(requestContext);
     const order = await this.findEditableOrderOrThrow(id, context);
 
     const updatedOrder = await this.prisma.order.update({
@@ -388,8 +407,12 @@ export class OrdersService {
     return this.toOrderResponse(updatedOrder);
   }
 
-  async complete(id: string, dto: CompleteOrderDto, authorization?: string) {
-    const context = await this.getCompanyContext(authorization);
+  async complete(
+    id: string,
+    dto: CompleteOrderDto,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getCompanyContext(requestContext);
 
     const completedOrder = await runSerializableTransaction(
       this.prisma,
@@ -612,8 +635,8 @@ export class OrdersService {
     return this.toOrderResponse(completedOrder);
   }
 
-  async cancel(id: string, authorization?: string) {
-    const context = await this.getCompanyContext(authorization);
+  async cancel(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getCompanyContext(requestContext);
     const updatedOrder = await this.prisma.$transaction(async (tx) => {
       const order = await this.findOrderForStatusChangeOrThrow(id, context, tx);
 
@@ -650,8 +673,8 @@ export class OrdersService {
     return this.toOrderResponse(updatedOrder);
   }
 
-  async park(id: string, authorization?: string) {
-    const context = await this.getCompanyContext(authorization);
+  async park(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getCompanyContext(requestContext);
     const updatedOrder = await this.prisma.$transaction(async (tx) => {
       const order = await this.findOrderForStatusChangeOrThrow(id, context, tx);
 
@@ -675,8 +698,8 @@ export class OrdersService {
     return this.toOrderResponse(updatedOrder);
   }
 
-  async resume(id: string, authorization?: string) {
-    const context = await this.getCompanyContext(authorization);
+  async resume(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getCompanyContext(requestContext);
     const updatedOrder = await this.prisma.$transaction(async (tx) => {
       const order = await this.findOrderForStatusChangeOrThrow(id, context, tx);
 
@@ -700,8 +723,8 @@ export class OrdersService {
     return this.toOrderResponse(updatedOrder);
   }
 
-  private async getCompanyContext(authorization?: string) {
-    return this.usersService.getCompanyRequestContext(authorization, {
+  private async getCompanyContext(requestContext: CompanyRequestContext) {
+    return requireCompanyContext(requestContext, {
       requireAvailableShop: true,
     });
   }

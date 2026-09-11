@@ -3,8 +3,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import {
+  CompanyRequestContext,
+  RequestContext,
+  requireCompanyContext,
+} from '../auth/request-context';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
-import { CompanyRequestContext } from '../auth/request-context';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { ReportsMapper } from './reports.mapper';
@@ -32,9 +36,9 @@ export class ReportsService {
 
   async getSummary(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const filter = this.reportsMapper.toFilterDto(query);
     const rows = await this.reportsRepository.getSaleItemFacts(filter, context);
     const summary = this.buildSummaryMetricsFromFacts(rows);
@@ -61,9 +65,9 @@ export class ReportsService {
 
   async getGeneralReport(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const sales = await this.loadReportSales(query, context);
     const shops = await this.loadReportShops(context, query);
     const summary = this.buildSummaryMetrics(sales);
@@ -95,9 +99,9 @@ export class ReportsService {
 
   async getGeneralReportTable(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const sales = await this.loadReportSales(query, context);
     const shops = await this.loadReportShops(context, query);
     const detalization = this.optionalString(query.detalization) ?? 'day';
@@ -150,9 +154,9 @@ export class ReportsService {
 
   async getGeneralSalesReport(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const sales = await this.loadReportSales(query, context);
     const shops = await this.loadReportShops(context, query);
     const field = this.optionalString(query.field) ?? 'gross_sales';
@@ -181,9 +185,9 @@ export class ReportsService {
 
   async getGeneralProductReport(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const sales = await this.loadReportSales(query, context);
     const shops = await this.loadReportShops(context, query);
     const field = this.optionalString(query.field) ?? 'sold_with_discount';
@@ -260,12 +264,12 @@ export class ReportsService {
 
   async getGeneralSellerReport(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
     const filter = this.reportsMapper.toFilterDto(query);
     const sellersReport = await this.sellerReportsService.getSellers(
       filter,
-      authorization,
+      requestContext,
     );
     const topSellers = (sellersReport.rows ?? []).map((row: any) => ({
       seller_id: String(row.seller_id),
@@ -293,9 +297,9 @@ export class ReportsService {
 
   async getGeneralCustomerReport(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const sales = await this.loadReportSales(query, context);
     const shops = await this.loadReportShops(context, query);
     const plotShops = await this.loadReportShops(context, query, [
@@ -467,9 +471,9 @@ export class ReportsService {
 
   async getShops(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const sales = await this.loadReportSales(query, context);
     const shops = await this.db.shop.findMany({
       where: {
@@ -507,9 +511,9 @@ export class ReportsService {
   async getShopDetail(
     shopId: string,
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const shop = await this.db.shop.findFirst({
       where: {
         companyId: context.companyId,
@@ -551,9 +555,9 @@ export class ReportsService {
 
   async getProducts(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const sales = await this.loadReportSales(query, context);
     const items = this.aggregateProducts(sales);
 
@@ -583,9 +587,9 @@ export class ReportsService {
 
   async getProductSales(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const sales = await this.loadReportSales(query, context);
     const items = this.aggregateProductsDetailed(sales);
     const paginated = this.paginate(items, query);
@@ -613,9 +617,9 @@ export class ReportsService {
 
   async getProductSalesReportApi(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const sales = await this.loadReportSales(query, context);
     const rows = this.flattenSaleItems(sales);
     const field = this.optionalString(query.field) ?? 'net_sales';
@@ -678,9 +682,9 @@ export class ReportsService {
 
   async getProductGeneralReportApi(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const sales = await this.loadReportSales(query, context);
     const rows = this.flattenSaleItems(sales);
     const stockRows = await this.buildStockReportRows(query, context);
@@ -716,9 +720,9 @@ export class ReportsService {
 
   async getProductGeneralTableApi(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const sales = await this.loadReportSales(query, context);
     const shops = await this.loadReportShops(context, query);
     const shopByBranchCode = new Map<string, any>(
@@ -738,9 +742,9 @@ export class ReportsService {
 
   async getProductPerformanceReportApi(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const sales = await this.loadReportSales(query, context);
     const items = this.aggregateProductsDetailed(sales);
     const sorted = [...items].sort(
@@ -784,9 +788,9 @@ export class ReportsService {
 
   async getProductEffectiveness(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const sales = await this.loadReportSales(query, context);
     const movements = await this.loadProductMovements(query, context);
     const products = await this.loadReportProducts(query, context);
@@ -821,9 +825,9 @@ export class ReportsService {
 
   async getReportProductPerformanceTableApi(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const rows = await this.buildProductPerformanceRowsApi(query, context);
     const paginated = this.paginate(rows, query);
 
@@ -838,9 +842,9 @@ export class ReportsService {
 
   async getReportProductPerformanceTotalsApi(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const rows = await this.buildProductPerformanceRowsApi(query, context);
 
     return {
@@ -886,9 +890,9 @@ export class ReportsService {
 
   async getProductImports(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const movements = await this.loadProductMovements(
       { ...query, movementType: 'PURCHASE' },
       context,
@@ -950,9 +954,9 @@ export class ReportsService {
 
   async getImportReportTableApi(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const rows = await this.buildImportReportRows(query, context);
     const paginated = this.paginate(rows, query);
 
@@ -964,9 +968,9 @@ export class ReportsService {
 
   async getImportReportTotalsApi(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const rows = await this.buildImportReportRows(query, context);
 
     return {
@@ -1058,9 +1062,9 @@ export class ReportsService {
 
   async getProductSuppliers(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const sales = await this.loadReportSales(query, context);
     const rows = this.aggregateSuppliers(sales);
     const paginated = this.paginate(rows, query);
@@ -1073,9 +1077,9 @@ export class ReportsService {
 
   async getProductSellsBySuppliersTableApi(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const sales = await this.loadReportSales(query, context);
     const rows = this.buildSupplierSalesRows(sales, query);
     const paginated = this.paginate(rows, query);
@@ -1090,9 +1094,9 @@ export class ReportsService {
 
   async getProductStocks(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const products = await this.loadReportProducts(query, context);
     const rows = this.buildProductStocks(products, query);
     const paginated = this.paginate(rows, query);
@@ -1124,9 +1128,9 @@ export class ReportsService {
 
   async getStockReportTableApi(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const rows = await this.buildStockReportRows(query, context);
     const paginated = this.paginate(rows, query);
 
@@ -1138,9 +1142,9 @@ export class ReportsService {
 
   async getInventoryResults(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const movements = await this.loadProductMovements(
       { ...query, movementType: 'WRITE_OFF' },
       context,
@@ -1177,9 +1181,9 @@ export class ReportsService {
 
   async getOrderReturns(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const sales = await this.loadReportSales(query, context);
     const rows = sales
       .filter((sale: any) => sale.saleType === 'return')
@@ -1210,9 +1214,9 @@ export class ReportsService {
 
   async getWriteOffs(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const movements = await this.loadProductMovements(
       { ...query, movementType: 'WRITE_OFF' },
       context,
@@ -1249,9 +1253,9 @@ export class ReportsService {
 
   async getAbcAnalysis(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const sales = await this.loadReportSales(query, context);
     const items = this.aggregateProductsDetailed(sales);
     const method = this.optionalString(query.method) ?? 'revenue';
@@ -1294,9 +1298,9 @@ export class ReportsService {
 
   async getTransfers(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const movements = await this.loadProductMovements(
       { ...query, movementType: 'TRANSFER' },
       context,
@@ -1334,41 +1338,41 @@ export class ReportsService {
 
   async getSellers(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
     return this.sellerReportsService.getSellers(
       this.reportsMapper.toFilterDto(query),
-      authorization,
+      requestContext,
     );
   }
 
   async getSellerSales(
     sellerId: string,
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
     return this.sellerReportsService.getSellerSales(
       sellerId,
       this.reportsMapper.toFilterDto(query),
-      authorization,
+      requestContext,
     );
   }
 
   async getSellerDetail(
     sellerId: string,
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
     const parsedSellerId = this.parseSellerId(sellerId);
     const salesReport = await this.getSellerSales(
       sellerId,
       query,
-      authorization,
+      requestContext,
     );
     const salaryReport = await this.getSellerSalaryReport(
       sellerId,
       query,
-      authorization,
+      requestContext,
     );
 
     return {
@@ -1385,9 +1389,9 @@ export class ReportsService {
 
   async getCustomers(
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getContext(authorization);
+    const context = await this.getContext(requestContext);
     const sales = await this.loadReportSales(query, context);
     const customers = new Map<string, any>();
 
@@ -1440,39 +1444,42 @@ export class ReportsService {
     };
   }
 
-  async getSellerSalarySettings(sellerId: string, authorization?: string) {
+  async getSellerSalarySettings(
+    sellerId: string,
+    requestContext: CompanyRequestContext,
+  ) {
     return this.sellerReportsService.getSellerSalarySettings(
       sellerId,
-      authorization,
+      requestContext,
     );
   }
 
   async updateSellerSalarySettings(
     sellerId: string,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: RequestContext,
   ) {
     return this.sellerReportsService.updateSellerSalarySettings(
       sellerId,
       body,
-      authorization,
+      requestContext,
     );
   }
 
   async getSellerSalaryReport(
     sellerId: string,
     query: Record<string, string | undefined>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
     return this.sellerReportsService.getSellerSalaryReport(
       sellerId,
       this.reportsMapper.toFilterDto(query),
-      authorization,
+      requestContext,
     );
   }
 
-  private async getContext(authorization?: string) {
-    return this.usersService.getCompanyRequestContext(authorization);
+  private async getContext(requestContext: CompanyRequestContext) {
+    return requireCompanyContext(requestContext);
   }
 
   private async loadReportSales(
@@ -3144,12 +3151,12 @@ export class ReportsService {
   private async assertSellerVisibility(
     sellerId: number,
     context: CompanyRequestContext,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
     if (context?.userId === sellerId) {
       return;
     }
-    await this.usersService.assertAdminAccess(authorization);
+    await this.usersService.assertAdminContext(requestContext);
   }
 
   private getSaleSign(sale: any) {

@@ -4,19 +4,19 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import {
+  CompanyRequestContext,
+  requireCompanyContext,
+} from '../../auth/request-context';
 import { PrismaService } from '../../prisma/prisma.service';
-import { UsersService } from '../../users/users.service';
 import { CreateCashboxDto } from './dto/create-cashbox.dto';
 
 @Injectable()
 export class CashboxesService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly usersService: UsersService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: CreateCashboxDto, authorization?: string) {
-    const context = await this.getCompanyContext(authorization);
+  async create(dto: CreateCashboxDto, requestContext: CompanyRequestContext) {
+    const context = await this.getCompanyContext(requestContext);
     const shop = await this.findAccessibleShop(dto.shopId, context);
 
     const cashbox = await this.prisma.cashbox.create({
@@ -33,8 +33,11 @@ export class CashboxesService {
     return this.toCashboxResponse(cashbox);
   }
 
-  async findAll(shopId?: string, authorization?: string) {
-    const context = await this.getCompanyContext(authorization);
+  async findAll(
+    shopId: string | undefined,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getCompanyContext(requestContext);
     const normalizedShopId = shopId?.trim();
 
     if (normalizedShopId) {
@@ -75,8 +78,8 @@ export class CashboxesService {
     return cashboxes.map((cashbox) => this.toCashboxResponse(cashbox));
   }
 
-  private async getCompanyContext(authorization?: string) {
-    return this.usersService.getCompanyRequestContext(authorization, {
+  private async getCompanyContext(requestContext: CompanyRequestContext) {
+    return requireCompanyContext(requestContext, {
       requireAvailableShop: true,
     });
   }

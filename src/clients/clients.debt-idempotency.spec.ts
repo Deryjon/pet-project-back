@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { companyContext as testContext } from '../../test/fixtures/request-context';
 import { ClientsService } from './clients.service';
 
 describe('ClientsService repayment idempotency', () => {
@@ -33,24 +34,15 @@ describe('ClientsService repayment idempotency', () => {
       client: { findFirst: jest.fn(async () => ({ id: 'client-1' })) },
       $transaction: jest.fn((operation) => operation(tx)),
     };
-    const service = new ClientsService(
-      prisma,
-      { toIsoForCompany: (date: Date) => date.toISOString() } as any,
-      {
-        getCompanyRequestContext: async () => ({
-          userType: 'company',
-          companyId: 'company-1',
-          userId: 7,
-          allowedShopIds: [],
-        }),
-      } as any,
-    );
+    const service = new ClientsService(prisma, {
+      toIsoForCompany: (date: Date) => date.toISOString(),
+    } as any);
 
     const result = await service.repayDebt(
       'client-1',
       'debt-1',
       { amount_uzs: 60, idempotency_key: 'request-1' },
-      'Bearer test',
+      testContext({ allowedShopIds: [] }),
     );
 
     expect(result.remaining_amount_uzs).toBe(40);

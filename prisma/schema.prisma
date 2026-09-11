@@ -919,6 +919,7 @@ model Order {
   @@unique([companyId, orderNumber])
   @@index([companyId])
   @@index([shopId])
+  @@index([customerId])
   @@index([status])
 }
 

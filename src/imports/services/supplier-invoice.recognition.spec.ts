@@ -1,3 +1,4 @@
+import { companyContext as testContext } from '../../../test/fixtures/request-context';
 import { SupplierInvoiceService } from './supplier-invoice.service';
 
 describe('Atomic invoice recognition', () => {
@@ -52,32 +53,25 @@ describe('Atomic invoice recognition', () => {
         invoiceDate: '2026-09-08',
       })),
     };
-    service = new SupplierInvoiceService(
-      db,
-      {
-        getRequestContext: async () => ({ companyId: 'company-a', userId: 1 }),
-      } as any,
-      {} as any,
-      {} as any,
-      recognition,
+    service = new SupplierInvoiceService(db, {} as any, {} as any, recognition);
+    jest.spyOn(service, 'get').mockImplementation(
+      async () =>
+        ({
+          ...structuredClone(state),
+          originalFiles: [{ path: 'mock-only' }],
+        }) as any,
     );
-    jest
-      .spyOn(service, 'get')
-      .mockImplementation(
-        async () =>
-          ({
-            ...structuredClone(state),
-            originalFiles: [{ path: 'mock-only' }],
-          }) as any,
-      );
   });
   it.each(['COMMITTED', 'CANCELLED', 'ROLLED_BACK'])(
     'rejects %s before OCR and deletion',
     async (status) => {
       state.status = status;
-      await expect(service.recognize('invoice')).rejects.toThrow(
-        'Invoice can no longer be changed',
-      );
+      await expect(
+        service.recognize(
+          'invoice',
+          testContext({ companyId: 'company-a', userId: 1 }),
+        ),
+      ).rejects.toThrow('Invoice can no longer be changed');
       expect(recognition.recognize).not.toHaveBeenCalled();
       expect(db.supplierInvoiceItem.deleteMany).not.toHaveBeenCalled();
     },
@@ -88,7 +82,12 @@ describe('Atomic invoice recognition', () => {
     { items: [validRow, { ...validRow, rawName: '' }] },
   ])('preserves old rows for invalid OCR result %j', async ({ items }) => {
     recognition.recognize.mockResolvedValue({ items });
-    await expect(service.recognize('invoice')).rejects.toThrow();
+    await expect(
+      service.recognize(
+        'invoice',
+        testContext({ companyId: 'company-a', userId: 1 }),
+      ),
+    ).rejects.toThrow();
     expect(state.items).toEqual([{ id: 'old', rawName: 'Original' }]);
     expect(db.supplierInvoiceItem.deleteMany).not.toHaveBeenCalled();
   });
@@ -97,9 +96,12 @@ describe('Atomic invoice recognition', () => {
       state.status = 'COMMITTED';
       return { items: [validRow] };
     });
-    await expect(service.recognize('invoice')).rejects.toThrow(
-      'Invoice can no longer be changed',
-    );
+    await expect(
+      service.recognize(
+        'invoice',
+        testContext({ companyId: 'company-a', userId: 1 }),
+      ),
+    ).rejects.toThrow('Invoice can no longer be changed');
     expect(db.supplierInvoiceItem.deleteMany).not.toHaveBeenCalled();
     expect(state.status).toBe('COMMITTED');
   });
@@ -107,9 +109,12 @@ describe('Atomic invoice recognition', () => {
     db.supplierInvoiceItem.create.mockRejectedValue(
       new Error('DB insert failed'),
     );
-    await expect(service.recognize('invoice')).rejects.toThrow(
-      'DB insert failed',
-    );
+    await expect(
+      service.recognize(
+        'invoice',
+        testContext({ companyId: 'company-a', userId: 1 }),
+      ),
+    ).rejects.toThrow('DB insert failed');
     expect(db.$transaction).toHaveBeenCalledWith(expect.any(Function), {
       isolationLevel: 'Serializable',
     });
@@ -117,7 +122,10 @@ describe('Atomic invoice recognition', () => {
     expect(state.invoiceNumber).toBe('old-number');
   });
   it('replaces all rows, returns new metadata and records one audit entry', async () => {
-    const result = await service.recognize('invoice');
+    const result = await service.recognize(
+      'invoice',
+      testContext({ companyId: 'company-a', userId: 1 }),
+    );
     expect(result.status).toBe('REVIEW');
     expect(result.invoiceNumber).toBe('new-number');
     expect(result.items).toEqual([

@@ -1,5 +1,6 @@
-import { SupplierDirectoryService } from './supplier-directory.service';
+import { companyContext as testContext } from '../../../test/fixtures/request-context';
 import { ImportNormalizerService } from './import-normalizer.service';
+import { SupplierDirectoryService } from './supplier-directory.service';
 
 describe('Supplier alias company isolation', () => {
   it('rejects a foreign product before changing the alias', async () => {
@@ -12,11 +13,15 @@ describe('Supplier alias company isolation', () => {
     };
     const service = new SupplierDirectoryService(
       db as any,
-      { getRequestContext: async () => ({ companyId: 'own' }) } as any,
       new ImportNormalizerService(),
     );
     await expect(
-      service.updateAlias(1, 'alias', { productId: 99 }, 'Bearer test'),
+      service.updateAlias(
+        1,
+        'alias',
+        { productId: 99 },
+        testContext({ companyId: 'own' }),
+      ),
     ).rejects.toThrow('Product not found');
     expect(db.product.findFirst).toHaveBeenCalledWith({
       where: { id: 99, companyId: 'own' },
@@ -34,11 +39,15 @@ describe('Supplier alias company isolation', () => {
     };
     const service = new SupplierDirectoryService(
       db as any,
-      { getRequestContext: async () => ({ companyId: 'own' }) } as any,
       new ImportNormalizerService(),
     );
     await expect(
-      service.updateAlias(1, 'alias', { productId: 2 }, 'Bearer test'),
+      service.updateAlias(
+        1,
+        'alias',
+        { productId: 2 },
+        testContext({ companyId: 'own' }),
+      ),
     ).resolves.toMatchObject({ productId: 2 });
   });
 });

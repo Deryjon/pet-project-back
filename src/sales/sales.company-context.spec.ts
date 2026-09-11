@@ -1,14 +1,9 @@
-import { NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { SalesService } from './sales.service';
 
 describe('SalesService company boundary', () => {
-  function createService(getCompanyRequestContext = jest.fn()) {
-    return new SalesService(
-      {} as any,
-      {} as any,
-      { getCompanyRequestContext } as any,
-      {} as any,
-    );
+  function createService() {
+    return new SalesService({} as any, {} as any, {} as any);
   }
 
   const context = {
@@ -46,15 +41,11 @@ describe('SalesService company boundary', () => {
     ).toThrow(NotFoundException);
   });
 
-  it('propagates missing authentication instead of using a null context', async () => {
-    const getCompanyRequestContext = jest
-      .fn()
-      .mockRejectedValue(new UnauthorizedException('Missing token'));
-    const service = createService(getCompanyRequestContext);
+  it('rejects a missing checked context without parsing credentials', async () => {
+    const service = createService();
 
     await expect((service as any).getRequestContext()).rejects.toBeInstanceOf(
-      UnauthorizedException,
+      ForbiddenException,
     );
-    expect(getCompanyRequestContext).toHaveBeenCalledWith(undefined);
   });
 });

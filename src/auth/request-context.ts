@@ -1,3 +1,5 @@
+import { ForbiddenException } from '@nestjs/common';
+
 export type RequestContext = {
   userId: number;
   fullName: string;
@@ -21,3 +23,17 @@ export type CompanyRequestContext = RequestContext & {
 export type CompanyContextOptions = {
   requireAvailableShop?: boolean;
 };
+
+/** Narrows authenticated context without re-reading credentials or company scope. */
+export function requireCompanyContext(
+  context: RequestContext | undefined,
+  options: CompanyContextOptions = {},
+): CompanyRequestContext {
+  if (context?.userType !== 'company' || !context.companyId) {
+    throw new ForbiddenException('Only company users can access this resource');
+  }
+  if (options.requireAvailableShop && !context.allowedShopIds.length) {
+    throw new ForbiddenException('No available shops for this user');
+  }
+  return { ...context, userType: 'company', companyId: context.companyId };
+}

@@ -23,9 +23,6 @@ describe('company scoped read models', () => {
     const prisma = {
       sale: { findMany: jest.fn().mockResolvedValue([]) },
     };
-    const users = {
-      getCompanyRequestContext: jest.fn().mockResolvedValue(context),
-    };
     const companySettings = {
       getShops: jest.fn().mockResolvedValue({
         shops: [
@@ -39,12 +36,8 @@ describe('company scoped read models', () => {
         .mockResolvedValue({ company_payment_types: [] }),
       formatDateTimeForCompany: jest.fn((date: Date) => date.toISOString()),
     };
-    const service = new DashboardService(
-      prisma as any,
-      users as any,
-      companySettings as any,
-    );
-    return { service, prisma, users, companySettings };
+    const service = new DashboardService(prisma as any, companySettings as any);
+    return { service, prisma, companySettings, context };
   }
 
   it('rejects a dashboard branch outside the user scope before querying sales', async () => {
@@ -53,14 +46,14 @@ describe('company scoped read models', () => {
     await expect(
       service.getDashboardReport(
         { startDate: '2026-09-01', branchCode: 'B2' },
-        'Bearer valid',
+        baseContext,
       ),
     ).rejects.toThrow('Requested branch is not available for this user');
     expect(prisma.sale.findMany).not.toHaveBeenCalled();
   });
 
   it('keeps an empty dashboard branch scope empty', async () => {
-    const { service, prisma } = createDashboard({
+    const { service, prisma, context } = createDashboard({
       ...baseContext,
       currentShopId: null,
       currentBranchCode: null,
@@ -70,7 +63,7 @@ describe('company scoped read models', () => {
 
     const result = await (service.getDashboardReport(
       { startDate: '2026-09-01' },
-      'Bearer valid',
+      context,
     ) as Promise<unknown>);
 
     const saleQuery = (
@@ -92,7 +85,7 @@ describe('company scoped read models', () => {
         companyId: 'company-foreign',
         userId: 999,
       },
-      'Bearer valid',
+      baseContext,
     );
 
     const store = service as unknown as {
@@ -109,22 +102,16 @@ describe('company scoped read models', () => {
     ['receipts', ReceiptsController],
     ['price tags', PriceTagsController],
   ])('uses the mandatory company context for %s', async (_name, Controller) => {
-    const getCompanyRequestContext = jest.fn().mockResolvedValue(baseContext);
     const controller =
       Controller === ReceiptsController
-        ? new ReceiptsController({} as any, { getCompanyRequestContext } as any)
-        : new PriceTagsController(
-            {} as any,
-            {} as any,
-            { getCompanyRequestContext } as any,
-          );
+        ? new ReceiptsController({} as any)
+        : new PriceTagsController({} as any, {} as any);
 
     const companyScopedController = controller as unknown as {
-      requireCompanyId(authorization?: string): Promise<string>;
+      requireCompanyId(context: CompanyRequestContext): Promise<string>;
     };
     await expect(
-      companyScopedController.requireCompanyId('Bearer valid'),
+      companyScopedController.requireCompanyId(baseContext),
     ).resolves.toBe('company-1');
-    expect(getCompanyRequestContext).toHaveBeenCalledWith('Bearer valid');
   });
 });

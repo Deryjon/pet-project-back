@@ -1,8 +1,8 @@
 import {
   BadRequestException,
   ForbiddenException,
-  InternalServerErrorException,
   Injectable,
+  InternalServerErrorException,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -18,6 +18,7 @@ import {
   CompanyContextOptions,
   CompanyRequestContext,
   RequestContext,
+  requireCompanyContext,
 } from '../auth/request-context';
 import { assertPasswordMeetsPlatformPolicy } from '../common/platform-security-policy';
 import { PrismaService } from '../prisma/prisma.service';
@@ -838,6 +839,35 @@ export class UsersService {
     );
   }
 
+  async assertAdminContext(context: RequestContext): Promise<RequestContext> {
+    if (!context)
+      throw new UnauthorizedException('Missing authenticated context');
+    if (
+      context.userType === 'platform' &&
+      PLATFORM_ADMIN_ROLES.has((context.role ?? '').trim().toLowerCase())
+    ) {
+      return context;
+    }
+    if (
+      context.userType === 'company' &&
+      context.companyId &&
+      context.crmRoleId
+    ) {
+      const role = await this.db.role.findFirst({
+        where: {
+          id: context.crmRoleId,
+          companyId: context.companyId,
+          deletedAt: 0,
+        },
+        select: { isAdmin: true },
+      });
+      if (role?.isAdmin) return context;
+    }
+    throw new ForbiddenException(
+      'Only platform admin or company admin can manage employees',
+    );
+  }
+
   async assertCompanyAdminAccess(authorization?: string) {
     const user = await this.getAuthenticatedUser(authorization);
 
@@ -1351,19 +1381,7 @@ export class UsersService {
   ): Promise<CompanyRequestContext> {
     const context = await this.getRequestContext(authorization);
 
-    if (context.userType !== 'company' || !context.companyId) {
-      throw new ForbiddenException('Only company users can access this resource');
-    }
-
-    if (options.requireAvailableShop && !context.allowedShopIds.length) {
-      throw new ForbiddenException('No available shops for this user');
-    }
-
-    return {
-      ...context,
-      userType: 'company',
-      companyId: context.companyId,
-    };
+    return requireCompanyContext(context, options);
   }
 
   async assertAuthSessionIsActive(sessionId: string, userId: number) {

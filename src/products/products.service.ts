@@ -8,14 +8,16 @@ import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import { extname, join } from 'path';
-import { CompanyRequestContext } from '../auth/request-context';
-import { CompanySettingsService } from '../company-settings/company-settings.service';
+import {
+  CompanyRequestContext,
+  requireCompanyContext,
+} from '../auth/request-context';
 import {
   normalizeProductPhotoForStorage,
   resolveProductPhotoUrl,
 } from '../common/product-photo.util';
+import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { UsersService } from '../users/users.service';
 
 const ALLOWED_PRODUCT_PHOTO_MIME_TYPES = new Set([
   'image/jpeg',
@@ -645,11 +647,10 @@ export class ProductsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly companySettingsService: CompanySettingsService,
-    private readonly usersService: UsersService,
   ) {}
 
   async uploadProductPhoto(
-    authorization: string | undefined,
+    requestContext: CompanyRequestContext,
     file?: {
       originalname: string;
       mimetype: string;
@@ -657,7 +658,7 @@ export class ProductsService {
       buffer: Buffer;
     },
   ) {
-    await this.getRequestContext(authorization);
+    await this.getRequestContext(requestContext);
 
     if (!file) {
       throw new BadRequestException('Product photo file is required');
@@ -688,15 +689,15 @@ export class ProductsService {
     };
   }
 
-  private async getRequestContext(authorization?: string) {
-    return this.usersService.getCompanyRequestContext(authorization);
+  private async getRequestContext(requestContext: CompanyRequestContext) {
+    return requireCompanyContext(requestContext);
   }
 
   async searchForPos(
     args: { q?: string; shopId?: string; limit?: number },
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const shopId = args.shopId?.trim() || context.currentShopId;
     if (!shopId) {
       throw new BadRequestException('shopId is required');
@@ -816,9 +817,9 @@ export class ProductsService {
 
   async createImportDraft(
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const writeContext = this.requireCatalogWriteContext(context);
     const companyId = this.resolveImportCompanyId(body, writeContext);
     const shopId = this.requireString(body.shop_id, 'shop_id');
@@ -866,13 +867,13 @@ export class ProductsService {
 
   async listImports(
     query: { page?: number; limit?: number },
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
     const safePage = Math.max(1, query.page ?? 1);
     const safeLimit = Math.min(Math.max(1, query.limit ?? 10), 100);
     const offset = (safePage - 1) * safeLimit;
     const windowSize = offset + safeLimit;
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const companyId = context.companyId;
     const invoiceWhere = { companyId };
     const [sessions, importCount, invoices, invoiceCount] = await Promise.all([
@@ -1027,13 +1028,13 @@ export class ProductsService {
     };
   }
 
-  async getImportById(id: string, authorization?: string) {
+  async getImportById(id: string, requestContext: CompanyRequestContext) {
     const session = await this.resolveImportSessionFromStore(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
 
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     this.assertImportSessionAccess(session, context);
 
     const shopLookup = await this.buildShopLookupByBranchCodes(
@@ -1053,9 +1054,9 @@ export class ProductsService {
 
   async validateExcelImport(
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const writeContext = this.requireCatalogWriteContext(context);
     const importId =
       this.optionalString(body.import_id) ??
@@ -1153,8 +1154,8 @@ export class ProductsService {
     };
   }
 
-  async getImportProgress(id: string, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async getImportProgress(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
     const resolvedJobId = IMPORT_JOBS.has(id)
       ? id
       : (this.resolveImportSession(id)?.jobId ?? '');
@@ -1199,8 +1200,8 @@ export class ProductsService {
     };
   }
 
-  async getImportItemsDp(id: string, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async getImportItemsDp(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
     const session = await this.resolveImportSessionFromStore(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
@@ -1222,9 +1223,9 @@ export class ProductsService {
       page: number;
       difference: boolean;
     },
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const session = await this.resolveImportSessionFromStore(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
@@ -1266,9 +1267,9 @@ export class ProductsService {
 
   async importWithoutCheck(
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const writeContext = this.requireCatalogWriteContext(context);
     const companyId = this.resolveImportCompanyId(body, writeContext);
     const shopId = this.requireString(body.shop_id, 'shop_id');
@@ -1344,9 +1345,9 @@ export class ProductsService {
 
   async createImportInventory(
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const session = await this.resolveImportSessionFromStore(
       this.requireString(body.import_id, 'import_id'),
     );
@@ -1448,17 +1449,17 @@ export class ProductsService {
   getStocktakingById(
     id: string,
     query: { page: number; limit: number; type?: string },
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    return this.getStocktakingByIdWithContext(id, query, authorization);
+    return this.getStocktakingByIdWithContext(id, query, requestContext);
   }
 
   private async getStocktakingByIdWithContext(
     id: string,
     query: { page: number; limit: number; type?: string },
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const stocktaking = this.resolveStocktakingSession(id);
     if (!stocktaking) {
       throw new NotFoundException('Stocktaking not found');
@@ -1489,9 +1490,9 @@ export class ProductsService {
   async getStocktakingLogs(
     id: string,
     query: { page: number; limit: number },
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const stocktaking = this.resolveStocktakingSession(id);
     if (!stocktaking) {
       throw new NotFoundException('Stocktaking not found');
@@ -1524,14 +1525,14 @@ export class ProductsService {
   async setStocktakingProductByBarcode(
     id: string,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
     const stocktaking = this.resolveStocktakingSession(id);
     if (!stocktaking) {
       throw new NotFoundException('Stocktaking not found');
     }
 
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     this.assertStocktakingAccess(stocktaking, context);
     const productBarcode = this.requireString(
       body.product_barcode,
@@ -1628,7 +1629,10 @@ export class ProductsService {
     };
   }
 
-  async acceptStocktakingImport(id: string, authorization?: string) {
+  async acceptStocktakingImport(
+    id: string,
+    requestContext: CompanyRequestContext,
+  ) {
     const stocktaking = this.resolveStocktakingSession(id);
     if (!stocktaking) {
       throw new NotFoundException('Stocktaking not found');
@@ -1638,7 +1642,7 @@ export class ProductsService {
     if (!session) {
       throw new NotFoundException('Import session not found');
     }
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     this.assertStocktakingAccess(stocktaking, context);
     this.assertImportSessionAccess(session, context);
 
@@ -1651,7 +1655,7 @@ export class ProductsService {
       };
     }
 
-    const result = await this.commitImport(session.id, authorization, {
+    const result = await this.commitImport(session.id, requestContext, {
       forceWithCheckAccept: true,
     });
     stocktaking.acceptedAt = this.formatDateTime(
@@ -1669,7 +1673,7 @@ export class ProductsService {
 
   async commitImport(
     id: string,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
     options?: { forceWithCheckAccept?: boolean },
   ) {
     const session = await this.resolveImportSessionFromStore(id);
@@ -1677,7 +1681,7 @@ export class ProductsService {
       throw new NotFoundException('Import session not found');
     }
 
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const writeContext = this.requireCatalogWriteContext(context);
     this.assertImportSessionAccess(session, writeContext);
 
@@ -1745,8 +1749,8 @@ export class ProductsService {
     };
   }
 
-  async cancelImport(id: string, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async cancelImport(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
     const session = await this.resolveImportSessionFromStore(id);
     if (!session) {
       throw new NotFoundException('Import session not found');
@@ -1766,7 +1770,7 @@ export class ProductsService {
 
   async rollbackImport(
     id: string,
-    authorization: string | undefined,
+    requestContext: CompanyRequestContext,
     options?: { dryRun?: boolean },
   ) {
     const session = await this.resolveImportSessionFromStore(id);
@@ -1783,7 +1787,7 @@ export class ProductsService {
       );
     }
 
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const writeContext = this.requireCatalogWriteContext(context);
     this.assertImportSessionAccess(session, writeContext);
 
@@ -2970,9 +2974,9 @@ export class ProductsService {
 
   async findAll(
     { page, limit, search }: FindProductsArgs,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const safePage = Math.max(1, page);
     const safeLimit = Math.min(Math.max(1, limit), 100);
     const where = this.applyProductScope(
@@ -3086,9 +3090,9 @@ export class ProductsService {
       supplierIds,
       order,
     }: FindProductsArgs,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const safePage = Math.max(1, page);
     const safeLimit = Math.min(Math.max(1, limit), 1000);
     const resolvedShopBranchCodes = await this.resolveBranchCodesForFilter(
@@ -3222,9 +3226,9 @@ export class ProductsService {
       wholesalePrice,
       freePrice,
     }: Omit<FindProductsArgs, 'page' | 'limit' | 'statistics' | 'order'>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const resolvedShopBranchCodes = await this.resolveBranchCodesForFilter(
       shopIds,
       context,
@@ -3290,9 +3294,12 @@ export class ProductsService {
     return this.buildProductsStatistics(productsForStatistics);
   }
 
-  async create(body: Record<string, unknown>, authorization?: string) {
+  async create(
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
     const context = this.requireCatalogWriteContext(
-      await this.getRequestContext(authorization),
+      await this.getRequestContext(requestContext),
     );
     const productCompanyId = this.resolveProductCompanyId(body, context);
     const name = this.requireString(body.name, 'name');
@@ -3483,9 +3490,9 @@ export class ProductsService {
 
   async createCatalogProduct(
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const writeContext = this.requireCatalogWriteContext(context);
     const productCompanyId = this.resolveProductCompanyId(body, writeContext);
     if (Array.isArray(body.shop_ids)) {
@@ -3689,8 +3696,8 @@ export class ProductsService {
     };
   }
 
-  async getProductById(id: string, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async getProductById(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
     const product = await this.prisma.product.findFirst({
       where: this.applyProductScope(
         this.buildProductIdentifierWhere(id),
@@ -3742,9 +3749,9 @@ export class ProductsService {
   async patchProductIdentifiers(
     id: string,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const writeContext = this.requireCatalogWriteContext(context);
 
     const existingProduct = await this.prisma.product.findFirst({
@@ -3781,9 +3788,9 @@ export class ProductsService {
   async updateCatalogProduct(
     id: string,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const writeContext = this.requireCatalogWriteContext(context);
     if (Array.isArray(body.shop_ids)) {
       body.shop_ids = this.filterRequestedShopIds(
@@ -4032,9 +4039,9 @@ export class ProductsService {
 
   async bulkArchiveProducts(
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const writeContext = this.requireCatalogWriteContext(context);
     const productIdentifiers = this.toStringArrayValue(body.product_ids);
 
@@ -4090,8 +4097,8 @@ export class ProductsService {
     };
   }
 
-  async clearAllArchivedProducts(authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async clearAllArchivedProducts(requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
     const writeContext = this.requireCatalogWriteContext(context);
 
     const products = await this.prisma.product.findMany({
@@ -4111,9 +4118,9 @@ export class ProductsService {
 
   async bulkDeleteProducts(
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const writeContext = this.requireCatalogWriteContext(context);
 
     const rawIds = Array.isArray(body.ids) ? body.ids : body.product_ids;
@@ -4175,8 +4182,11 @@ export class ProductsService {
     });
   }
 
-  async generateSku(body: Record<string, unknown>, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async generateSku(
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getRequestContext(requestContext);
     const companyId = this.resolveProductCompanyId(body, context);
     const requestedPrefix = this.optionalString(body.prefix);
     const name = this.optionalString(body.name);
@@ -4220,9 +4230,9 @@ export class ProductsService {
       movementType?: string;
       shopId?: string;
     },
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const product = await this.prisma.product.findFirst({
       where: this.applyProductScope(
         this.buildProductIdentifierWhere(id),
@@ -4381,9 +4391,9 @@ export class ProductsService {
       shopId?: string;
       productId?: string;
     },
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const safeLimit = Math.max(1, Math.trunc(query.limit || 20));
     const safePage = Math.max(1, Math.trunc(query.page || 1));
 
@@ -4483,9 +4493,9 @@ export class ProductsService {
 
   async generateBarcode(
     body: Record<string, unknown> = {},
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const companyId = this.resolveProductCompanyId(body, context);
     const excludeBarcodes = Array.isArray(body.exclude)
       ? (body.exclude as string[]).filter((b) => typeof b === 'string')
@@ -4541,8 +4551,11 @@ export class ProductsService {
     throw new BadRequestException('Barcode range exceeded');
   }
 
-  async listTransfers(query: TransferListQuery, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async listTransfers(
+    query: TransferListQuery,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getRequestContext(requestContext);
     const transferDb = (this.prisma as any).transfer;
     const safeLimit = Math.max(1, Math.trunc(query.limit || 10));
     const safePage = Math.max(1, Math.trunc(query.page || 1));
@@ -4569,8 +4582,8 @@ export class ProductsService {
     };
   }
 
-  async getTransferById(id: string, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async getTransferById(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
     const transfer = await this.findTransferOrThrow(id, context);
     const branchCodes = [
       transfer.departureShop?.branchCode,
@@ -4589,8 +4602,11 @@ export class ProductsService {
     };
   }
 
-  async createTransfer(body: Record<string, unknown>, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async createTransfer(
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getRequestContext(requestContext);
     if (!context?.companyId) {
       throw new UnauthorizedException('Company context is required');
     }
@@ -4695,9 +4711,9 @@ export class ProductsService {
   async getTransferProducts(
     id: string,
     query: TransferProductsQuery,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const transfer = await this.findTransferOrThrow(id, context);
     const departureBranchCode = transfer.departureShop.branchCode;
     const arrivalBranchCode = transfer.arrivalShop.branchCode;
@@ -4812,9 +4828,9 @@ export class ProductsService {
   async getTransferItems(
     id: string,
     query: TransferItemsQuery,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const transfer = await this.findTransferOrThrow(id, context);
     const safeLimit = Math.max(1, Math.trunc(query.limit || 20));
     const safePage = Math.max(1, Math.trunc(query.page || 1));
@@ -4857,9 +4873,9 @@ export class ProductsService {
   async upsertTransferItem(
     id: string,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     const transfer = await this.findTransferOrThrow(id, context);
 
     if (transfer.status !== 'DRAFT') {
@@ -4950,12 +4966,12 @@ export class ProductsService {
         page: 1,
         limit: 50,
       },
-      authorization,
+      requestContext,
     );
   }
 
-  async sendTransfer(id: string, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async sendTransfer(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
     if (!context) {
       throw new UnauthorizedException('Authentication is required');
     }
@@ -5036,11 +5052,11 @@ export class ProductsService {
       });
     });
 
-    return this.getTransferById(id, authorization);
+    return this.getTransferById(id, requestContext);
   }
 
-  async acceptTransfer(id: string, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async acceptTransfer(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
     if (!context) {
       throw new UnauthorizedException('Authentication is required');
     }
@@ -5144,15 +5160,15 @@ export class ProductsService {
       });
     });
 
-    return this.getTransferById(id, authorization);
+    return this.getTransferById(id, requestContext);
   }
 
   async acceptTransferVerified(
     id: string,
     body: Record<string, unknown>,
-    authorization?: string,
+    requestContext: CompanyRequestContext,
   ) {
-    const context = await this.getRequestContext(authorization);
+    const context = await this.getRequestContext(requestContext);
     if (!context) throw new UnauthorizedException('Authentication is required');
 
     const transfer = await this.findTransferOrThrow(id, context);
@@ -5264,11 +5280,11 @@ export class ProductsService {
       });
     });
 
-    return this.getTransferById(id, authorization);
+    return this.getTransferById(id, requestContext);
   }
 
-  async cancelTransfer(id: string, authorization?: string) {
-    const context = await this.getRequestContext(authorization);
+  async cancelTransfer(id: string, requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
     if (!context) throw new UnauthorizedException('Authentication is required');
 
     const transfer = await this.findTransferOrThrow(id, context);
@@ -5321,7 +5337,7 @@ export class ProductsService {
       });
     });
 
-    return this.getTransferById(id, authorization);
+    return this.getTransferById(id, requestContext);
   }
 
   private buildTransferScope(context: CompanyRequestContext) {
