@@ -111,7 +111,7 @@ export class ReceiptsService {
         : false;
 
     const payments: Array<{ payment_method: string; amount: number }> =
-      Array.isArray(sale.extraPayments) && (sale.extraPayments as unknown[]).length > 1
+      Array.isArray(sale.extraPayments) && (sale.extraPayments as unknown[]).length > 0
         ? (sale.extraPayments as Array<{ payment_method: string; amount: number }>)
         : sale.paymentMethod
           ? [{ payment_method: sale.paymentMethod, amount: Number(sale.payableTotal) }]
@@ -377,6 +377,9 @@ export class ReceiptsService {
               companyId,
               name: 'Стандартный',
               isDefault: true,
+              fontSize: 14,
+              itemDividers: true,
+              footerMessage: 'Спасибо за вашу покупку',
               blocks: DEFAULT_CHEQUE_BLOCKS as any,
             },
           });
@@ -445,6 +448,9 @@ export class ReceiptsService {
         companyId,
         name: name?.trim() || 'Новый чек',
         isDefault: existingCount === 0,
+        fontSize: 14,
+        itemDividers: true,
+        footerMessage: 'Спасибо за вашу покупку',
         blocks: DEFAULT_CHEQUE_BLOCKS as any,
       },
     });
@@ -623,6 +629,14 @@ export class ReceiptsService {
     shopInfo: Awaited<ReturnType<ReceiptsService['getShopInfo']>>,
     companyInfo: Awaited<ReturnType<ReceiptsService['getCompanyLegalInfo']>>,
   ) {
+    const items = Array.isArray(receipt.items)
+      ? (receipt.items as Array<{ quantity?: unknown }>)
+      : [];
+    const itemCount = items.reduce(
+      (sum, item) => sum + (Number.isFinite(Number(item?.quantity)) ? Number(item.quantity) : 0),
+      0,
+    );
+
     return {
       id: receipt.id,
       sale_id: sale.id,
@@ -637,7 +651,9 @@ export class ReceiptsService {
       client_name: receipt.clientName,
       client_phone: receipt.clientPhone,
       sale_comment: receipt.saleComment,
-      items: Array.isArray(receipt.items) ? receipt.items : [],
+      items,
+      item_count: itemCount,
+      currency: 'UZS',
       subtotal: receipt.subtotal,
       discount: receipt.discount,
       discount_percent: receipt.discountPercent,

@@ -98,6 +98,39 @@ describe('SalesService money calculations', () => {
       ).toThrow('Payments total cannot exceed the sale payable total');
     });
 
+    it('accepts paid components plus debt when they exactly match the sale total', () => {
+      const { service } = createService();
+      expect(() =>
+        (service as any).validatePaymentAmounts(
+          [{ amount: 300 }, { amount: 200 }],
+          1000,
+          { debt: { amount_uzs: 500 } },
+        ),
+      ).not.toThrow();
+    });
+
+    it('rejects a mixed payment when paid components plus debt do not match', () => {
+      const { service } = createService();
+      expect(() =>
+        (service as any).validatePaymentAmounts(
+          [{ amount: 300 }],
+          1000,
+          { debt: { amount_uzs: 500 } },
+        ),
+      ).toThrow('Payments total plus debt must equal the sale payable total');
+    });
+
+    it('rejects sub-cent payment precision', () => {
+      const { service } = createService();
+      expect(() =>
+        (service as any).validatePaymentAmounts(
+          [{ amount: 999.999 }],
+          1000,
+          {},
+        ),
+      ).toThrow('fractions smaller than 0.01');
+    });
+
     it('uses the discounted unit amount when preparing a return', async () => {
       const { service } = createService();
       jest

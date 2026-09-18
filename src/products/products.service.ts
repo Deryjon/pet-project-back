@@ -1,10 +1,11 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, ProductSeason } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import { extname, join } from 'path';
@@ -50,8 +51,17 @@ type ResolvedShop = {
 
 type ImportRowInput = {
   name: string;
+  article?: string;
   sku?: string;
   barcode?: string;
+  colorName?: string;
+  colorCode?: string;
+  sizeName?: string;
+  sizeType?: string;
+  season?: ProductSeason;
+  seasonYear?: number;
+  collection?: string;
+  gender?: string;
   quantity: number;
   supplyPrice: number;
   retailPrice: number;
@@ -640,6 +650,13 @@ type FindProductsArgs = {
   brandIds?: string[];
   supplierIds?: string[];
   order?: string[];
+  colorIds?: string[];
+  sizeIds?: string[];
+  season?: string;
+  seasonYear?: number;
+  gender?: string;
+  collection?: string;
+  stockState?: 'in_stock' | 'out_of_stock';
 };
 
 @Injectable()
@@ -691,6 +708,279 @@ export class ProductsService {
 
   private async getRequestContext(requestContext: CompanyRequestContext) {
     return requireCompanyContext(requestContext);
+  }
+
+  async listProductColors(requestContext: CompanyRequestContext, includeInactive = false) {
+    const { companyId } = await this.getRequestContext(requestContext);
+    return this.prisma.productColor.findMany({
+      where: { companyId, ...(includeInactive ? {} : { isActive: true }) },
+      orderBy: [{ name: 'asc' }],
+    });
+  }
+
+  async createProductColor(body: Record<string, unknown>, requestContext: CompanyRequestContext) {
+    const { companyId } = this.requireCatalogWriteContext(await this.getRequestContext(requestContext));
+    const name = this.requireString(body.name, 'name');
+    const code = this.optionalString(body.code);
+    if (code && !/^#[0-9a-f]{6}$/i.test(code)) {
+      throw new BadRequestException('code must be a HEX color such as #000000');
+    }
+    try {
+      return await this.prisma.productColor.create({
+        data: { companyId, name, code: code?.toUpperCase() },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('Цвет с таким названием уже существует');
+      }
+      throw error;
+    }
+  }
+
+  async updateProductColor(id: string, body: Record<string, unknown>, requestContext: CompanyRequestContext) {
+    const { companyId } = this.requireCatalogWriteContext(await this.getRequestContext(requestContext));
+    const current = await this.prisma.productColor.findFirst({ where: { id, companyId } });
+    if (!current) throw new NotFoundException('Color not found');
+    const code = body.code === null ? null : this.optionalString(body.code);
+    if (code && !/^#[0-9a-f]{6}$/i.test(code)) {
+      throw new BadRequestException('code must be a HEX color such as #000000');
+    }
+    try {
+      return await this.prisma.productColor.update({
+        where: { id },
+        data: {
+          ...(body.name !== undefined ? { name: this.requireString(body.name, 'name') } : {}),
+          ...(body.code !== undefined ? { code: code?.toUpperCase() ?? null } : {}),
+          ...(typeof body.is_active === 'boolean' ? { isActive: body.is_active } : {}),
+        },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('Цвет с таким названием уже существует');
+      }
+      throw error;
+    }
+  }
+
+  async deleteProductColor(id: string, requestContext: CompanyRequestContext) {
+    const { companyId } = this.requireCatalogWriteContext(await this.getRequestContext(requestContext));
+    const current = await this.prisma.productColor.findFirst({ where: { id, companyId } });
+    if (!current) throw new NotFoundException('Color not found');
+    if (await this.prisma.productVariant.count({ where: { companyId, colorId: id } })) {
+      throw new ConflictException('Нельзя удалить цвет, который используется в вариантах товара');
+    }
+    await this.prisma.productColor.delete({ where: { id } });
+    return { success: true };
+  }
+
+  async listProductSizes(
+    requestContext: CompanyRequestContext,
+    options: { type?: string; includeInactive?: boolean } = {},
+  ) {
+    const { companyId } = await this.getRequestContext(requestContext);
+    const type = options.type?.toUpperCase();
+    if (type && !['CLOTHING', 'SHOES', 'OTHER'].includes(type)) {
+      throw new BadRequestException('type must be CLOTHING, SHOES or OTHER');
+    }
+    return this.prisma.productSize.findMany({
+      where: {
+        companyId,
+        ...(type ? { type: type as 'CLOTHING' | 'SHOES' | 'OTHER' } : {}),
+        ...(options.includeInactive ? {} : { isActive: true }),
+      },
+      orderBy: [{ type: 'asc' }, { sortOrder: 'asc' }, { name: 'asc' }],
+    });
+  }
+
+  async createProductSize(body: Record<string, unknown>, requestContext: CompanyRequestContext) {
+    const { companyId } = this.requireCatalogWriteContext(await this.getRequestContext(requestContext));
+    const name = this.requireString(body.name, 'name');
+    const type = this.requireString(body.type, 'type').toUpperCase();
+    const system = this.optionalString(body.system)?.toUpperCase();
+    if (!['CLOTHING', 'SHOES', 'OTHER'].includes(type)) {
+      throw new BadRequestException('type must be CLOTHING, SHOES or OTHER');
+    }
+    if (system && !['EU', 'US', 'UK', 'OTHER'].includes(system)) {
+      throw new BadRequestException('system must be EU, US, UK or OTHER');
+    }
+    try {
+      return await this.prisma.productSize.create({
+        data: {
+          companyId,
+          name,
+          type: type as 'CLOTHING' | 'SHOES' | 'OTHER',
+          system: system as 'EU' | 'US' | 'UK' | 'OTHER' | undefined,
+          sortOrder: this.toInt(body.sort_order) ?? 0,
+        },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('Такой размер уже существует');
+      }
+      throw error;
+    }
+  }
+
+  async updateProductSize(id: string, body: Record<string, unknown>, requestContext: CompanyRequestContext) {
+    const { companyId } = this.requireCatalogWriteContext(await this.getRequestContext(requestContext));
+    const current = await this.prisma.productSize.findFirst({ where: { id, companyId } });
+    if (!current) throw new NotFoundException('Size not found');
+    const type = body.type === undefined ? undefined : this.requireString(body.type, 'type').toUpperCase();
+    const system = body.system === null ? null : this.optionalString(body.system)?.toUpperCase();
+    if (type && !['CLOTHING', 'SHOES', 'OTHER'].includes(type)) {
+      throw new BadRequestException('type must be CLOTHING, SHOES or OTHER');
+    }
+    if (system && !['EU', 'US', 'UK', 'OTHER'].includes(system)) {
+      throw new BadRequestException('system must be EU, US, UK or OTHER');
+    }
+    try {
+      return await this.prisma.productSize.update({
+        where: { id },
+        data: {
+          ...(body.name !== undefined ? { name: this.requireString(body.name, 'name') } : {}),
+          ...(type ? { type: type as 'CLOTHING' | 'SHOES' | 'OTHER' } : {}),
+          ...(body.system !== undefined ? { system: system as 'EU' | 'US' | 'UK' | 'OTHER' | null } : {}),
+          ...(body.sort_order !== undefined ? { sortOrder: this.toInt(body.sort_order) ?? 0 } : {}),
+          ...(typeof body.is_active === 'boolean' ? { isActive: body.is_active } : {}),
+        },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('Такой размер уже существует');
+      }
+      throw error;
+    }
+  }
+
+  async deleteProductSize(id: string, requestContext: CompanyRequestContext) {
+    const { companyId } = this.requireCatalogWriteContext(await this.getRequestContext(requestContext));
+    const current = await this.prisma.productSize.findFirst({ where: { id, companyId } });
+    if (!current) throw new NotFoundException('Size not found');
+    if (await this.prisma.productVariant.count({ where: { companyId, sizeId: id } })) {
+      throw new ConflictException('Нельзя удалить размер, который используется в вариантах товара');
+    }
+    await this.prisma.productSize.delete({ where: { id } });
+    return { success: true };
+  }
+
+  async listProductVariants(productId: string, requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
+    const product = await this.prisma.product.findFirst({
+      where: this.applyProductScope(this.buildProductIdentifierWhere(productId), context),
+      select: { id: true },
+    });
+    if (!product) throw new NotFoundException('Product not found');
+    return this.prisma.productVariant.findMany({
+      where: { companyId: context.companyId, productId: product.id },
+      include: { color: true, size: true, stocks: { include: { shop: true } } },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+    });
+  }
+
+  async createProductVariant(
+    productId: string,
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = this.requireCatalogWriteContext(await this.getRequestContext(requestContext));
+    const product = await this.prisma.product.findFirst({
+      where: this.applyProductScope(this.buildProductIdentifierWhere(productId), context),
+      select: { id: true, companyId: true, purchasePrice: true, salePrice: true },
+    });
+    if (!product || !product.companyId) throw new NotFoundException('Product not found');
+
+    const colorId = this.optionalString(body.color_id);
+    const sizeId = this.optionalString(body.size_id);
+    const [color, size] = await Promise.all([
+      colorId ? this.prisma.productColor.findFirst({ where: { id: colorId, companyId: context.companyId, isActive: true } }) : null,
+      sizeId ? this.prisma.productSize.findFirst({ where: { id: sizeId, companyId: context.companyId, isActive: true } }) : null,
+    ]);
+    if (colorId && !color) throw new BadRequestException('Цвет недоступен или отключён');
+    if (sizeId && !size) throw new BadRequestException('Размер недоступен или отключён');
+
+    if (colorId || sizeId) {
+      const duplicate = await this.prisma.productVariant.findFirst({
+        where: { productId: product.id, colorId: colorId ?? null, sizeId: sizeId ?? null, isActive: true },
+      });
+      if (duplicate) throw new ConflictException('Такой вариант цвета и размера уже существует');
+    }
+
+    const stockRows = Array.isArray(body.stocks)
+      ? body.stocks.filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
+      : [];
+    const resolvedStocks = await this.attachBranchCodesToShipments(
+      stockRows.map((stock) => ({
+        shopId: this.extractShopIdentifier(stock),
+        quantity: this.toNumber(stock.quantity) ?? 0,
+        supplyPrice: this.toNumber(stock.purchase_price) ?? this.toNumber(body.purchase_price) ?? product.purchasePrice ?? 0,
+        retailPrice: this.toNumber(stock.sale_price) ?? this.toNumber(body.sale_price) ?? product.salePrice ?? 0,
+        hasTrigger: false,
+        smallLeftMeasurementValue: 0,
+      })),
+      context,
+    );
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        if (body.replace_default === true && (colorId || sizeId)) {
+          await tx.productVariant.updateMany({
+            where: { productId: product.id, isDefault: true },
+            data: { isActive: false },
+          });
+        }
+        const variant = await tx.productVariant.create({
+          data: {
+            companyId: context.companyId,
+            productId: product.id,
+            colorId,
+            sizeId,
+            barcode: this.optionalString(body.barcode),
+            sku: this.optionalString(body.sku),
+            purchasePrice: this.toNumber(body.purchase_price) ?? product.purchasePrice,
+            salePrice: this.toNumber(body.sale_price) ?? product.salePrice,
+            attributeValues: this.toJsonFieldValue(body.attribute_values),
+            stocks: resolvedStocks.length
+              ? {
+                  create: resolvedStocks.map((stock) => ({
+                    companyId: context.companyId,
+                    shopId: stock.shopId,
+                    branchCode: stock.branchCode,
+                    quantity: stock.quantity,
+                    purchasePrice: stock.supplyPrice,
+                    salePrice: stock.retailPrice,
+                  })),
+                }
+              : undefined,
+          },
+          include: { color: true, size: true, stocks: { include: { shop: true } } },
+        });
+        await tx.product.update({ where: { id: product.id }, data: { variantType: 'variative' } });
+        return variant;
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('Barcode или SKU уже используется другим вариантом');
+      }
+      throw error;
+    }
+  }
+
+  async updateProductVariant(id: string, body: Record<string, unknown>, requestContext: CompanyRequestContext) {
+    const context = this.requireCatalogWriteContext(await this.getRequestContext(requestContext));
+    const variant = await this.prisma.productVariant.findFirst({ where: { id, companyId: context.companyId } });
+    if (!variant) throw new NotFoundException('Product variant not found');
+    return this.prisma.productVariant.update({
+      where: { id },
+      data: {
+        ...(body.barcode !== undefined ? { barcode: this.optionalString(body.barcode) ?? null } : {}),
+        ...(body.sku !== undefined ? { sku: this.optionalString(body.sku) ?? null } : {}),
+        ...(body.purchase_price !== undefined ? { purchasePrice: this.toNumber(body.purchase_price) } : {}),
+        ...(body.sale_price !== undefined ? { salePrice: this.toNumber(body.sale_price) } : {}),
+        ...(typeof body.is_active === 'boolean' ? { isActive: body.is_active } : {}),
+        ...(body.attribute_values !== undefined ? { attributeValues: this.toJsonFieldValue(body.attribute_values) } : {}),
+      },
+      include: { color: true, size: true, stocks: { include: { shop: true } } },
+    });
   }
 
   async searchForPos(
@@ -1107,6 +1397,7 @@ export class ProductsService {
       branchCode,
       writeContext.companyId,
     );
+
     const dryRunSummary = this.buildImportDryRunSummary(items);
 
     const mode = existingSession?.mode ?? this.parseImportMode(body.mode);
@@ -3089,6 +3380,13 @@ export class ProductsService {
       brandIds,
       supplierIds,
       order,
+      colorIds,
+      sizeIds,
+      season,
+      seasonYear,
+      gender,
+      collection,
+      stockState,
     }: FindProductsArgs,
     requestContext: CompanyRequestContext,
   ) {
@@ -3118,6 +3416,13 @@ export class ProductsService {
         wholesalePriceTo,
         wholesalePrice,
         freePrice,
+        colorIds,
+        sizeIds,
+        season,
+        seasonYear,
+        gender,
+        collection,
+        stockState,
       ),
       context,
     );
@@ -3225,6 +3530,13 @@ export class ProductsService {
       wholesalePriceTo,
       wholesalePrice,
       freePrice,
+      colorIds,
+      sizeIds,
+      season,
+      seasonYear,
+      gender,
+      collection,
+      stockState,
     }: Omit<FindProductsArgs, 'page' | 'limit' | 'statistics' | 'order'>,
     requestContext: CompanyRequestContext,
   ) {
@@ -3252,6 +3564,13 @@ export class ProductsService {
         wholesalePriceTo,
         wholesalePrice,
         freePrice,
+        colorIds,
+        sizeIds,
+        season,
+        seasonYear,
+        gender,
+        collection,
+        stockState,
       ),
       context,
     );
@@ -3315,6 +3634,11 @@ export class ProductsService {
     const markupPercent = this.toNumber(body.markup_percent);
     const salePrice = this.toNumber(body.sale_price);
     const quantity = this.toNumber(body.quantity) ?? 0;
+    const article = this.optionalString(body.article);
+    const gender = this.optionalString(body.gender);
+    const season = this.resolveProductSeason(body.season);
+    const seasonYear = this.toInt(body.season_year);
+    const collection = this.optionalString(body.collection);
     const metadataInput = this.toJsonFieldValue(body.metadata);
     const stockPayload = Array.isArray(body.stocks)
       ? this.filterStockPayloadByContext(body.stocks, context)
@@ -3391,6 +3715,11 @@ export class ProductsService {
         purchasePrice,
         markupPercent,
         salePrice,
+        article,
+        gender,
+        season,
+        seasonYear,
+        collection,
         quantity: totalQuantityFromStocks || quantity,
         metadata: metadataInput,
         category: categoryName
@@ -3468,6 +3797,28 @@ export class ProductsService {
               })),
             }
           : undefined,
+        variants: {
+          create: {
+            companyId: productCompanyId,
+            sku,
+            barcode,
+            purchasePrice,
+            salePrice,
+            isDefault: true,
+            stocks: stocks.length
+              ? {
+                  create: stocks.map((stock) => ({
+                    companyId: productCompanyId,
+                    shopId: stock.shopId,
+                    branchCode: stock.branchCode,
+                    quantity: stock.quantity,
+                    purchasePrice: stock.supplyPrice,
+                    salePrice: stock.retailPrice,
+                  })),
+                }
+              : undefined,
+          },
+        },
       },
     });
 
@@ -3482,6 +3833,11 @@ export class ProductsService {
           },
         },
         stocks: true,
+        variants: {
+          where: { isActive: true, isDefault: false },
+          include: { color: true, size: true, stocks: true },
+          orderBy: { createdAt: 'asc' },
+        },
       },
     });
 
@@ -3510,6 +3866,11 @@ export class ProductsService {
     const measurementUnitId = this.optionalString(body.measurement_unit_id);
     const purchasePrice = this.toNumber(body.supply_price) ?? 0;
     const salePrice = this.toNumber(body.retail_price) ?? 0;
+    const article = this.optionalString(body.article);
+    const gender = this.optionalString(body.gender);
+    const season = this.resolveProductSeason(body.season);
+    const seasonYear = this.toInt(body.season_year);
+    const collection = this.optionalString(body.collection);
     const markupPercent = this.toNumber(body.profit_margin);
     const description = this.optionalString(body.description);
     const brandName = this.optionalString(body.brand_name);
@@ -3582,6 +3943,11 @@ export class ProductsService {
         purchasePrice,
         markupPercent,
         salePrice,
+        article,
+        gender,
+        season,
+        seasonYear,
+        collection,
         productGroupId: this.optionalString(body.product_group_id),
         tier: this.resolveProductTier(body.tier),
         quantity: totalQuantity,
@@ -3639,6 +4005,29 @@ export class ProductsService {
                 })),
               }
             : undefined,
+        variants: {
+          create: {
+            companyId: productCompanyId,
+            sku,
+            barcode,
+            purchasePrice,
+            salePrice,
+            isDefault: true,
+            stocks:
+              supportsStock && shipmentsWithBranchCodes.length
+                ? {
+                    create: shipmentsWithBranchCodes.map((shipment) => ({
+                      companyId: productCompanyId,
+                      shopId: shipment.shopId,
+                      branchCode: shipment.branchCode,
+                      quantity: shipment.quantity,
+                      purchasePrice: shipment.supplyPrice,
+                      salePrice: shipment.retailPrice,
+                    })),
+                  }
+                : undefined,
+          },
+        },
       },
       include: {
         category: true,
@@ -3655,6 +4044,10 @@ export class ProductsService {
       shipmentsWithBranchCodes.map((shipment) => shipment.branchCode),
       writeContext.companyId,
     );
+
+    if (isVariative) {
+      await this.syncCatalogVariants(createdProduct.id, body, writeContext);
+    }
 
     const productResponse = this.toCatalogCreateProductResponse(
       createdProduct,
@@ -3712,6 +4105,11 @@ export class ProductsService {
           },
         },
         stocks: true,
+        variants: {
+          where: { isActive: true, isDefault: false },
+          include: { color: true, size: true, stocks: true },
+          orderBy: { createdAt: 'asc' },
+        },
       },
     });
 
@@ -3759,7 +4157,15 @@ export class ProductsService {
         this.buildProductIdentifierWhere(id),
         writeContext,
       ),
-      select: { id: true, publicId: true, sku: true, barcode: true },
+      select: {
+        id: true,
+        publicId: true,
+        companyId: true,
+        sku: true,
+        barcode: true,
+        purchasePrice: true,
+        salePrice: true,
+      },
     });
 
     if (!existingProduct) {
@@ -3775,8 +4181,18 @@ export class ProductsService {
         ...(sku !== undefined ? { sku } : {}),
         ...(barcode !== undefined ? { barcode } : {}),
       },
-      select: { id: true, publicId: true, sku: true, barcode: true },
+      select: {
+        id: true,
+        publicId: true,
+        companyId: true,
+        sku: true,
+        barcode: true,
+        purchasePrice: true,
+        salePrice: true,
+      },
     });
+
+    await this.syncDefaultVariantFromLegacyProduct(updated);
 
     return {
       id: updated.publicId ?? String(updated.id),
@@ -3905,6 +4321,17 @@ export class ProductsService {
           this.optionalString(body.product_group_id) ??
           existingProduct.productGroupId,
         tier: this.resolveProductTier(body.tier) ?? existingProduct.tier,
+        article:
+          this.optionalString(body.article) ?? existingProduct.article,
+        gender: this.optionalString(body.gender) ?? existingProduct.gender,
+        season:
+          body.season !== undefined
+            ? this.resolveProductSeason(body.season)
+            : existingProduct.season,
+        seasonYear:
+          this.toInt(body.season_year) ?? existingProduct.seasonYear,
+        collection:
+          this.optionalString(body.collection) ?? existingProduct.collection,
         quantity: supportsStock
           ? shipmentsWithBranchCodes.length
             ? shipmentsWithBranchCodes.reduce(
@@ -3976,6 +4403,15 @@ export class ProductsService {
         stocks: true,
       },
     });
+
+    await this.syncDefaultVariantFromLegacyProduct(updatedProduct, {
+      replaceStocks:
+        body.shipments !== undefined ||
+        body.shop_measurement_values !== undefined,
+    });
+    if (isVariative && body.variants !== undefined) {
+      await this.syncCatalogVariants(updatedProduct.id, body, writeContext);
+    }
 
     if (
       supportsStock &&
@@ -4786,6 +5222,10 @@ export class ProductsService {
           },
         },
       },
+      variants: {
+        where: { isActive: true, isDefault: false },
+        include: { color: true, size: true, stocks: true },
+      },
     } satisfies Prisma.ProductInclude;
 
     const [count, products] = await this.prisma.$transaction([
@@ -4807,17 +5247,30 @@ export class ProductsService {
     );
 
     return {
-      items: products.map((product) => {
-        const existingItem = transfer.items.find(
-          (item: any) => item.productId === product.id,
-        );
-        return this.toTransferProductCatalogItem(
-          product,
-          transfer,
-          existingItem,
-          shopLookup,
-        );
-      }),
+      items: products.flatMap((product) =>
+        product.variants.length
+          ? product.variants.map((variant) =>
+              this.toTransferProductCatalogItem(
+                product,
+                transfer,
+                transfer.items.find(
+                  (item: any) => item.productId === product.id && item.variantId === variant.id,
+                ),
+                shopLookup,
+                variant,
+              ),
+            )
+          : [
+              this.toTransferProductCatalogItem(
+                product,
+                transfer,
+                transfer.items.find(
+                  (item: any) => item.productId === product.id && !item.variantId,
+                ),
+                shopLookup,
+              ),
+            ],
+      ),
       count,
       ...this.buildTransferTotals(transfer),
       fields: TRANSFER_FIELDS,
@@ -4886,6 +5339,9 @@ export class ProductsService {
       this.optionalString(body.product_id) ??
       this.optionalString(body.productId) ??
       '';
+    const variantId =
+      this.optionalString(body.variant_id) ??
+      this.optionalString(body.variantId);
     const quantity =
       this.toNumber(
         body.transfer_measurement_value ??
@@ -4911,11 +5367,28 @@ export class ProductsService {
       throw new NotFoundException('Product not found');
     }
 
-    const departureStock = product.stocks.find(
+    const variant = variantId
+      ? await this.prisma.productVariant.findFirst({
+          where: {
+            id: variantId,
+            productId: product.id,
+            companyId: transfer.companyId,
+            isActive: true,
+          },
+          include: { stocks: true },
+        })
+      : null;
+    if (variantId && !variant) {
+      throw new NotFoundException('Product variant not found');
+    }
+
+    const departureStock = (variant?.stocks ?? product.stocks).find(
       (stock) => stock.branchCode === transfer.departureShop.branchCode,
     );
     const existingItem = transfer.items.find(
-      (item: any) => item.productId === product.id,
+      (item: any) =>
+        item.productId === product.id &&
+        (item.variantId ?? null) === (variantId ?? null),
     );
     const availableQuantity = departureStock?.quantity ?? 0;
 
@@ -4955,6 +5428,7 @@ export class ProductsService {
         data: {
           transferId: transfer.id,
           productId: product.id,
+          variantId,
           quantity,
         },
       });
@@ -4989,6 +5463,22 @@ export class ProductsService {
       const db = tx as any;
 
       for (const item of transfer.items) {
+        const quantity = Number(item.quantity ?? 0);
+        if (item.variantId) {
+          const claimed = await tx.productVariantStock.updateMany({
+            where: {
+              variantId: item.variantId,
+              shopId: transfer.departureShopId,
+              quantity: { gte: quantity },
+            },
+            data: { quantity: { decrement: quantity } },
+          });
+          if (claimed.count !== 1) {
+            throw new BadRequestException(
+              `Not enough variant stock for product ${item.product.name}`,
+            );
+          }
+        }
         const departureStock = await tx.productStock.findFirst({
           where: {
             productId: item.productId,
@@ -4996,7 +5486,6 @@ export class ProductsService {
           },
         });
 
-        const quantity = Number(item.quantity ?? 0);
         const beforeQuantity = departureStock?.quantity ?? 0;
 
         if (!departureStock || beforeQuantity < quantity) {
@@ -5071,6 +5560,30 @@ export class ProductsService {
 
       for (const item of transfer.items) {
         const quantity = Number(item.quantity ?? 0);
+        if (item.variantId) {
+          const sourceVariantStock = item.variant?.stocks?.find(
+            (stock: any) => stock.shopId === transfer.departureShopId,
+          );
+          await tx.productVariantStock.upsert({
+            where: {
+              variantId_shopId: {
+                variantId: item.variantId,
+                shopId: transfer.arrivalShopId,
+              },
+            },
+            create: {
+              companyId: transfer.companyId,
+              variantId: item.variantId,
+              shopId: transfer.arrivalShopId,
+              branchCode: transfer.arrivalShop.branchCode,
+              quantity,
+              purchasePrice:
+                sourceVariantStock?.purchasePrice ?? item.variant?.purchasePrice ?? 0,
+              salePrice: sourceVariantStock?.salePrice ?? item.variant?.salePrice ?? 0,
+            },
+            update: { quantity: { increment: quantity } },
+          });
+        }
         const arrivalStock = await tx.productStock.findFirst({
           where: {
             productId: item.productId,
@@ -5198,6 +5711,31 @@ export class ProductsService {
           ? arrivedMap.get(item.id)!
           : Number(item.quantity ?? 0);
 
+        if (item.variantId && arrivedQty > 0) {
+          const sourceVariantStock = item.variant?.stocks?.find(
+            (stock: any) => stock.shopId === transfer.departureShopId,
+          );
+          await tx.productVariantStock.upsert({
+            where: {
+              variantId_shopId: {
+                variantId: item.variantId,
+                shopId: transfer.arrivalShopId,
+              },
+            },
+            create: {
+              companyId: transfer.companyId,
+              variantId: item.variantId,
+              shopId: transfer.arrivalShopId,
+              branchCode: transfer.arrivalShop.branchCode,
+              quantity: arrivedQty,
+              purchasePrice:
+                sourceVariantStock?.purchasePrice ?? item.variant?.purchasePrice ?? 0,
+              salePrice: sourceVariantStock?.salePrice ?? item.variant?.salePrice ?? 0,
+            },
+            update: { quantity: { increment: arrivedQty } },
+          });
+        }
+
         const arrivalStock = await tx.productStock.findFirst({
           where: {
             productId: item.productId,
@@ -5301,6 +5839,15 @@ export class ProductsService {
       if (transfer.status === 'SENT') {
         for (const item of transfer.items) {
           const quantity = Number(item.quantity ?? 0);
+          if (item.variantId) {
+            await tx.productVariantStock.updateMany({
+              where: {
+                variantId: item.variantId,
+                shopId: transfer.departureShopId,
+              },
+              data: { quantity: { increment: quantity } },
+            });
+          }
           const departureStock = await tx.productStock.findFirst({
             where: {
               productId: item.productId,
@@ -5382,6 +5929,9 @@ export class ProductsService {
       },
       items: {
         include: {
+          variant: {
+            include: { color: true, size: true, stocks: true },
+          },
           product: {
             include: {
               category: true,
@@ -5528,15 +6078,41 @@ export class ProductsService {
   }
 
   private toTransferProductCatalogItem(
-    product: CatalogProductWithRelations,
+    product: CatalogProductWithRelations & {
+      variants?: Array<{
+        id: string;
+        colorId: string | null;
+        sizeId: string | null;
+        barcode: string | null;
+        sku: string | null;
+        purchasePrice: number | null;
+        salePrice: number | null;
+        color: { id: string; name: string } | null;
+        size: { id: string; name: string } | null;
+        stocks: Array<{ shopId: string; quantity: number }>;
+      }>;
+    },
     transfer: any,
     item: any,
     shopLookup: Map<string, ResolvedShop>,
+    variant?: any,
   ) {
+    const effectiveProduct = variant
+      ? {
+          ...product,
+          name: `${product.name} — ${[variant.color?.name, variant.size?.name].filter(Boolean).join(' / ')}`,
+          sku: variant.sku,
+          barcode: variant.barcode,
+          purchasePrice: variant.purchasePrice ?? product.purchasePrice,
+          salePrice: variant.salePrice ?? product.salePrice,
+          stocks: variant.stocks,
+        }
+      : product;
     return {
       id: item?.id ?? '',
       transfer_id: item?.transferId ?? '',
       product_id: this.getProductPublicId(product),
+      variant_id: variant?.id ?? null,
       transfer_measurement_value: Number(item?.quantity ?? 0),
       updated_at: item?.updatedAt
         ? this.formatDate(
@@ -5546,7 +6122,7 @@ export class ProductsService {
         : '',
       updated_at_int: item?.updatedAt ? Number(item.updatedAt.getTime()) : 0,
       product: this.buildTransferProductPayload(
-        product,
+        effectiveProduct,
         transfer.departureShop.branchCode,
         transfer.arrivalShop.branchCode,
         shopLookup,
@@ -5566,6 +6142,7 @@ export class ProductsService {
       id: item.id,
       transfer_id: item.transferId,
       product_id: this.getProductPublicId(item.product),
+      variant_id: item.variantId ?? null,
       transfer_measurement_value: Number(item.quantity ?? 0),
       updated_at: this.formatDate(
         item.updatedAt,
@@ -5573,7 +6150,17 @@ export class ProductsService {
       ),
       updated_at_int: Number(item.updatedAt.getTime()),
       product: this.buildTransferProductPayload(
-        item.product,
+        item.variant
+          ? {
+              ...item.product,
+              name: `${item.product.name} — ${[item.variant.color?.name, item.variant.size?.name].filter(Boolean).join(' / ')}`,
+              sku: item.variant.sku,
+              barcode: item.variant.barcode,
+              purchasePrice: item.variant.purchasePrice ?? item.product.purchasePrice,
+              salePrice: item.variant.salePrice ?? item.product.salePrice,
+              stocks: item.variant.stocks,
+            }
+          : item.product,
         transfer.departureShop.branchCode,
         transfer.arrivalShop.branchCode,
         shopLookup,
@@ -5783,6 +6370,250 @@ export class ProductsService {
     });
   }
 
+  private async syncDefaultVariantFromLegacyProduct(
+    product: {
+      id: number;
+      companyId: string | null;
+      sku: string | null;
+      barcode: string | null;
+      purchasePrice: number | null;
+      salePrice: number | null;
+      stocks?: Array<{
+        shopId: string;
+        branchCode: string;
+        quantity: number;
+        purchasePrice: number | null;
+        salePrice: number | null;
+      }>;
+    },
+    options: { replaceStocks?: boolean } = {},
+  ) {
+    if (!product.companyId) {
+      return;
+    }
+
+    const existingVariant = await this.prisma.productVariant.findFirst({
+      where: { productId: product.id, isDefault: true },
+      select: { id: true },
+    });
+    const variant = existingVariant
+      ? await this.prisma.productVariant.update({
+          where: { id: existingVariant.id },
+          data: {
+            sku: product.sku,
+            barcode: product.barcode,
+            purchasePrice: product.purchasePrice,
+            salePrice: product.salePrice,
+          },
+          select: { id: true },
+        })
+      : await this.prisma.productVariant.create({
+          data: {
+            companyId: product.companyId,
+            productId: product.id,
+            sku: product.sku,
+            barcode: product.barcode,
+            purchasePrice: product.purchasePrice,
+            salePrice: product.salePrice,
+            isDefault: true,
+          },
+          select: { id: true },
+        });
+
+    if (options.replaceStocks && product.stocks) {
+      await this.prisma.$transaction([
+        this.prisma.productVariantStock.deleteMany({
+          where: { variantId: variant.id },
+        }),
+        ...product.stocks.map((stock) =>
+          this.prisma.productVariantStock.create({
+            data: {
+              companyId: product.companyId!,
+              variantId: variant.id,
+              shopId: stock.shopId,
+              branchCode: stock.branchCode,
+              quantity: stock.quantity,
+              purchasePrice: stock.purchasePrice ?? product.purchasePrice ?? 0,
+              salePrice: stock.salePrice ?? product.salePrice ?? 0,
+            },
+          }),
+        ),
+      ]);
+    }
+  }
+
+  private async syncCatalogVariants(
+    productId: number,
+    body: Record<string, unknown>,
+    context: CompanyRequestContext & { companyId: string },
+  ) {
+    const rows = Array.isArray(body.variants)
+      ? body.variants.filter(
+          (row): row is Record<string, unknown> =>
+            !!row && typeof row === 'object' && !Array.isArray(row),
+        )
+      : [];
+    if (!rows.length) {
+      return;
+    }
+
+    const normalized = rows.map((row, index) => {
+      const colorId = this.optionalString(row.color_id);
+      const sizeId = this.optionalString(row.size_id);
+      if (!colorId && !sizeId) {
+        throw new BadRequestException(
+          `Variant #${index + 1} must contain color_id or size_id`,
+        );
+      }
+      return {
+        row,
+        id: this.optionalString(row.id),
+        colorId,
+        sizeId,
+        barcode: this.optionalString(row.barcode),
+        sku: this.optionalString(row.sku),
+        purchasePrice:
+          this.toNumber(row.purchase_price ?? row.supply_price) ?? 0,
+        salePrice: this.toNumber(row.sale_price ?? row.retail_price) ?? 0,
+      };
+    });
+
+    const combinationKeys = normalized.map(
+      (item) => `${item.colorId ?? ''}:${item.sizeId ?? ''}`,
+    );
+    if (new Set(combinationKeys).size !== combinationKeys.length) {
+      throw new ConflictException('Матрица содержит повторяющиеся цвет и размер');
+    }
+
+    const [validColors, validSizes, existingVariants] = await Promise.all([
+      this.prisma.productColor.findMany({
+        where: {
+          companyId: context.companyId,
+          isActive: true,
+          id: { in: normalized.flatMap((item) =>
+            item.colorId ? [item.colorId] : [],
+          ) },
+        },
+        select: { id: true },
+      }),
+      this.prisma.productSize.findMany({
+        where: {
+          companyId: context.companyId,
+          isActive: true,
+          id: { in: normalized.flatMap((item) =>
+            item.sizeId ? [item.sizeId] : [],
+          ) },
+        },
+        select: { id: true },
+      }),
+      this.prisma.productVariant.findMany({
+        where: { companyId: context.companyId, productId },
+        select: { id: true, isDefault: true },
+      }),
+    ]);
+    const colorIds = new Set(validColors.map((item) => item.id));
+    const sizeIds = new Set(validSizes.map((item) => item.id));
+    if (
+      normalized.some(
+        (item) =>
+          (item.colorId && !colorIds.has(item.colorId)) ||
+          (item.sizeId && !sizeIds.has(item.sizeId)),
+      )
+    ) {
+      throw new BadRequestException('Цвет или размер варианта недоступен либо отключён');
+    }
+
+    const existingIds = new Set(existingVariants.map((item) => item.id));
+    const retainedIds = new Set<string>();
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        for (const item of normalized) {
+          const rawStocks =
+            item.row.stocks &&
+            typeof item.row.stocks === 'object' &&
+            !Array.isArray(item.row.stocks)
+              ? (item.row.stocks as Record<string, unknown>)
+              : {};
+          const stocks = await this.attachBranchCodesToShipments(
+            Object.entries(rawStocks).map(([shopId, quantity]) => ({
+              shopId,
+              quantity: this.toNumber(quantity) ?? 0,
+              supplyPrice: item.purchasePrice,
+              retailPrice: item.salePrice,
+              hasTrigger: false,
+              smallLeftMeasurementValue: 0,
+            })),
+            context,
+          );
+          const canUpdate = item.id ? existingIds.has(item.id) : false;
+          const variant = canUpdate
+            ? await tx.productVariant.update({
+                where: { id: item.id! },
+                data: {
+                  colorId: item.colorId ?? null,
+                  sizeId: item.sizeId ?? null,
+                  barcode: item.barcode ?? null,
+                  sku: item.sku ?? null,
+                  purchasePrice: item.purchasePrice,
+                  salePrice: item.salePrice,
+                  isActive: true,
+                },
+                select: { id: true },
+              })
+            : await tx.productVariant.create({
+                data: {
+                  companyId: context.companyId,
+                  productId,
+                  colorId: item.colorId,
+                  sizeId: item.sizeId,
+                  barcode: item.barcode,
+                  sku: item.sku,
+                  purchasePrice: item.purchasePrice,
+                  salePrice: item.salePrice,
+                },
+                select: { id: true },
+              });
+          retainedIds.add(variant.id);
+          await tx.productVariantStock.deleteMany({ where: { variantId: variant.id } });
+          if (stocks.length) {
+            await tx.productVariantStock.createMany({
+              data: stocks.map((stock) => ({
+                companyId: context.companyId,
+                variantId: variant.id,
+                shopId: stock.shopId,
+                branchCode: stock.branchCode,
+                quantity: stock.quantity,
+                purchasePrice: stock.supplyPrice,
+                salePrice: stock.retailPrice,
+              })),
+            });
+          }
+        }
+
+        await tx.productVariant.updateMany({
+          where: {
+            productId,
+            id: { notIn: [...retainedIds] },
+          },
+          data: { isActive: false, isDefault: false },
+        });
+        await tx.product.update({
+          where: { id: productId },
+          data: { variantType: 'variative' },
+        });
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException('Barcode или SKU варианта уже используется');
+      }
+      throw error;
+    }
+  }
+
   private formatDate(value: Date, companyId?: string | null) {
     return this.companySettingsService.formatDateForCompany(
       value,
@@ -5796,6 +6627,11 @@ export class ProductsService {
     name: string;
     sku: string | null;
     barcode: string | null;
+    article?: string | null;
+    gender?: string | null;
+    season?: ProductSeason;
+    seasonYear?: number | null;
+    collection?: string | null;
     quantity: number;
     purchasePrice: number | null;
     salePrice: number | null;
@@ -5817,6 +6653,11 @@ export class ProductsService {
       name: product.name,
       sku: product.sku,
       barcode: product.barcode,
+      article: product.article ?? null,
+      gender: product.gender ?? null,
+      season: product.season ?? ProductSeason.NO_SEASON,
+      season_year: product.seasonYear ?? null,
+      collection: product.collection ?? null,
       category: product.category,
       suppliers: product.suppliers.map((item) => ({
         name: item.supplier.name,
@@ -5844,6 +6685,11 @@ export class ProductsService {
       name: string;
       sku: string | null;
       barcode: string | null;
+      article?: string | null;
+      gender?: string | null;
+      season?: ProductSeason;
+      seasonYear?: number | null;
+      collection?: string | null;
       photo: string | null;
       quantity: number;
       metadata?: unknown;
@@ -5928,6 +6774,11 @@ export class ProductsService {
       name: product.name,
       sku: product.sku,
       barcode: product.barcode,
+      article: product.article,
+      gender: product.gender,
+      season: product.season,
+      season_year: product.seasonYear,
+      collection: product.collection,
       additional_barcodes: null,
       measurement_values: {
         total_measurement_value: totalMeasurementValue,
@@ -6058,7 +6909,20 @@ export class ProductsService {
   }
 
   private toProductDetailResponse(
-    product: CatalogProductWithRelations,
+    product: CatalogProductWithRelations & {
+      variants?: Array<{
+        id: string;
+        colorId: string | null;
+        sizeId: string | null;
+        barcode: string | null;
+        sku: string | null;
+        purchasePrice: number | null;
+        salePrice: number | null;
+        color: { id: string; name: string } | null;
+        size: { id: string; name: string } | null;
+        stocks: Array<{ shopId: string; quantity: number }>;
+      }>;
+    },
     shopLookup: Map<string, ResolvedShop>,
     salesSummary: {
       sold: number;
@@ -6089,7 +6953,29 @@ export class ProductsService {
     const selectedAttributes = Array.isArray(metadata.selected_attributes)
       ? metadata.selected_attributes
       : [];
-    const variants = Array.isArray(metadata.variants) ? metadata.variants : [];
+    const variants = product.variants?.length
+      ? product.variants.map((variant) => ({
+          id: variant.id,
+          name: [variant.color?.name, variant.size?.name]
+            .filter(Boolean)
+            .join(' / '),
+          color_id: variant.colorId,
+          size_id: variant.sizeId,
+          color: variant.color,
+          size: variant.size,
+          barcode: variant.barcode,
+          sku: variant.sku,
+          purchase_price: variant.purchasePrice ?? 0,
+          supply_price: variant.purchasePrice ?? 0,
+          sale_price: variant.salePrice ?? 0,
+          retail_price: variant.salePrice ?? 0,
+          stocks: Object.fromEntries(
+            variant.stocks.map((stock) => [stock.shopId, stock.quantity]),
+          ),
+        }))
+      : Array.isArray(metadata.variants)
+        ? metadata.variants
+        : [];
     const totalMeasurementValue = product.stocks.reduce(
       (sum, stock) => sum + stock.quantity,
       0,
@@ -6171,6 +7057,11 @@ export class ProductsService {
       supply_price: product.purchasePrice ?? 0,
       product_group_id: product.productGroupId ?? '',
       tier: product.tier ?? null,
+      article: product.article,
+      gender: product.gender,
+      season: product.season,
+      season_year: product.seasonYear,
+      collection: product.collection,
       description,
       measurement_type: this.resolveMeasurementTypeValue(
         product.unit,
@@ -6465,6 +7356,11 @@ export class ProductsService {
       archived_at: this.toArchivedAtResponse(product.archivedAt),
       archived_by: this.toArchivedByResponse(product),
       barcode: product.barcode,
+      article: product.article,
+      gender: product.gender,
+      season: product.season,
+      season_year: product.seasonYear,
+      collection: product.collection,
       barcode_lower: '',
       barcode_upper: '',
       base_name: product.name,
@@ -6607,11 +7503,46 @@ export class ProductsService {
     wholesalePriceTo?: number,
     wholesalePrice?: number,
     freePrice?: boolean,
+    colorIds?: string[],
+    sizeIds?: string[],
+    season?: string,
+    seasonYear?: number,
+    gender?: string,
+    collection?: string,
+    stockState?: 'in_stock' | 'out_of_stock',
   ): Prisma.ProductWhereInput | undefined {
     const and: Prisma.ProductWhereInput[] = [];
     const normalizedStatus = this.normalizeCatalogStatus(status);
     const resolvedShopIds =
       shopIds?.map((value) => value.trim()).filter(Boolean) ?? [];
+
+    if (colorIds?.length || sizeIds?.length) {
+      and.push({
+        variants: {
+          some: {
+            isActive: true,
+            ...(colorIds?.length ? { colorId: { in: colorIds } } : {}),
+            ...(sizeIds?.length ? { sizeId: { in: sizeIds } } : {}),
+          },
+        },
+      });
+    }
+    if (season && ['SS', 'AW', 'NO_SEASON'].includes(season)) {
+      and.push({ season: season as ProductSeason });
+    }
+    if (seasonYear !== undefined) and.push({ seasonYear });
+    if (gender) and.push({ gender: { equals: gender, mode: 'insensitive' } });
+    if (collection) and.push({ collection: { contains: collection, mode: 'insensitive' } });
+    if (stockState === 'in_stock') {
+      and.push(resolvedShopIds.length
+        ? { stocks: { some: { branchCode: { in: resolvedShopIds }, quantity: { gt: 0 } } } }
+        : { quantity: { gt: 0 } });
+    }
+    if (stockState === 'out_of_stock') {
+      and.push(resolvedShopIds.length
+        ? { NOT: { stocks: { some: { branchCode: { in: resolvedShopIds }, quantity: { gt: 0 } } } } }
+        : { quantity: { lte: 0 } });
+    }
 
     if (search) {
       and.push({
@@ -7332,8 +8263,20 @@ export class ProductsService {
       return [
         {
           name: name ?? '',
+          article: this.optionalString(item.article),
           sku: this.optionalString(item.sku),
           barcode: this.optionalString(item.barcode),
+          colorName: this.optionalString(item.color_name ?? item.color),
+          colorCode: this.optionalString(item.color_code),
+          sizeName: this.optionalString(item.size_name ?? item.size),
+          sizeType: this.optionalString(item.size_type),
+          season:
+            item.season !== undefined
+              ? this.resolveProductSeason(item.season)
+              : undefined,
+          seasonYear: this.toInt(item.season_year),
+          collection: this.optionalString(item.collection),
+          gender: this.optionalString(item.gender),
           quantity,
           supplyPrice,
           retailPrice,
@@ -7345,7 +8288,7 @@ export class ProductsService {
           rowNumber: index + 1,
         },
       ].map(({ rowNumber, ...prepared }) => {
-        if (!prepared.name && !prepared.sku && !prepared.barcode) {
+        if (!prepared.name && !prepared.article && !prepared.sku && !prepared.barcode) {
           throw new BadRequestException(
             `Row ${rowNumber} must contain at least name, sku, or barcode`,
           );
@@ -7481,6 +8424,46 @@ export class ProductsService {
   ) {
     const sku = row.sku?.trim();
     const barcode = row.barcode?.trim();
+    const article = row.article?.trim();
+
+    if (article) {
+      const articleMatch = await this.prisma.product.findFirst({
+        where: {
+          companyId,
+          OR: [{ article }, { sku: article }],
+        },
+        include: {
+          category: true,
+          brand: true,
+          suppliers: { include: { supplier: true } },
+          stocks: true,
+        },
+      });
+      if (articleMatch) return articleMatch;
+    }
+
+    if ((row.colorName || row.sizeName) && (sku || barcode)) {
+      const variant = await this.prisma.productVariant.findFirst({
+        where: {
+          companyId,
+          OR: [
+            ...(sku ? [{ sku }] : []),
+            ...(barcode ? [{ barcode }] : []),
+          ],
+        },
+        include: {
+          product: {
+            include: {
+              category: true,
+              brand: true,
+              suppliers: { include: { supplier: true } },
+              stocks: true,
+            },
+          },
+        },
+      });
+      if (variant) return variant.product;
+    }
 
     if (!sku && !barcode) {
       return null;
@@ -7855,6 +8838,12 @@ export class ProductsService {
       companyId,
     );
     const createdProduct = await this.prisma.$transaction(async (tx) => {
+      const dimensions = await this.resolveImportVariantDimensions(
+        tx,
+        row,
+        companyId,
+      );
+      const hasVariantDimensions = Boolean(dimensions.colorId || dimensions.sizeId);
       const product = await tx.product.create({
         data: {
           company: {
@@ -7867,8 +8856,14 @@ export class ProductsService {
             identifiers.sku ||
             identifiers.barcode ||
             `Imported ${Date.now()}`,
-          sku: identifiers.sku,
-          barcode: identifiers.barcode,
+          article: row.article,
+          sku: row.article ?? identifiers.sku,
+          barcode: hasVariantDimensions ? null : identifiers.barcode,
+          gender: row.gender,
+          season: row.season ?? ProductSeason.NO_SEASON,
+          seasonYear: row.seasonYear,
+          collection: row.collection,
+          variantType: hasVariantDimensions ? 'variative' : 'simple',
           purchasePrice: row.supplyPrice,
           salePrice: row.retailPrice,
           quantity: row.quantity,
@@ -7941,6 +8936,28 @@ export class ProductsService {
               salePrice: row.retailPrice,
             },
           },
+          variants: {
+            create: {
+              companyId,
+              colorId: dimensions.colorId,
+              sizeId: dimensions.sizeId,
+              sku: identifiers.sku,
+              barcode: identifiers.barcode,
+              purchasePrice: row.supplyPrice,
+              salePrice: row.retailPrice,
+              isDefault: !hasVariantDimensions,
+              stocks: {
+                create: {
+                  companyId,
+                  shopId,
+                  branchCode,
+                  quantity: row.quantity,
+                  purchasePrice: row.supplyPrice,
+                  salePrice: row.retailPrice,
+                },
+              },
+            },
+          },
         },
       });
 
@@ -7975,6 +8992,64 @@ export class ProductsService {
     });
 
     return createdProduct;
+  }
+
+  private async resolveImportVariantDimensions(
+    tx: Prisma.TransactionClient,
+    row: ImportRowInput,
+    companyId: string,
+  ) {
+    const color = row.colorName
+      ? await tx.productColor.upsert({
+          where: { companyId_name: { companyId, name: row.colorName } },
+          update: {
+            ...(row.colorCode && /^#[0-9a-f]{6}$/i.test(row.colorCode)
+              ? { code: row.colorCode.toUpperCase() }
+              : {}),
+            isActive: true,
+          },
+          create: {
+            companyId,
+            name: row.colorName,
+            code:
+              row.colorCode && /^#[0-9a-f]{6}$/i.test(row.colorCode)
+                ? row.colorCode.toUpperCase()
+                : undefined,
+          },
+          select: { id: true },
+        })
+      : null;
+    const normalizedSizeType = row.sizeType?.trim().toUpperCase();
+    const inferredSizeType =
+      normalizedSizeType === 'SHOES' ||
+      normalizedSizeType === 'CLOTHING' ||
+      normalizedSizeType === 'OTHER'
+        ? normalizedSizeType
+        : row.sizeName && /^\d+(?:[.,]\d+)?$/.test(row.sizeName) &&
+            Number(row.sizeName.replace(',', '.')) >= 35 &&
+            Number(row.sizeName.replace(',', '.')) <= 50
+          ? 'SHOES'
+          : 'CLOTHING';
+    const size = row.sizeName
+      ? await tx.productSize.upsert({
+          where: {
+            companyId_type_name: {
+              companyId,
+              type: inferredSizeType as 'CLOTHING' | 'SHOES' | 'OTHER',
+              name: row.sizeName,
+            },
+          },
+          update: { isActive: true },
+          create: {
+            companyId,
+            name: row.sizeName,
+            type: inferredSizeType as 'CLOTHING' | 'SHOES' | 'OTHER',
+            system: inferredSizeType === 'SHOES' ? 'EU' : undefined,
+          },
+          select: { id: true },
+        })
+      : null;
+    return { colorId: color?.id, sizeId: size?.id };
   }
 
   private async applyImportUpdate(
@@ -8024,6 +9099,76 @@ export class ProductsService {
       )
         ? row.retailPrice
         : previousRetailPrice;
+
+      const dimensions = await this.resolveImportVariantDimensions(
+        tx,
+        row,
+        companyId,
+      );
+      if (dimensions.colorId || dimensions.sizeId) {
+        let variant = await tx.productVariant.findFirst({
+          where: {
+            productId,
+            OR: [
+              ...(row.sku ? [{ sku: row.sku }] : []),
+              ...(row.barcode ? [{ barcode: row.barcode }] : []),
+              {
+                colorId: dimensions.colorId ?? null,
+                sizeId: dimensions.sizeId ?? null,
+              },
+            ],
+          },
+        });
+        if (!variant) {
+          variant = await tx.productVariant.create({
+            data: {
+              companyId,
+              productId,
+              colorId: dimensions.colorId,
+              sizeId: dimensions.sizeId,
+              sku: row.sku,
+              barcode: row.barcode,
+              purchasePrice: appliedSupplyPrice,
+              salePrice: appliedRetailPrice,
+            },
+          });
+          changedFields.push({ field: 'variant', reason: 'new_variant_created' });
+        }
+        const variantStock = await tx.productVariantStock.findUnique({
+          where: { variantId_shopId: { variantId: variant.id, shopId } },
+        });
+        await tx.productVariantStock.upsert({
+          where: { variantId_shopId: { variantId: variant.id, shopId } },
+          create: {
+            companyId,
+            variantId: variant.id,
+            shopId,
+            branchCode,
+            quantity: row.quantity,
+            purchasePrice: appliedSupplyPrice,
+            salePrice: appliedRetailPrice,
+          },
+          update: {
+            quantity: { increment: row.quantity },
+            purchasePrice: appliedSupplyPrice,
+            salePrice: appliedRetailPrice,
+          },
+        });
+        await tx.productVariant.update({
+          where: { id: variant.id },
+          data: {
+            sku: row.sku ?? variant.sku,
+            barcode: row.barcode ?? variant.barcode,
+            purchasePrice: appliedSupplyPrice,
+            salePrice: appliedRetailPrice,
+            isActive: true,
+          },
+        });
+        changedFields.push({
+          field: 'variant_quantity',
+          reason: variantStock ? 'existing_variant_stock_incremented' : 'new_variant_stock_created',
+        });
+      }
 
       if (existingStock) {
         await tx.productStock.update({
@@ -8096,6 +9241,13 @@ export class ProductsService {
           archivedAt: null,
           archivedByUserId: null,
           archivedByName: null,
+          article: row.article ?? existingProduct.article,
+          gender: row.gender ?? existingProduct.gender,
+          season: row.season ?? existingProduct.season,
+          seasonYear: row.seasonYear ?? existingProduct.seasonYear,
+          collection: row.collection ?? existingProduct.collection,
+          variantType:
+            dimensions.colorId || dimensions.sizeId ? 'variative' : undefined,
           metadata: this.buildImportMetadata(
             companyId,
             this.shouldUseFileValue(onMatchPolicy.description)
@@ -8283,11 +9435,11 @@ export class ProductsService {
         skuNumber += 1
       ) {
         const candidate = this.formatSku(prefix, skuNumber);
-        const existing = await this.prisma.product.findFirst({
-          where: { companyId, sku: candidate },
-          select: { id: true },
-        });
-        if (!existing) {
+        const [existingProduct, existingVariant] = await Promise.all([
+          this.prisma.product.findFirst({ where: { companyId, sku: candidate }, select: { id: true } }),
+          this.prisma.productVariant.findFirst({ where: { companyId, sku: candidate }, select: { id: true } }),
+        ]);
+        if (!existingProduct && !existingVariant) {
           sku = candidate;
           break;
         }
@@ -8317,11 +9469,11 @@ export class ProductsService {
         latestPayload !== null ? latestPayload + 1 : BARCODE_PAYLOAD_BASE;
       while (nextPayload <= BARCODE_PAYLOAD_MAX) {
         const candidate = this.formatEan13Barcode(nextPayload);
-        const existing = await this.prisma.product.findFirst({
-          where: { companyId, barcode: candidate },
-          select: { id: true },
-        });
-        if (!existing) {
+        const [existingProduct, existingVariant] = await Promise.all([
+          this.prisma.product.findFirst({ where: { companyId, barcode: candidate }, select: { id: true } }),
+          this.prisma.productVariant.findFirst({ where: { companyId, barcode: candidate }, select: { id: true } }),
+        ]);
+        if (!existingProduct && !existingVariant) {
           barcode = candidate;
           break;
         }
@@ -8982,6 +10134,17 @@ export class ProductsService {
       return normalized;
     }
     return undefined;
+  }
+
+  private resolveProductSeason(value: unknown): ProductSeason {
+    const normalized = this.optionalString(value)?.toUpperCase();
+    if (!normalized || normalized === ProductSeason.NO_SEASON) {
+      return ProductSeason.NO_SEASON;
+    }
+    if (normalized === ProductSeason.SS || normalized === ProductSeason.AW) {
+      return normalized;
+    }
+    throw new BadRequestException('season must be SS, AW or NO_SEASON');
   }
 
   private resolveProductType(value: unknown) {

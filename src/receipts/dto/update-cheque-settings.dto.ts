@@ -6,9 +6,11 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  IsUrl,
   Max,
   Min,
   ValidateNested,
+  ValidateIf,
 } from 'class-validator';
 
 class ChequeBlockPatchDto {
@@ -95,7 +97,9 @@ export class UpdateChequeSettingsDto {
   footer_note?: string;
 
   @IsOptional()
+  @ValidateIf((_object, value) => value !== '')
   @IsString()
+  @IsUrl({ protocols: ['http', 'https'], require_protocol: true })
   qr_code_url?: string;
 
   @IsOptional()

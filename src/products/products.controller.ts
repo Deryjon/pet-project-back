@@ -77,6 +77,124 @@ export class ProductsController {
     return this.productsService.create(body, requestContext);
   }
 
+  @Get('product-colors')
+  @UseGuards(PermissionsGuard)
+  @Permissions('catalog-operations')
+  listProductColors(
+    @Query('include_inactive') includeInactive: string | undefined,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.productsService.listProductColors(requestContext, this.toBoolean(includeInactive));
+  }
+
+  @Post('product-colors')
+  @UseGuards(PermissionsGuard)
+  @Permissions('catalog-operations')
+  createProductColor(
+    @Body() body: Record<string, unknown>,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.productsService.createProductColor(body, requestContext);
+  }
+
+  @Patch('product-colors/:id')
+  @UseGuards(PermissionsGuard)
+  @Permissions('catalog-operations')
+  updateProductColor(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.productsService.updateProductColor(id, body, requestContext);
+  }
+
+  @Delete('product-colors/:id')
+  @UseGuards(PermissionsGuard)
+  @Permissions('catalog-operations')
+  deleteProductColor(
+    @Param('id') id: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.productsService.deleteProductColor(id, requestContext);
+  }
+
+  @Get('product-sizes')
+  @UseGuards(PermissionsGuard)
+  @Permissions('catalog-operations')
+  listProductSizes(
+    @Query('type') type: string | undefined,
+    @Query('include_inactive') includeInactive: string | undefined,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.productsService.listProductSizes(requestContext, {
+      type,
+      includeInactive: this.toBoolean(includeInactive),
+    });
+  }
+
+  @Post('product-sizes')
+  @UseGuards(PermissionsGuard)
+  @Permissions('catalog-operations')
+  createProductSize(
+    @Body() body: Record<string, unknown>,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.productsService.createProductSize(body, requestContext);
+  }
+
+  @Patch('product-sizes/:id')
+  @UseGuards(PermissionsGuard)
+  @Permissions('catalog-operations')
+  updateProductSize(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.productsService.updateProductSize(id, body, requestContext);
+  }
+
+  @Delete('product-sizes/:id')
+  @UseGuards(PermissionsGuard)
+  @Permissions('catalog-operations')
+  deleteProductSize(
+    @Param('id') id: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.productsService.deleteProductSize(id, requestContext);
+  }
+
+  @Get('products/:id/variants')
+  @UseGuards(PermissionsGuard)
+  @Permissions('catalog-operations')
+  listProductVariants(
+    @Param('id') id: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.productsService.listProductVariants(id, requestContext);
+  }
+
+  @Post('products/:id/variants')
+  @UseGuards(PermissionsGuard)
+  @Permissions('catalog-operations')
+  createProductVariant(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.productsService.createProductVariant(id, body, requestContext);
+  }
+
+  @Patch('product-variants/:id')
+  @UseGuards(PermissionsGuard)
+  @Permissions('catalog-operations')
+  updateProductVariant(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.productsService.updateProductVariant(id, body, requestContext);
+  }
+
   @Get('v2/product-characteristic')
   getProductCharacteristics(@Query('limit') limit?: string) {
     return this.productsService.getProductCharacteristics(limit);
@@ -326,6 +444,13 @@ export class ProductsController {
     @Query('wholesale_price_to') wholesalePriceTo: string | undefined,
     @Query('wholesale_price') wholesalePrice: string | undefined,
     @Query('free_price') freePrice: string | undefined,
+    @Query('color_ids') colorIds: string | string[] | undefined,
+    @Query('size_ids') sizeIds: string | string[] | undefined,
+    @Query('season') season: string | undefined,
+    @Query('season_year') seasonYear: string | undefined,
+    @Query('gender') gender: string | undefined,
+    @Query('collection') collection: string | undefined,
+    @Query('stock_state') stockState: string | undefined,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.findAllV2Extended(
@@ -351,6 +476,13 @@ export class ProductsController {
         wholesalePriceTo: this.toNumber(wholesalePriceTo),
         wholesalePrice: this.toNumber(wholesalePrice),
         freePrice: this.toOptionalBoolean(freePrice),
+        colorIds: this.toStringArray(colorIds),
+        sizeIds: this.toStringArray(sizeIds),
+        season: season?.trim(),
+        seasonYear: this.toNumber(seasonYear),
+        gender: gender?.trim(),
+        collection: collection?.trim(),
+        stockState: stockState === 'in_stock' || stockState === 'out_of_stock' ? stockState : undefined,
       },
       requestContext,
     );
@@ -378,6 +510,13 @@ export class ProductsController {
     @Query('wholesale_price_to') wholesalePriceTo: string | undefined,
     @Query('wholesale_price') wholesalePrice: string | undefined,
     @Query('free_price') freePrice: string | undefined,
+    @Query('color_ids') colorIds: string | string[] | undefined,
+    @Query('size_ids') sizeIds: string | string[] | undefined,
+    @Query('season') season: string | undefined,
+    @Query('season_year') seasonYear: string | undefined,
+    @Query('gender') gender: string | undefined,
+    @Query('collection') collection: string | undefined,
+    @Query('stock_state') stockState: string | undefined,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.getCatalogStatistics(
@@ -399,6 +538,13 @@ export class ProductsController {
         wholesalePriceTo: this.toNumber(wholesalePriceTo),
         wholesalePrice: this.toNumber(wholesalePrice),
         freePrice: this.toOptionalBoolean(freePrice),
+        colorIds: this.toStringArray(colorIds),
+        sizeIds: this.toStringArray(sizeIds),
+        season: season?.trim(),
+        seasonYear: this.toNumber(seasonYear),
+        gender: gender?.trim(),
+        collection: collection?.trim(),
+        stockState: stockState === 'in_stock' || stockState === 'out_of_stock' ? stockState : undefined,
       },
       requestContext,
     );
@@ -459,6 +605,16 @@ export class ProductsController {
         wholesalePriceTo: this.toNumber(body.wholesale_price_to),
         wholesalePrice: this.toNumber(body.wholesale_price),
         freePrice: this.toOptionalBoolean(body.free_price),
+        colorIds: this.toStringArray(body.color_ids),
+        sizeIds: this.toStringArray(body.size_ids),
+        season: this.toOptionalString(body.season),
+        seasonYear: this.toNumber(body.season_year),
+        gender: this.toOptionalString(body.gender),
+        collection: this.toOptionalString(body.collection),
+        stockState:
+          body.stock_state === 'in_stock' || body.stock_state === 'out_of_stock'
+            ? body.stock_state
+            : undefined,
       },
       requestContext,
     );
@@ -633,6 +789,13 @@ export class ProductsController {
         wholesalePriceTo: this.toNumber(body.wholesale_price_to),
         wholesalePrice: this.toNumber(body.wholesale_price),
         freePrice: this.toOptionalBoolean(body.free_price),
+        colorIds: this.toStringArray(body.color_ids),
+        sizeIds: this.toStringArray(body.size_ids),
+        season: this.toOptionalString(body.season),
+        seasonYear: this.toNumber(body.season_year),
+        gender: this.toOptionalString(body.gender),
+        collection: this.toOptionalString(body.collection),
+        stockState: body.stock_state === 'in_stock' || body.stock_state === 'out_of_stock' ? body.stock_state : undefined,
       },
       requestContext,
     );
@@ -667,6 +830,13 @@ export class ProductsController {
         wholesalePriceTo: this.toNumber(body.wholesale_price_to),
         wholesalePrice: this.toNumber(body.wholesale_price),
         freePrice: this.toOptionalBoolean(body.free_price),
+        colorIds: this.toStringArray(body.color_ids),
+        sizeIds: this.toStringArray(body.size_ids),
+        season: this.toOptionalString(body.season),
+        seasonYear: this.toNumber(body.season_year),
+        gender: this.toOptionalString(body.gender),
+        collection: this.toOptionalString(body.collection),
+        stockState: body.stock_state === 'in_stock' || body.stock_state === 'out_of_stock' ? body.stock_state : undefined,
       },
       requestContext,
     );

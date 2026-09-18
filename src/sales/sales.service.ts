@@ -145,7 +145,7 @@ export class SalesService {
     const dateFilter: Record<string, unknown>[] = [];
     const startDate = this.parseDateOnly(query.start_date ?? query.date);
     if (startDate) {
-      const endDate = new Date(startDate);
+      const endDate = this.parseDateOnly(query.end_date) ?? new Date(startDate);
       endDate.setDate(endDate.getDate() + 1);
       dateFilter.push({ createdAt: { gte: startDate, lt: endDate } });
     }
@@ -628,6 +628,20 @@ export class SalesService {
           { name: { contains: args.search, mode: 'insensitive' as const } },
           { sku: { contains: args.search, mode: 'insensitive' as const } },
           { barcode: { contains: args.search, mode: 'insensitive' as const } },
+          { article: { contains: args.search, mode: 'insensitive' as const } },
+          {
+            variants: {
+              some: {
+                isActive: true,
+                OR: [
+                  { sku: { contains: args.search, mode: 'insensitive' as const } },
+                  { barcode: { contains: args.search, mode: 'insensitive' as const } },
+                  { color: { name: { contains: args.search, mode: 'insensitive' as const } } },
+                  { size: { name: { contains: args.search, mode: 'insensitive' as const } } },
+                ],
+              },
+            },
+          },
         ],
       });
     }
@@ -676,6 +690,11 @@ export class SalesService {
           category: true,
           brand: true,
           stocks: true,
+          variants: {
+            where: { isActive: true, isDefault: false },
+            include: { color: true, size: true, stocks: true },
+            orderBy: { createdAt: 'asc' },
+          },
         },
         orderBy: {
           id: 'desc',
@@ -687,8 +706,12 @@ export class SalesService {
 
     const currencyCode =
       this.companySettingsService.getDefaultCurrencyIsoCode();
-    const normalizedProducts = products.map((product) =>
-      this.toNewSaleProductResponse(product, branchCode, context),
+    const normalizedProducts = products.flatMap((product) =>
+      product.variants?.length
+        ? product.variants.map((variant) =>
+            this.toNewSaleVariantResponse(product, variant, branchCode, context),
+          )
+        : [this.toNewSaleProductResponse(product, branchCode, context)],
     );
     const totals = normalizedProducts.reduce(
       (acc, product) => {
@@ -832,8 +855,11 @@ export class SalesService {
       context?.companyId,
     );
 
+    const hasDebtComponent = Boolean(
+      this.parseDebtPayload(body, this.getSalePayableAmount(recalculatedSale)),
+    );
     const extraPayments =
-      paymentsInput.length > 1
+      paymentsInput.length > 1 || (hasDebtComponent && paymentsInput.length > 0)
         ? await Promise.all(
             paymentsInput.map(async (p) => {
               const methodId = this.optionalString(
@@ -1091,6 +1117,11 @@ export class SalesService {
       );
       await this.syncProductsQuantity(returnItems, tx);
       await this.refreshBaseSaleStatus(originalSale.id, tx);
+      await this.applyReturnCreditToDebt(
+        tx,
+        originalSale,
+        Number(createdReturnSale.payableTotal ?? 0),
+      );
 
       return createdReturnSale;
     });
@@ -1193,6 +1224,15 @@ export class SalesService {
         );
         await this.syncProductsQuantity([...returnItems, ...exchangeItems], tx);
         await this.refreshBaseSaleStatus(originalSale.id, tx);
+        await this.applyReturnCreditToDebt(
+          tx,
+          originalSale,
+          Math.max(
+            0,
+            Number(createdReturnSale.payableTotal ?? 0) -
+              Number(createdExchangeSale.payableTotal ?? 0),
+          ),
+        );
 
         return {
           returnSale: createdReturnSale,
@@ -1239,6 +1279,7 @@ export class SalesService {
   ) {
     const context = await this.getRequestContext(requestContext);
     const productId = this.toInt(body.product_id);
+    const variantId = this.optionalString(body.variant_id);
     const quantity = this.toNumber(body.quantity) ?? 1;
     const salePrice = this.toNumber(body.sale_price);
 
@@ -1269,10 +1310,30 @@ export class SalesService {
       throw new NotFoundException('Product not found');
     }
 
+    const variant = variantId
+      ? await this.prisma.productVariant.findFirst({
+          where: {
+            id: variantId,
+            productId,
+            companyId: context.companyId,
+            isActive: true,
+          },
+          include: { color: true, size: true },
+        })
+      : null;
+    if (variantId && !variant) {
+      throw new NotFoundException('Product variant not found');
+    }
+    const itemPurchasePrice = variant?.purchasePrice ?? product.purchasePrice ?? 0;
+    const itemName = variant
+      ? `${product.name} — ${[variant.color?.name, variant.size?.name].filter(Boolean).join(' / ')}`
+      : product.name;
+
     const existingItem = await this.prisma.saleItem.findFirst({
       where: {
         saleId: id,
         productId,
+        variantId: variantId ?? null,
       },
     });
 
@@ -1287,13 +1348,13 @@ export class SalesService {
           lineTotal: newQuantity * salePrice,
           retailPriceAtSale: newQuantity * salePrice,
           finalPrice: newQuantity * salePrice,
-          supplyPriceAtSale: newQuantity * (product.purchasePrice ?? 0),
+          supplyPriceAtSale: newQuantity * itemPurchasePrice,
           profitAtSale:
             newQuantity * salePrice -
-            newQuantity * (product.purchasePrice ?? 0),
+            newQuantity * itemPurchasePrice,
           markupAtSale:
-            product.purchasePrice && product.purchasePrice > 0
-              ? salePrice / product.purchasePrice
+            itemPurchasePrice > 0
+              ? salePrice / itemPurchasePrice
               : null,
         },
       });
@@ -1302,21 +1363,22 @@ export class SalesService {
         data: {
           saleId: id,
           productId,
-          name: product.name,
-          barcode: product.barcode,
-          sku: product.sku,
+          variantId,
+          name: itemName,
+          barcode: variant?.barcode ?? product.barcode,
+          sku: variant?.sku ?? product.sku,
           quantity,
           sellerId: sale.userId ?? undefined,
           salePrice,
           lineTotal: quantity * salePrice,
           retailPriceAtSale: quantity * salePrice,
           finalPrice: quantity * salePrice,
-          supplyPriceAtSale: quantity * (product.purchasePrice ?? 0),
+          supplyPriceAtSale: quantity * itemPurchasePrice,
           profitAtSale:
-            quantity * salePrice - quantity * (product.purchasePrice ?? 0),
+            quantity * salePrice - quantity * itemPurchasePrice,
           markupAtSale:
-            product.purchasePrice && product.purchasePrice > 0
-              ? salePrice / product.purchasePrice
+            itemPurchasePrice > 0
+              ? salePrice / itemPurchasePrice
               : null,
         },
       });
@@ -1554,8 +1616,11 @@ export class SalesService {
       context?.companyId,
     );
 
+    const hasDebtComponent = Boolean(
+      this.parseDebtPayload(body, this.getSalePayableAmount(recalculatedSale)),
+    );
     const extraPayments =
-      paymentsInput.length > 1
+      paymentsInput.length > 1 || (hasDebtComponent && paymentsInput.length > 0)
         ? await Promise.all(
             paymentsInput.map(async (p) => {
               const methodId = this.optionalString(
@@ -2169,6 +2234,7 @@ export class SalesService {
       items: Array<{
         id: number;
         productId: number | null;
+        variantId?: string | null;
         name: string;
         barcode: string | null;
         sku: string | null;
@@ -2193,6 +2259,7 @@ export class SalesService {
       await this.getReturnableQuantities(originalSale);
     const normalizedItems: Array<{
       productId: number;
+      variantId?: string | null;
       name: string;
       barcode: string | null;
       sku: string | null;
@@ -2211,6 +2278,8 @@ export class SalesService {
 
       const record = rawItem as Record<string, unknown>;
       const productId = this.toInt(record.product_id) ?? this.toInt(record.id);
+      const variantId = this.optionalString(record.variant_id);
+      const requestedVariantId = this.optionalString(record.variant_id);
       const quantity = this.toNumber(record.quantity);
 
       if (!productId || !quantity || quantity <= 0) {
@@ -2220,7 +2289,9 @@ export class SalesService {
       }
 
       const originalItem = originalSale.items.find(
-        (item) => item.productId === productId,
+        (item) =>
+          item.productId === productId &&
+          (!requestedVariantId || item.variantId === requestedVariantId),
       );
 
       if (!originalItem) {
@@ -2229,9 +2300,15 @@ export class SalesService {
         );
       }
 
-      const availableQuantity = returnableQuantities.get(productId) ?? 0;
+      const returnKey = requestedVariantId ?? `product:${productId}`;
+      const availableQuantity =
+        returnableQuantities.get(returnKey) ??
+        (returnableQuantities as unknown as Map<number, number>).get(productId) ??
+        0;
       const alreadyRequestedQuantity =
-        normalizedItems.find((item) => item.productId === productId)
+        normalizedItems.find(
+          (item) => item.productId === productId && item.variantId === requestedVariantId,
+        )
           ?.quantity ?? 0;
 
       if (alreadyRequestedQuantity + quantity > availableQuantity) {
@@ -2248,6 +2325,7 @@ export class SalesService {
           : Number(originalItem.salePrice);
       normalizedItems.push({
         productId,
+        variantId: originalItem.variantId,
         name: originalItem.name,
         barcode: originalItem.barcode,
         sku: originalItem.sku,
@@ -2275,6 +2353,7 @@ export class SalesService {
 
     const normalizedItems: Array<{
       productId: number;
+      variantId?: string | null;
       name: string;
       barcode: string | null;
       sku: string | null;
@@ -2293,6 +2372,7 @@ export class SalesService {
 
       const record = rawItem as Record<string, unknown>;
       const productId = this.toInt(record.product_id) ?? this.toInt(record.id);
+      const variantId = this.optionalString(record.variant_id);
       const quantity = this.toNumber(record.quantity);
 
       if (!productId || !quantity || quantity <= 0) {
@@ -2309,18 +2389,25 @@ export class SalesService {
         throw new NotFoundException(`Product ${productId} not found`);
       }
 
-      const stock = originalSale.branchCode
-        ? await this.prisma.productStock.findFirst({
-            where: {
-              productId,
-              branchCode: originalSale.branchCode,
-            },
+      const variant = variantId
+        ? await this.prisma.productVariant.findFirst({
+            where: { id: variantId, productId, companyId: context.companyId, isActive: true },
+            include: { color: true, size: true },
           })
+        : null;
+      if (variantId && !variant) {
+        throw new NotFoundException(`Product variant ${variantId} not found`);
+      }
+
+      const stock = originalSale.branchCode
+        ? variantId
+          ? await this.prisma.productVariantStock.findFirst({ where: { variantId, branchCode: originalSale.branchCode } })
+          : await this.prisma.productStock.findFirst({ where: { productId, branchCode: originalSale.branchCode } })
         : null;
 
       const requestedSalePrice = this.toNumber(record.sale_price);
       const retailUnitPrice = Number(
-        stock?.salePrice ?? product.salePrice ?? 0,
+        stock?.salePrice ?? variant?.salePrice ?? product.salePrice ?? 0,
       );
       const salePrice = requestedSalePrice ?? retailUnitPrice;
 
@@ -2358,9 +2445,12 @@ export class SalesService {
 
       normalizedItems.push({
         productId,
-        name: product.name,
-        barcode: product.barcode,
-        sku: product.sku,
+        variantId,
+        name: variant
+          ? `${product.name} — ${[variant.color?.name, variant.size?.name].filter(Boolean).join(' / ')}`
+          : product.name,
+        barcode: variant?.barcode ?? product.barcode,
+        sku: variant?.sku ?? product.sku,
         quantity,
         salePrice,
         lineTotal: Number((quantity * salePrice).toFixed(2)),
@@ -2377,7 +2467,7 @@ export class SalesService {
 
   private async getReturnableQuantities(originalSale: {
     id: number;
-    items: Array<{ productId: number | null; quantity: number }>;
+    items: Array<{ productId: number | null; variantId?: string | null; quantity: number }>;
   }) {
     const returns = await this.prisma.sale.findMany({
       where: {
@@ -2389,30 +2479,26 @@ export class SalesService {
       },
     });
 
-    const returnedMap = new Map<number, number>();
+    const returnedMap = new Map<string, number>();
     for (const returnSale of returns) {
       for (const item of returnSale.items) {
         if (!item.productId) {
           continue;
         }
 
-        returnedMap.set(
-          item.productId,
-          (returnedMap.get(item.productId) ?? 0) + Number(item.quantity),
-        );
+        const key = item.variantId ?? `product:${item.productId}`;
+        returnedMap.set(key, (returnedMap.get(key) ?? 0) + Number(item.quantity));
       }
     }
 
-    const returnableMap = new Map<number, number>();
+    const returnableMap = new Map<string, number>();
     for (const item of originalSale.items) {
       if (!item.productId) {
         continue;
       }
 
-      returnableMap.set(
-        item.productId,
-        Number(item.quantity) - (returnedMap.get(item.productId) ?? 0),
-      );
+      const key = item.variantId ?? `product:${item.productId}`;
+      returnableMap.set(key, Number(item.quantity) - (returnedMap.get(key) ?? 0));
     }
 
     return returnableMap;
@@ -2425,6 +2511,7 @@ export class SalesService {
       status: string;
       items: Array<{
         productId: number;
+        variantId?: string | null;
         name: string;
         barcode: string | null;
         sku: string | null;
@@ -2478,6 +2565,7 @@ export class SalesService {
         items: {
           create: args.items.map((item) => ({
             productId: item.productId,
+            variantId: item.variantId,
             name: item.name,
             barcode: item.barcode,
             sku: item.sku,
@@ -2522,7 +2610,7 @@ export class SalesService {
 
   private async applyStockDelta(
     branchCode: string | null,
-    items: Array<{ productId: number; quantity: number; salePrice: number }>,
+    items: Array<{ productId: number; variantId?: string | null; quantity: number; salePrice: number }>,
     multiplier: 1 | -1,
     meta?: {
       companyId?: string | null;
@@ -2546,6 +2634,40 @@ export class SalesService {
     }
 
     for (const item of items) {
+      if (item.variantId) {
+        if (multiplier === -1) {
+          const claimed = await tx.productVariantStock.updateMany({
+            where: {
+              variantId: item.variantId,
+              shopId,
+              branchCode,
+              quantity: { gte: item.quantity },
+            },
+            data: { quantity: { decrement: item.quantity } },
+          });
+          if (claimed.count !== 1) {
+            throw new ConflictException('Недостаточно остатка выбранного варианта');
+          }
+        } else if (meta?.companyId) {
+          const variant = await tx.productVariant.findUnique({
+            where: { id: item.variantId },
+            select: { purchasePrice: true, salePrice: true },
+          });
+          await tx.productVariantStock.upsert({
+            where: { variantId_shopId: { variantId: item.variantId, shopId } },
+            create: {
+              companyId: meta.companyId,
+              variantId: item.variantId,
+              shopId,
+              branchCode,
+              quantity: item.quantity,
+              purchasePrice: variant?.purchasePrice ?? 0,
+              salePrice: item.salePrice ?? variant?.salePrice ?? 0,
+            },
+            update: { quantity: { increment: item.quantity } },
+          });
+        }
+      }
       if (multiplier === -1) {
         if (!meta?.companyId || !meta.userId || meta.movementType !== 'SALE') {
           throw new InternalServerErrorException(
@@ -2991,6 +3113,7 @@ export class SalesService {
       branchCode: string | null;
       items: {
         productId: number | null;
+        variantId?: string | null;
         quantity: Prisma.Decimal | number;
         salePrice: Prisma.Decimal | number;
       }[];
@@ -3044,6 +3167,24 @@ export class SalesService {
       for (const item of sale.items) {
         if (!item.productId) {
           continue;
+        }
+
+        if (item.variantId) {
+          const claimedVariantStock = await tx.productVariantStock.updateMany({
+            where: {
+              variantId: item.variantId,
+              shopId,
+              branchCode,
+              companyId,
+              quantity: { gte: item.quantity },
+            },
+            data: { quantity: { decrement: item.quantity } },
+          });
+          if (claimedVariantStock.count !== 1) {
+            throw new ConflictException(
+              `Недостаточно остатка выбранного варианта товара ${item.productId}`,
+            );
+          }
         }
 
         const posting = await postSaleStockDecrease(tx, {
@@ -3158,6 +3299,7 @@ export class SalesService {
     branchCode: string | null;
     items: Array<{
       productId: number | null;
+      variantId?: string | null;
       quantity: Prisma.Decimal | number;
       salePrice: Prisma.Decimal | number;
       product?: {
@@ -3203,6 +3345,24 @@ export class SalesService {
       for (const item of sale.items) {
         if (!item.productId) {
           continue;
+        }
+
+        if (item.variantId) {
+          await tx.productVariantStock.upsert({
+            where: {
+              variantId_shopId: { variantId: item.variantId, shopId },
+            },
+            create: {
+              companyId,
+              variantId: item.variantId,
+              shopId,
+              branchCode,
+              quantity: item.quantity,
+              purchasePrice: item.product?.purchasePrice ?? 0,
+              salePrice: item.salePrice,
+            },
+            update: { quantity: { increment: item.quantity } },
+          });
         }
 
         const stock = await tx.productStock.findFirst({
@@ -3583,6 +3743,7 @@ export class SalesService {
       items: {
         id: number;
         productId: number | null;
+        variantId?: string | null;
         name: string;
         salePrice: Prisma.Decimal | number;
         barcode: string | null;
@@ -3615,6 +3776,7 @@ export class SalesService {
       items: sale.items.map((item) => ({
         id: item.id,
         product_id: item.productId,
+        variant_id: item.variantId,
         product:
           item.productId && item.product
             ? {
@@ -3665,6 +3827,7 @@ export class SalesService {
       items: {
         id: number;
         productId: number | null;
+        variantId?: string | null;
         name: string;
         salePrice: Prisma.Decimal | number;
         quantity: Prisma.Decimal | number;
@@ -3753,7 +3916,7 @@ export class SalesService {
       client_name: sale.clientName,
       extra_payments:
         Array.isArray(sale.extraPayments) &&
-        (sale.extraPayments as unknown[]).length > 1
+        (sale.extraPayments as unknown[]).length > 0
           ? (
               sale.extraPayments as Array<{
                 payment_method: string;
@@ -4042,7 +4205,7 @@ export class SalesService {
           if (sale.isDraft || !sale.paymentMethod) return [];
           const extraPaymentsRaw = (sale as any).extraPayments;
           const extraList: Array<{ payment_method: string; amount: number }> =
-            Array.isArray(extraPaymentsRaw) && extraPaymentsRaw.length > 1
+            Array.isArray(extraPaymentsRaw) && extraPaymentsRaw.length > 0
               ? (extraPaymentsRaw as any[]).filter(
                   (p) =>
                     p &&
@@ -4432,6 +4595,52 @@ export class SalesService {
     };
   }
 
+  private toNewSaleVariantResponse(
+    product: Parameters<SalesService['toNewSaleProductResponse']>[0],
+    variant: {
+      id: string;
+      sku: string | null;
+      barcode: string | null;
+      purchasePrice: number | null;
+      salePrice: number | null;
+      color: { id: string; name: string } | null;
+      size: { id: string; name: string } | null;
+      stocks: Array<{
+        branchCode: string;
+        quantity: number;
+        purchasePrice: number | null;
+        salePrice: number | null;
+      }>;
+    },
+    branchCode?: string,
+    context?: any,
+  ) {
+    const label = [variant.color?.name, variant.size?.name]
+      .filter(Boolean)
+      .join(' / ');
+    const response = this.toNewSaleProductResponse(
+      {
+        ...product,
+        name: label ? `${product.name} — ${label}` : product.name,
+        sku: variant.sku,
+        barcode: variant.barcode,
+        purchasePrice: variant.purchasePrice ?? product.purchasePrice,
+        salePrice: variant.salePrice ?? product.salePrice,
+        stocks: variant.stocks,
+      },
+      branchCode,
+      context,
+    );
+    return {
+      ...response,
+      product_id: String(product.id),
+      variant_id: variant.id,
+      base_name: product.name,
+      color: variant.color,
+      size: variant.size,
+    };
+  }
+
   private generateOrderNumber() {
     return Date.now().toString().slice(-12);
   }
@@ -4485,33 +4694,36 @@ export class SalesService {
     payableTotal: number,
     body: Record<string, unknown>,
   ) {
-    if (!payments.length) {
-      return;
-    }
-
     const amounts = payments.map((payment) => Number(payment.amount));
     if (amounts.some((amount) => !Number.isFinite(amount) || amount <= 0)) {
       throw new BadRequestException(
         'Each payment amount must be greater than zero',
       );
     }
+    if (amounts.some((amount) => Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-8)) {
+      throw new BadRequestException('Payment amounts cannot contain fractions smaller than 0.01');
+    }
 
-    const paidTotal = Number(
-      amounts.reduce((sum, amount) => sum + amount, 0).toFixed(2),
-    );
     const expectedTotal = Number(Math.max(0, payableTotal).toFixed(2));
-    const hasDebt =
-      (body.debt && typeof body.debt === 'object') ||
-      body.debt_amount !== undefined ||
-      body.debt_amount_uzs !== undefined;
+    const debt = this.parseDebtPayload(body, expectedTotal);
+    const debtAmount = Number(debt?.amount ?? 0);
+    const paidMinor = amounts.reduce((sum, amount) => sum + Math.round(amount * 100), 0);
+    const debtMinor = Math.round(debtAmount * 100);
+    const expectedMinor = Math.round(expectedTotal * 100);
 
-    if (paidTotal > expectedTotal + 0.01) {
+    if (paidMinor > expectedMinor) {
       throw new BadRequestException(
         'Payments total cannot exceed the sale payable total',
       );
     }
 
-    if (!hasDebt && Math.abs(paidTotal - expectedTotal) > 0.01) {
+    if (debt && paidMinor + debtMinor !== expectedMinor) {
+      throw new BadRequestException(
+        'Payments total plus debt must equal the sale payable total',
+      );
+    }
+
+    if (!debt && payments.length && paidMinor !== expectedMinor) {
       throw new BadRequestException(
         'Payments total must equal the sale payable total',
       );
@@ -4724,7 +4936,7 @@ export class SalesService {
       }
 
       const extraPayments = this.normalizeExtraPayments(sale.extraPayments);
-      if (extraPayments.length > 1) {
+      if (extraPayments.length > 0) {
         payments.set('mixed', 'Смешанная оплата');
       }
 
@@ -4768,7 +4980,7 @@ export class SalesService {
     const extraPayments = this.normalizeExtraPayments(sale.extraPayments);
 
     if (normalizedPaymentFilter === 'mixed') {
-      return extraPayments.length > 1;
+      return extraPayments.length > 0;
     }
 
     const paymentIds =
@@ -5009,7 +5221,7 @@ export class SalesService {
 
     const startDate = this.parseDateOnly(query.start_date);
     if (startDate) {
-      const endDate = new Date(startDate);
+      const endDate = this.parseDateOnly(query.end_date) ?? new Date(startDate);
       endDate.setDate(endDate.getDate() + 1);
       andFilters.push({
         createdAt: {
@@ -5128,6 +5340,61 @@ export class SalesService {
     });
   }
 
+  private async applyReturnCreditToDebt(
+    tx: Prisma.TransactionClient,
+    originalSale: { id: number; companyId?: string | null; clientId?: string | null },
+    creditAmount: number,
+  ) {
+    const creditMinor = Math.max(0, Math.round(creditAmount * 100));
+    if (!creditMinor || !originalSale.clientId || !originalSale.companyId) return 0;
+
+    const debts = await tx.clientDebt.findMany({
+      where: {
+        companyId: originalSale.companyId,
+        clientId: originalSale.clientId,
+        saleId: originalSale.id,
+        remainingAmountUzs: { gt: 0 },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    let remainingCredit = creditMinor;
+    for (const debt of debts) {
+      if (remainingCredit <= 0) break;
+      const remainingMinor = Math.round(Number(debt.remainingAmountUzs) * 100);
+      const amountMinor = Math.round(Number(debt.amountUzs) * 100);
+      const appliedMinor = Math.min(remainingCredit, remainingMinor);
+      const nextRemainingMinor = remainingMinor - appliedMinor;
+      const nextAmountMinor = Math.max(
+        Math.round(Number(debt.repaidAmountUzs) * 100),
+        amountMinor - appliedMinor,
+      );
+      await tx.clientDebt.update({
+        where: { id: debt.id },
+        data: {
+          amountUzs: new Prisma.Decimal(nextAmountMinor / 100),
+          remainingAmountUzs: new Prisma.Decimal(nextRemainingMinor / 100),
+          status:
+            nextRemainingMinor === 0
+              ? ClientDebtStatus.paid
+              : Number(debt.repaidAmountUzs) > 0
+                ? ClientDebtStatus.partial
+                : ClientDebtStatus.unpaid,
+        },
+      });
+      remainingCredit -= appliedMinor;
+    }
+
+    const aggregate = await tx.clientDebt.aggregate({
+      where: { companyId: originalSale.companyId, clientId: originalSale.clientId },
+      _sum: { remainingAmountUzs: true },
+    });
+    await tx.client.update({
+      where: { id: originalSale.clientId },
+      data: { debtUzs: aggregate._sum.remainingAmountUzs ?? new Prisma.Decimal(0) },
+    });
+    return (creditMinor - remainingCredit) / 100;
+  }
+
   private async refreshClientSalesAggregates(
     tx: Prisma.TransactionClient,
     companyId?: string | null,
@@ -5221,6 +5488,9 @@ export class SalesService {
     }
     if (resolvedAmount > saleAmount) {
       throw new BadRequestException('Debt amount cannot exceed sale total');
+    }
+    if (Math.abs(resolvedAmount * 100 - Math.round(resolvedAmount * 100)) > 1e-8) {
+      throw new BadRequestException('Debt amount cannot contain fractions smaller than 0.01');
     }
 
     return {

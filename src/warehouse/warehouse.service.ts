@@ -207,6 +207,7 @@ export class WarehouseService {
         },
         items: {
           include: {
+            variant: { include: { color: true, size: true } },
             product: {
               select: { id: true, name: true, sku: true, barcode: true },
             },
@@ -221,9 +222,12 @@ export class WarehouseService {
       items: session.items.map((item) => ({
         id: item.id,
         productId: item.productId,
-        productName: item.product?.name ?? '',
-        sku: item.product?.sku ?? '',
-        barcode: item.product?.barcode ?? '',
+        variantId: item.variantId,
+        productName: item.variant
+          ? `${item.product?.name ?? ''} — ${[item.variant.color?.name, item.variant.size?.name].filter(Boolean).join(' / ')}`
+          : item.product?.name ?? '',
+        sku: item.variant?.sku ?? item.product?.sku ?? '',
+        barcode: item.variant?.barcode ?? item.product?.barcode ?? '',
         expectedQuantity: item.expectedQuantity,
         actualQuantity: item.actualQuantity,
         difference: item.difference,
@@ -281,6 +285,7 @@ export class WarehouseService {
       throw new BadRequestException('Session is not in draft status');
 
     const productId = Number(body.product_id);
+    const variantId = String(body.variant_id ?? '').trim() || null;
     if (!Number.isInteger(productId) || productId <= 0)
       throw new BadRequestException('product_id is invalid');
     const actualQuantity = Number(body.actual_quantity ?? 0);
@@ -291,49 +296,65 @@ export class WarehouseService {
       select: { id: true },
     });
     if (!product) throw new NotFoundException('Product not found');
+    const variant = variantId
+      ? await this.db.productVariant.findFirst({
+          where: { id: variantId, productId, companyId: context.companyId, isActive: true },
+          include: { color: true, size: true },
+        })
+      : null;
+    if (variantId && !variant) throw new NotFoundException('Product variant not found');
 
     const shop = await this.db.shop.findUnique({
       where: { id: session.shopId },
       select: { branchCode: true },
     });
-    const stock = await this.db.productStock.findFirst({
-      where: {
-        productId,
-        branchCode: shop?.branchCode ?? '',
-      },
-    });
+    const stock = variantId
+      ? await this.db.productVariantStock.findFirst({
+          where: { variantId, branchCode: shop?.branchCode ?? '' },
+        })
+      : await this.db.productStock.findFirst({
+          where: { productId, branchCode: shop?.branchCode ?? '' },
+        });
     const expectedQuantity = stock?.quantity ?? 0;
 
-    const item = await this.db.inventoryItem.upsert({
-      where: {
-        inventorySessionId_productId: {
-          inventorySessionId: sessionId,
-          productId,
-        },
-      },
-      update: {
-        actualQuantity,
-        difference: actualQuantity - expectedQuantity,
-        expectedQuantity,
-      },
-      create: {
-        inventorySessionId: sessionId,
-        productId,
-        expectedQuantity,
-        actualQuantity,
-        difference: actualQuantity - expectedQuantity,
-      },
-      include: {
-        product: {
-          select: { id: true, name: true, sku: true, barcode: true },
-        },
-      },
+    const existingItem = await this.db.inventoryItem.findFirst({
+      where: { inventorySessionId: sessionId, productId, variantId },
     });
+    const item = existingItem
+      ? await this.db.inventoryItem.update({
+          where: { id: existingItem.id },
+          data: {
+            actualQuantity,
+            difference: actualQuantity - expectedQuantity,
+            expectedQuantity,
+          },
+          include: {
+            product: { select: { id: true, name: true, sku: true, barcode: true } },
+            variant: { include: { color: true, size: true } },
+          },
+        })
+      : await this.db.inventoryItem.create({
+          data: {
+            inventorySessionId: sessionId,
+            productId,
+            variantId,
+            expectedQuantity,
+            actualQuantity,
+            difference: actualQuantity - expectedQuantity,
+          },
+          include: {
+            product: { select: { id: true, name: true, sku: true, barcode: true } },
+            variant: { include: { color: true, size: true } },
+          },
+        });
 
     return {
       id: item.id,
       productId: item.productId,
-      productName: item.product?.name,
+      variantId: item.variantId,
+      productName: item.variant
+        ? `${item.product?.name ?? ''} — ${[item.variant.color?.name, item.variant.size?.name].filter(Boolean).join(' / ')}`
+        : item.product?.name,
       expectedQuantity: item.expectedQuantity,
       actualQuantity: item.actualQuantity,
       difference: item.difference,
@@ -406,11 +427,77 @@ export class WarehouseService {
         }
 
         const stock = stocks[0];
-        const beforeQuantity = Number(stock?.quantity ?? 0);
-        if (stock) {
+        let beforeQuantity = Number(stock?.quantity ?? 0);
+        let afterQuantity = item.actualQuantity;
+        let difference = item.actualQuantity - beforeQuantity;
+
+        if (item.variantId) {
+          const variant = await tx.productVariant.findFirst({
+            where: {
+              id: item.variantId,
+              productId: item.productId,
+              companyId: context.companyId,
+              isActive: true,
+            },
+            select: { id: true },
+          });
+          if (!variant) throw new NotFoundException('Product variant not found');
+
+          const variantStocks = await tx.productVariantStock.findMany({
+            where: { variantId: item.variantId, branchCode },
+            orderBy: { id: 'asc' },
+            take: 2,
+          });
+          if (variantStocks.length > 1) {
+            throw new ConflictException(
+              'Duplicate variant stock rows must be repaired before inventory',
+            );
+          }
+          const variantStock = variantStocks[0];
+          beforeQuantity = Number(variantStock?.quantity ?? 0);
+          afterQuantity = item.actualQuantity;
+          difference = afterQuantity - beforeQuantity;
+
+          if (variantStock) {
+            await tx.productVariantStock.update({
+              where: { id: variantStock.id },
+              data: { quantity: afterQuantity, shopId: session.shopId },
+            });
+          } else {
+            await tx.productVariantStock.create({
+              data: {
+                variantId: item.variantId,
+                companyId: context.companyId,
+                shopId: session.shopId,
+                branchCode,
+                quantity: afterQuantity,
+              },
+            });
+          }
+
+          const aggregateAfter = Number(stock?.quantity ?? 0) + difference;
+          if (aggregateAfter < 0) {
+            throw new ConflictException('Aggregate product stock would become negative');
+          }
+          if (stock) {
+            await tx.productStock.update({
+              where: { id: stock.id },
+              data: { quantity: aggregateAfter },
+            });
+          } else {
+            await tx.productStock.create({
+              data: {
+                productId: item.productId,
+                shopId: session.shopId,
+                branchCode,
+                quantity: aggregateAfter,
+              },
+            });
+          }
+        } else if (stock) {
           await tx.productStock.update({
             where: { id: stock.id },
-            data: { quantity: item.actualQuantity },
+            data: { quantity: afterQuantity },
           });
         } else {
           await tx.productStock.create({
@@ -418,12 +505,11 @@ export class WarehouseService {
               productId: item.productId,
               shopId: session.shopId,
               branchCode,
-              quantity: item.actualQuantity,
+              quantity: afterQuantity,
             },
           });
         }
 
-        const difference = item.actualQuantity - beforeQuantity;
         if (difference !== 0) {
           await tx.stockMovement.create({
             data: {
@@ -435,9 +521,9 @@ export class WarehouseService {
               displayTypeLabel: 'Инвентаризация',
               externalId: session.id,
               quantity: new Prisma.Decimal(difference),
-              loadedMeasurementValue: new Prisma.Decimal(item.actualQuantity),
+              loadedMeasurementValue: new Prisma.Decimal(afterQuantity),
               beforeQuantity: new Prisma.Decimal(beforeQuantity),
-              afterQuantity: new Prisma.Decimal(item.actualQuantity),
+              afterQuantity: new Prisma.Decimal(afterQuantity),
               fromShopId: session.shopId,
               toShopId: session.shopId,
               createdById: context.userId,

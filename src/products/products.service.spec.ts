@@ -109,3 +109,37 @@ describe('Legacy product creation authorization', () => {
     });
   });
 });
+
+describe('Product attribute safety', () => {
+  it('does not delete a color referenced by a product variant', async () => {
+    const prisma = {
+      productColor: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'color-1' }),
+        delete: jest.fn(),
+      },
+      productVariant: { count: jest.fn().mockResolvedValue(1) },
+    };
+    const service = new ProductsService(prisma as any, {} as any);
+
+    await expect(service.deleteProductColor('color-1', companyContext)).rejects.toThrow(
+      'Нельзя удалить цвет',
+    );
+    expect(prisma.productColor.delete).not.toHaveBeenCalled();
+  });
+
+  it('does not delete a size referenced by a product variant', async () => {
+    const prisma = {
+      productSize: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'size-1' }),
+        delete: jest.fn(),
+      },
+      productVariant: { count: jest.fn().mockResolvedValue(1) },
+    };
+    const service = new ProductsService(prisma as any, {} as any);
+
+    await expect(service.deleteProductSize('size-1', companyContext)).rejects.toThrow(
+      'Нельзя удалить размер',
+    );
+    expect(prisma.productSize.delete).not.toHaveBeenCalled();
+  });
+});

@@ -7,6 +7,7 @@ import {
   ClientCardType,
   ClientDebtStatus,
   ClientGender,
+  ProductSeason,
   Prisma,
 } from '@prisma/client';
 import {
@@ -140,6 +141,16 @@ export class ClientsService {
           socialLinks: this.parseStringArrayBody(body.social_links),
           relatives: this.parseStringArrayBody(body.relatives),
           registrationShopId: shopId,
+          clothingSize: this.optionalBodyString(body.clothing_size),
+          shoeSize: this.optionalBodyString(body.shoe_size),
+          marketingAllowed: this.parseBoolean(body.marketing_allowed, true),
+          marketingConsentAt: this.parseBoolean(body.marketing_allowed, true)
+            ? this.parseNullableDateTime(body.marketing_consent_at) ?? new Date()
+            : null,
+          marketingConsentSource: this.optionalBodyString(body.marketing_consent_source),
+          marketingRevokedAt: this.parseBoolean(body.marketing_allowed, true)
+            ? null
+            : this.parseNullableDateTime(body.marketing_revoked_at) ?? new Date(),
           registeredAt:
             this.parseNullableDateTime(body.registered_at) ?? new Date(),
           balanceUzs: this.toDecimal(body.balance_uzs),
@@ -239,6 +250,26 @@ export class ClientsService {
           ...(body.registration_shop_id !== undefined
             ? { registrationShopId: shopId }
             : {}),
+          ...(body.clothing_size !== undefined
+            ? { clothingSize: this.optionalBodyString(body.clothing_size) }
+            : {}),
+          ...(body.shoe_size !== undefined
+            ? { shoeSize: this.optionalBodyString(body.shoe_size) }
+            : {}),
+          ...(body.marketing_allowed !== undefined
+            ? {
+                marketingAllowed: this.parseBoolean(body.marketing_allowed, false),
+                marketingConsentAt: this.parseBoolean(body.marketing_allowed, false)
+                  ? this.parseNullableDateTime(body.marketing_consent_at) ?? new Date()
+                  : undefined,
+                marketingRevokedAt: this.parseBoolean(body.marketing_allowed, false)
+                  ? null
+                  : this.parseNullableDateTime(body.marketing_revoked_at) ?? new Date(),
+              }
+            : {}),
+          ...(body.marketing_consent_source !== undefined
+            ? { marketingConsentSource: this.optionalBodyString(body.marketing_consent_source) }
+            : {}),
           ...(body.registered_at !== undefined
             ? {
                 registeredAt:
@@ -330,6 +361,15 @@ export class ClientsService {
               name: client.registrationShop.name,
             }
           : null,
+        preferred_shop: client.registrationShop
+          ? { id: client.registrationShop.id, name: client.registrationShop.name }
+          : null,
+        clothing_size: client.clothingSize,
+        shoe_size: client.shoeSize,
+        marketing_allowed: client.marketingAllowed,
+        marketing_consent_at: client.marketingConsentAt?.toISOString() ?? null,
+        marketing_consent_source: client.marketingConsentSource,
+        marketing_revoked_at: client.marketingRevokedAt?.toISOString() ?? null,
         registered_at: client.registeredAt.toISOString(),
         sms_notifications: client.smsNotifications,
         phone_notifications: client.phoneNotifications,
@@ -415,6 +455,26 @@ export class ClientsService {
           payableTotal: true,
           paidAt: true,
           createdAt: true,
+          branchCode: true,
+          items: {
+            select: {
+              id: true,
+              productId: true,
+              variantId: true,
+              name: true,
+              sku: true,
+              barcode: true,
+              quantity: true,
+              salePrice: true,
+              lineTotal: true,
+              variant: {
+                select: {
+                  color: { select: { id: true, name: true } },
+                  size: { select: { id: true, name: true } },
+                },
+              },
+            },
+          },
         },
       }),
       this.prisma.clientNote.findMany({
@@ -457,6 +517,20 @@ export class ClientsService {
         ),
         amount_uzs: Number(order.payableTotal ?? 0),
         order_id: order.id,
+        branch_code: order.branchCode,
+        products: order.items.map((item) => ({
+          id: item.id,
+          product_id: item.productId,
+          variant_id: item.variantId,
+          name: item.name,
+          sku: item.sku,
+          barcode: item.barcode,
+          color: item.variant?.color?.name ?? null,
+          size: item.variant?.size?.name ?? null,
+          quantity: Number(item.quantity),
+          price_uzs: Number(item.salePrice),
+          total_uzs: Number(item.lineTotal),
+        })),
       })),
       ...notes.map((note) => ({
         id: `note:${note.id}`,
@@ -921,7 +995,7 @@ export class ClientsService {
 
   async getFilters(requestContext: CompanyRequestContext) {
     const context = await this.getContext(requestContext);
-    const [groups, tags, shops] = await this.prisma.$transaction([
+    const [groups, tags, shops, brands, categories] = await this.prisma.$transaction([
       this.prisma.clientGroup.findMany({
         where: { companyId: context.companyId },
         orderBy: { name: 'asc' },
@@ -937,6 +1011,8 @@ export class ClientsService {
         },
         orderBy: { name: 'asc' },
       }),
+      this.prisma.brand.findMany({ where: { companyId: context.companyId }, orderBy: { name: 'asc' } }),
+      this.prisma.category.findMany({ where: { companyId: context.companyId }, orderBy: { name: 'asc' } }),
     ]);
 
     return {
@@ -944,6 +1020,9 @@ export class ClientsService {
       tags: tags.map((tag) => ({ id: tag.id, name: tag.name })),
       shops: shops.map((shop) => ({ id: shop.id, name: shop.name })),
       genders: Object.values(ClientGender),
+      brands: brands.map((item) => ({ id: String(item.id), name: item.name })),
+      categories: categories.map((item) => ({ id: String(item.id), name: item.name })),
+      seasons: Object.values(ProductSeason),
     };
   }
 
@@ -1100,6 +1179,44 @@ export class ClientsService {
       where.gender = gender;
     }
 
+    const clothingSize = this.optionalString(query.clothing_size);
+    if (clothingSize) where.clothingSize = { equals: clothingSize, mode: 'insensitive' };
+    const shoeSize = this.optionalString(query.shoe_size);
+    if (shoeSize) where.shoeSize = { equals: shoeSize, mode: 'insensitive' };
+    const marketingAllowed = this.parseOptionalBoolean(query.marketing_allowed);
+    if (marketingAllowed !== undefined) where.marketingAllowed = marketingAllowed;
+
+    const segment = this.optionalString(query.segment);
+    if (segment === 'new') {
+      const threshold = new Date();
+      threshold.setDate(threshold.getDate() - 30);
+      where.registeredAt = { gte: threshold };
+    }
+
+    const brandId = this.parseOptionalNumber(query.brand_id);
+    const categoryId = this.parseOptionalNumber(query.category_id);
+    const seasonRaw = this.optionalString(query.season)?.toUpperCase();
+    const season = seasonRaw && Object.values(ProductSeason).includes(seasonRaw as ProductSeason)
+      ? seasonRaw as ProductSeason
+      : undefined;
+    if (brandId !== null || categoryId !== null || season) {
+      where.sales = {
+        some: {
+          isDraft: false,
+          saleType: { in: ['sale', 'exchange'] },
+          items: {
+            some: {
+              product: {
+                ...(brandId !== null ? { brandId } : {}),
+                ...(categoryId !== null ? { categoryId } : {}),
+                ...(season ? { season } : {}),
+              },
+            },
+          },
+        },
+      };
+    }
+
     return where;
   }
 
@@ -1242,6 +1359,15 @@ export class ClientsService {
       registered_shop: client.registrationShop
         ? { id: client.registrationShop.id, name: client.registrationShop.name }
         : { id: '', name: '' },
+      preferred_shop: client.registrationShop
+        ? { id: client.registrationShop.id, name: client.registrationShop.name }
+        : null,
+      clothing_size: client.clothingSize ?? '',
+      shoe_size: client.shoeSize ?? '',
+      marketing_allowed: client.marketingAllowed,
+      marketing_consent_at: client.marketingConsentAt?.toISOString() ?? null,
+      marketing_consent_source: client.marketingConsentSource ?? '',
+      marketing_revoked_at: client.marketingRevokedAt?.toISOString() ?? null,
       registered_shop_name: '',
       last_purchase_date: this.toBillzDateTime(
         metric?.lastPurchaseAt ??
@@ -1295,7 +1421,7 @@ export class ClientsService {
   }
 
   private matchesMetricFilters(
-    item: { total_purchases_uzs: number; last_purchase_at: string | null },
+    item: { total_purchases_uzs: number; last_purchase_at: string | null; birth_date?: string | null },
     query: Record<string, string | string[] | undefined>,
   ) {
     const purchasesFrom = this.parseOptionalNumber(query.total_purchases_from);
@@ -1303,8 +1429,15 @@ export class ClientsService {
     const lastPurchaseFrom = this.parseDateTime(query.last_purchase_from);
     const lastPurchaseTo = this.parseDateTime(query.last_purchase_to);
     const noPurchaseMonths = this.parseOptionalNumber(query.no_purchase_months);
+    const segment = this.optionalString(query.segment);
+    const inactiveDays = segment?.startsWith('inactive_')
+      ? Number(segment.slice('inactive_'.length))
+      : null;
+    const effectivePurchasesFrom = segment === 'vip'
+      ? this.parseOptionalNumber(query.vip_min_spent) ?? 3000000
+      : purchasesFrom;
 
-    if (purchasesFrom !== null && item.total_purchases_uzs < purchasesFrom) {
+    if (effectivePurchasesFrom !== null && item.total_purchases_uzs < effectivePurchasesFrom) {
       return false;
     }
     if (purchasesTo !== null && item.total_purchases_uzs > purchasesTo) {
@@ -1336,6 +1469,16 @@ export class ClientsService {
       if (new Date(item.last_purchase_at) > threshold) {
         return false;
       }
+    }
+    if (inactiveDays && [30, 60, 90].includes(inactiveDays)) {
+      if (!item.last_purchase_at) return true;
+      const threshold = new Date();
+      threshold.setDate(threshold.getDate() - inactiveDays);
+      if (new Date(item.last_purchase_at) > threshold) return false;
+    }
+    if (segment === 'birthday_month') {
+      if (!item.birth_date) return false;
+      if (new Date(item.birth_date).getUTCMonth() !== new Date().getMonth()) return false;
     }
 
     return true;
@@ -1733,6 +1876,13 @@ export class ClientsService {
     if (value === 'true') return true;
     if (value === 'false') return false;
     return fallback;
+  }
+
+  private parseOptionalBoolean(value: unknown) {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (value === true || value === 'true') return true;
+    if (value === false || value === 'false') return false;
+    throw new BadRequestException('Boolean filter must be true or false');
   }
 
   private optionalBodyString(value: unknown) {
