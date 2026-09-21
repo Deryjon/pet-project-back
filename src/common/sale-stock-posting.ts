@@ -11,6 +11,7 @@ export type SaleStockPostingInput = {
   shopId: string;
   branchCode: string;
   productId: number;
+  variantId?: string | null;
   quantity: number | Prisma.Decimal;
   createdById: number;
   externalId: string;
@@ -99,6 +100,7 @@ export async function postSaleStockDecrease(
       companyId: input.companyId,
       shopId: input.shopId,
       productId: input.productId,
+      variantId: input.variantId,
       orderId: input.orderId,
       type: 'SALE',
       displayTypeCode: 'sale',

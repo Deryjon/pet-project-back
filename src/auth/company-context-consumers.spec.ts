@@ -70,6 +70,8 @@ describe('company context consumers', () => {
       clientGroup: { findMany: jest.fn().mockResolvedValue([]) },
       clientTag: { findMany: jest.fn().mockResolvedValue([]) },
       shop: { findMany: jest.fn().mockResolvedValue([]) },
+      brand: { findMany: jest.fn().mockResolvedValue([]) },
+      category: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(async (operations: Promise<unknown>[]) =>
         Promise.all(operations),
       ),

@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Patch,
   Param,
   Post,
   Query,
@@ -92,6 +93,84 @@ export class WarehouseController {
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.warehouseService.createInventorySession(body, requestContext);
+  }
+
+  @Patch('v1/inventory-sessions/:id')
+  @Permissions('inventory-create')
+  updateInventorySession(@Param('id') id: string, @Body() body: Record<string, unknown>, @CurrentCompanyContext() context: CompanyRequestContext) {
+    return this.warehouseService.updateInventorySession(id, body, context);
+  }
+
+  @Post('v1/inventory-sessions/:id/start')
+  @Permissions('inventory-create')
+  startInventory(@Param('id') id: string, @Body() body: Record<string, unknown>, @CurrentCompanyContext() context: CompanyRequestContext) {
+    return this.warehouseService.startInventory(id, body, context);
+  }
+
+  @Get('v1/inventory-sessions/:id/items')
+  @Permissions('inventory-result')
+  listInventoryItems(@Param('id') id: string, @Query() query: Record<string, string>, @CurrentCompanyContext() context: CompanyRequestContext) {
+    return this.warehouseService.listInventoryItems(id, query, context);
+  }
+
+  @Patch('v1/inventory-sessions/:id/items/:itemId/count')
+  @Permissions('inventory-create')
+  countInventoryItem(@Param('id') id: string, @Param('itemId') itemId: string, @Body() body: Record<string, unknown>, @CurrentCompanyContext() context: CompanyRequestContext) {
+    return this.warehouseService.countInventoryItem(id, itemId, body, context);
+  }
+
+  @Post('v1/inventory-sessions/:id/scan')
+  @Permissions('inventory-create')
+  scanInventory(@Param('id') id: string, @Body() body: Record<string, unknown>, @CurrentCompanyContext() context: CompanyRequestContext) {
+    return this.warehouseService.scanInventory(id, body, context);
+  }
+
+  @Get('v1/inventory-sessions/:id/summary')
+  @Permissions('inventory-result')
+  inventorySummary(@Param('id') id: string, @CurrentCompanyContext() context: CompanyRequestContext) {
+    return this.warehouseService.summary(id, context);
+  }
+
+  @Post('v1/inventory-sessions/:id/submit')
+  @Permissions('inventory-create')
+  submitInventory(@Param('id') id: string, @CurrentCompanyContext() context: CompanyRequestContext) {
+    return this.warehouseService.submitInventory(id, context);
+  }
+
+  @Post('v1/inventory-sessions/:id/mark-uncounted-as-zero')
+  @Permissions('inventory-finish')
+  markUncountedAsZero(@Param('id') id: string, @CurrentCompanyContext() context: CompanyRequestContext) {
+    return this.warehouseService.markUncountedAsZero(id, context);
+  }
+
+  @Post('v1/inventory-sessions/:id/items/:itemId/request-recount')
+  @Permissions('inventory-finish')
+  requestRecount(@Param('id') id: string, @Param('itemId') itemId: string, @Body() body: Record<string, unknown>, @CurrentCompanyContext() context: CompanyRequestContext) {
+    return this.warehouseService.requestRecount(id, itemId, body, context);
+  }
+
+  @Post('v1/inventory-sessions/:id/items/:itemId/approve')
+  @Permissions('inventory-finish')
+  approveItem(@Param('id') id: string, @Param('itemId') itemId: string, @Body() body: Record<string, unknown>, @CurrentCompanyContext() context: CompanyRequestContext) {
+    return this.warehouseService.approveItem(id, itemId, body, context);
+  }
+
+  @Get('v1/inventory-sessions/:id/items/:itemId/attempts')
+  @Permissions('inventory-result')
+  getCountAttempts(@Param('id') id: string, @Param('itemId') itemId: string, @CurrentCompanyContext() context: CompanyRequestContext) {
+    return this.warehouseService.getCountAttempts(id, itemId, context);
+  }
+
+  @Post('v1/inventory-sessions/:id/cancel')
+  @Permissions('inventory-delete')
+  cancelInventory(@Param('id') id: string, @Body() body: Record<string, unknown>, @CurrentCompanyContext() context: CompanyRequestContext) {
+    return this.warehouseService.cancelInventory(id, body, context);
+  }
+
+  @Post('v1/inventory-sessions/:id/approve')
+  @Permissions('inventory-finish')
+  approveInventory(@Param('id') id: string, @CurrentCompanyContext() context: CompanyRequestContext) {
+    return this.warehouseService.approveInventory(id, context);
   }
 
   @Post('v1/inventory-sessions/:id/items')

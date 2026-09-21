@@ -200,8 +200,10 @@ describe('real PostgreSQL transaction invariants', () => {
         companyId: f.company.id,
         shopId: f.shop.id,
         createdById: f.user.id,
+        number: `INV-TEST-${Date.now()}`,
         name: 'Count',
-        items: { create: { productId: f.product.id, actualQuantity: 7 } },
+        status: 'REVIEW',
+        items: { create: { productId: f.product.id, systemQuantitySnapshot: 0, expectedQuantityAtCount: 0, countedQuantity: 7, differenceQuantity: 7, adjustmentDelta: 7, status: 'SURPLUS' } },
       },
     });
     const service = new WarehouseService(overlappingTransactions(db).prisma);

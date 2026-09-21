@@ -4881,7 +4881,8 @@ export class ProductsService {
       | 'WRITE_OFF'
       | 'PURCHASE'
       | 'TRANSFER'
-      | 'ADJUSTMENT';
+      | 'ADJUSTMENT'
+      | 'INVENTORY_ADJUSTMENT';
     displayTypeCode: string;
     displayTypeLabel: string;
     quantity: Prisma.Decimal | number;
@@ -5510,6 +5511,7 @@ export class ProductsService {
           companyId: transfer.companyId,
           shopId: transfer.departureShopId,
           productId: item.productId,
+          variantId: item.variantId,
           type: 'TRANSFER',
           quantity,
           beforeQuantity,
@@ -5645,6 +5647,7 @@ export class ProductsService {
           companyId: transfer.companyId,
           shopId: transfer.arrivalShopId,
           productId: item.productId,
+          variantId: item.variantId,
           type: 'TRANSFER',
           quantity,
           beforeQuantity,
@@ -5791,6 +5794,7 @@ export class ProductsService {
             companyId: transfer.companyId,
             shopId: transfer.arrivalShopId,
             productId: item.productId,
+            variantId: item.variantId,
             type: 'TRANSFER',
             quantity: arrivedQty,
             beforeQuantity,
@@ -9678,6 +9682,7 @@ export class ProductsService {
       'PURCHASE',
       'TRANSFER',
       'ADJUSTMENT',
+      'INVENTORY_ADJUSTMENT',
     ]);
 
     return supportedTypes.has(normalized)
@@ -9687,7 +9692,8 @@ export class ProductsService {
           | 'WRITE_OFF'
           | 'PURCHASE'
           | 'TRANSFER'
-          | 'ADJUSTMENT')
+          | 'ADJUSTMENT'
+          | 'INVENTORY_ADJUSTMENT')
       : undefined;
   }
 
@@ -9745,6 +9751,7 @@ export class ProductsService {
       companyId: string;
       shopId: string;
       productId: number;
+      variantId?: string | null;
       orderId?: string;
       type:
         | 'SALE'
@@ -9752,7 +9759,8 @@ export class ProductsService {
         | 'WRITE_OFF'
         | 'PURCHASE'
         | 'TRANSFER'
-        | 'ADJUSTMENT';
+        | 'ADJUSTMENT'
+        | 'INVENTORY_ADJUSTMENT';
       quantity: number;
       beforeQuantity: number;
       afterQuantity: number;
@@ -9774,6 +9782,7 @@ export class ProductsService {
         companyId: input.companyId,
         shopId: input.shopId,
         productId: input.productId,
+        variantId: input.variantId,
         orderId: input.orderId,
         type: input.type,
         displayTypeCode: this.mapProductMovementTypeToCode(
@@ -9874,7 +9883,8 @@ export class ProductsService {
       | 'WRITE_OFF'
       | 'PURCHASE'
       | 'TRANSFER'
-      | 'ADJUSTMENT';
+      | 'ADJUSTMENT'
+      | 'INVENTORY_ADJUSTMENT';
     displayTypeCode: string;
     displayTypeLabel: string;
     externalId: string;
@@ -9948,7 +9958,8 @@ export class ProductsService {
       | 'WRITE_OFF'
       | 'PURCHASE'
       | 'TRANSFER'
-      | 'ADJUSTMENT',
+      | 'ADJUSTMENT'
+      | 'INVENTORY_ADJUSTMENT',
     orderType?: string,
     orderStatus?: string,
   ) {
@@ -9984,7 +9995,8 @@ export class ProductsService {
       | 'WRITE_OFF'
       | 'PURCHASE'
       | 'TRANSFER'
-      | 'ADJUSTMENT',
+      | 'ADJUSTMENT'
+      | 'INVENTORY_ADJUSTMENT',
     orderType?: string,
     orderStatus?: string,
   ) {
@@ -10021,7 +10033,8 @@ export class ProductsService {
         | 'WRITE_OFF'
         | 'PURCHASE'
         | 'TRANSFER'
-        | 'ADJUSTMENT';
+        | 'ADJUSTMENT'
+        | 'INVENTORY_ADJUSTMENT';
       quantity: Prisma.Decimal | number;
     }>,
   ) {

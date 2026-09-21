@@ -1989,6 +1989,7 @@ export class SalesService {
         total: this.getSalePayableAmount(sale),
         items: sale.items.map((item: any) => ({
           productId: item.productId,
+          variantId: item.variantId,
           name: item.name,
           quantity: Number(item.quantity),
           salePrice: Number(item.salePrice),
@@ -2680,6 +2681,7 @@ export class SalesService {
           shopId,
           branchCode,
           productId: item.productId,
+          variantId: item.variantId,
           quantity: item.quantity,
           createdById: meta.userId,
           externalId: meta.externalId ?? '',
@@ -3192,6 +3194,7 @@ export class SalesService {
           shopId,
           branchCode,
           productId: item.productId,
+          variantId: item.variantId,
           quantity: item.quantity,
           createdById,
           externalId: sale.number,

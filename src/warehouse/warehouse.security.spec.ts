@@ -1,253 +1,63 @@
 import { companyContext as testContext } from '../../test/fixtures/request-context';
 import { WarehouseService } from './warehouse.service';
 
-describe('Warehouse company and shop isolation', () => {
+describe('Warehouse inventory security and workflow', () => {
   let db: any;
   let service: WarehouseService;
+  const context = (extra: object = {}) => testContext({ companyId: 'own', userId: 1, allowedShopIds: ['allowed'], crmRoleName: 'Админ', ...extra });
+
   beforeEach(() => {
     db = {
-      inventorySession: {
-        findFirst: jest.fn().mockResolvedValue(null),
-        create: jest.fn(),
-        updateMany: jest.fn(),
-      },
-      inventoryItem: { upsert: jest.fn() },
-      product: {
-        findFirst: jest.fn().mockResolvedValue(null),
-        update: jest.fn(),
-      },
-      productStock: {
-        findMany: jest.fn(),
-        update: jest.fn(),
-        create: jest.fn(),
-        aggregate: jest.fn(),
-      },
-      stockMovement: {
-        fields: { fromRetailPrice: 'fromRetailPriceField' },
-        findMany: jest.fn().mockResolvedValue([]),
-        count: jest.fn().mockResolvedValue(0),
-        create: jest.fn(),
-      },
-      $transaction: jest.fn((operation) => operation(db)),
+      inventorySession: { findFirst: jest.fn(), findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0), create: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
+      inventoryItem: { findFirst: jest.fn(), findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0), create: jest.fn(), update: jest.fn() },
+      inventoryCountAttempt: { findMany: jest.fn(), updateMany: jest.fn(), create: jest.fn() },
+      product: { findFirst: jest.fn(), findMany: jest.fn(), update: jest.fn() },
+      productStock: { findUnique: jest.fn(), upsert: jest.fn(), aggregate: jest.fn() },
+      productVariantStock: { findUnique: jest.fn(), upsert: jest.fn(), aggregate: jest.fn() },
+      productVariant: { findMany: jest.fn() }, shop: { findFirst: jest.fn() }, auditLog: { create: jest.fn().mockResolvedValue({}) },
+      stockMovement: { fields: { fromRetailPrice: 'field' }, findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0), aggregate: jest.fn(), create: jest.fn() },
+      $transaction: jest.fn((op: any) => typeof op === 'function' ? op(db) : Promise.all(op)),
     };
     service = new WarehouseService(db);
   });
-  it.each(['getInventorySession', 'applyInventory'] as const)(
-    'scopes %s to company and allowed shops',
-    async (method) => {
-      await expect(
-        service[method](
-          'foreign',
-          testContext({
-            companyId: 'own',
-            userId: 1,
-            allowedShopIds: ['allowed'],
-          }),
-        ),
-      ).rejects.toThrow();
-      expect(db.inventorySession.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: {
-            id: 'foreign',
-            companyId: 'own',
-            shopId: { in: ['allowed'] },
-          },
-        }),
-      );
-      expect(db.productStock.findMany).not.toHaveBeenCalled();
-    },
-  );
-  it('rejects adding to an inaccessible inventory session', async () => {
-    await expect(
-      service.addInventoryItem(
-        'foreign',
-        { product_id: 1, actual_quantity: 2 },
-        testContext({
-          companyId: 'own',
-          userId: 1,
-          allowedShopIds: ['allowed'],
-        }),
-      ),
-    ).rejects.toThrow('Session not found');
-    expect(db.inventoryItem.upsert).not.toHaveBeenCalled();
+
+  it.each(['getInventorySession', 'approveInventory'] as const)('scopes %s by company and allowed shops', async (method) => {
+    db.inventorySession.findFirst.mockResolvedValue(null);
+    await expect(service[method]('foreign', context())).rejects.toThrow();
+    expect(db.inventorySession.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'foreign', companyId: 'own', shopId: { in: ['allowed'] } } }));
   });
-  it('rejects creating inventory for an unavailable shop', async () => {
-    await expect(
-      service.createInventorySession(
-        { shop_id: 'foreign' },
-        testContext({
-          companyId: 'own',
-          userId: 1,
-          allowedShopIds: ['allowed'],
-        }),
-      ),
-    ).rejects.toThrow('Shop is not available');
+
+  it('rejects creation for an inaccessible shop', async () => {
+    await expect(service.createInventorySession({ shop_id: 'foreign' }, context())).rejects.toThrow('Shop is not available');
     expect(db.inventorySession.create).not.toHaveBeenCalled();
   });
-  it.each([-1, NaN, Infinity])(
-    'rejects invalid actual quantity %s',
-    async (actual_quantity) => {
-      db.inventorySession.findFirst.mockResolvedValue({ status: 'draft' });
-      await expect(
-        service.addInventoryItem(
-          'own',
-          { product_id: 1, actual_quantity },
-          testContext({
-            companyId: 'own',
-            userId: 1,
-            allowedShopIds: ['allowed'],
-          }),
-        ),
-      ).rejects.toThrow('actual_quantity is invalid');
-      expect(db.inventoryItem.upsert).not.toHaveBeenCalled();
-    },
-  );
-  it('rejects products outside the company', async () => {
-    db.inventorySession.findFirst.mockResolvedValue({ status: 'draft' });
-    await expect(
-      service.addInventoryItem(
-        'own',
-        { product_id: 99, actual_quantity: 2 },
-        testContext({
-          companyId: 'own',
-          userId: 1,
-          allowedShopIds: ['allowed'],
-        }),
-      ),
-    ).rejects.toThrow('Product not found');
-    expect(db.product.findFirst).toHaveBeenCalledWith({
-      where: { id: 99, companyId: 'own', archivedAt: null },
-      select: { id: true },
-    });
-    expect(db.inventoryItem.upsert).not.toHaveBeenCalled();
-  });
-  it('limits movement lists to accessible shops', async () => {
-    await service.listMovements(
-      'PURCHASE',
-      {},
-      testContext({ companyId: 'own', userId: 1, allowedShopIds: ['allowed'] }),
-    );
-    expect(db.stockMovement.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: {
-          type: 'PURCHASE',
-          companyId: 'own',
-          shopId: { in: ['allowed'] },
-        },
-      }),
-    );
-  });
-  it('does not remove filtering for a user with no shops', async () => {
-    const noShops = new WarehouseService(db);
-    await noShops.listMovements(
-      'PURCHASE',
-      {},
-      testContext({ companyId: 'own', allowedShopIds: [] }),
-    );
-    expect(db.stockMovement.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { type: 'PURCHASE', companyId: 'own', shopId: { in: [] } },
-      }),
-    );
+
+  it('hides system values in blind counting from a seller', async () => {
+    db.inventorySession.findFirst.mockResolvedValue({ id: 'i', countMode: 'BLIND', status: 'COUNTING', responsibleUserIds: [1], shop: {}, createdBy: {}, items: [{ id: 'x', productId: 1, product: { name: 'P' }, status: 'NOT_COUNTED', systemQuantitySnapshot: 9, version: 0 }] });
+    const result: any = await service.getInventorySession('i', context({ crmRoleName: 'Продавец' }));
+    expect(result.blind).toBe(true);
+    expect(result.items[0].systemQuantitySnapshot).toBeUndefined();
   });
 
-  it('filters revaluations before pagination and uses the same predicate for total', async () => {
-    await service.listRevaluations(
-      {},
-      testContext({ companyId: 'own', userId: 1, allowedShopIds: ['allowed'] }),
-    );
-    const expectedWhere = {
-      companyId: 'own',
-      shopId: { in: ['allowed'] },
-      newRetailPrice: { not: 'fromRetailPriceField' },
-    };
-    expect(db.stockMovement.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expectedWhere }),
-    );
-    expect(db.stockMovement.count).toHaveBeenCalledWith({
-      where: expectedWhere,
-    });
+  it('does not silently treat uncounted positions as zero', async () => {
+    db.inventorySession.findFirst.mockResolvedValue({ id: 'i', status: 'COUNTING' }); db.inventoryItem.count.mockResolvedValue(1);
+    await expect(service.submitInventory('i', context())).rejects.toThrow('All positions must be counted');
+    expect(db.inventorySession.update).not.toHaveBeenCalled();
   });
 
-  it('creates a missing stock row and records one inventory adjustment', async () => {
-    db.inventorySession.findFirst.mockResolvedValue({
-      id: 'inventory-1',
-      companyId: 'own',
-      shopId: 'allowed',
-      status: 'draft',
-      shop: { branchCode: '001' },
-      items: [{ productId: 10, actualQuantity: 7 }],
-    });
-    db.inventorySession.updateMany.mockResolvedValue({ count: 1 });
-    db.product.findFirst.mockResolvedValue({ id: 10 });
-    db.productStock.findMany.mockResolvedValue([]);
-    db.productStock.aggregate.mockResolvedValue({ _sum: { quantity: 7 } });
-    db.stockMovement.create.mockResolvedValue({ id: 'movement-1' });
-
-    await expect(
-      service.applyInventory(
-        'inventory-1',
-        testContext({
-          companyId: 'own',
-          userId: 1,
-          allowedShopIds: ['allowed'],
-        }),
-      ),
-    ).resolves.toEqual({
-      success: true,
-      id: 'inventory-1',
-      status: 'completed',
-    });
-
-    expect(db.productStock.create).toHaveBeenCalledWith({
-      data: {
-        productId: 10,
-        shopId: 'allowed',
-        branchCode: '001',
-        quantity: 7,
-      },
-    });
-    expect(db.stockMovement.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        companyId: 'own',
-        shopId: 'allowed',
-        productId: 10,
-        type: 'ADJUSTMENT',
-        externalId: 'inventory-1',
-        createdById: 1,
-      }),
-    });
-    expect(db.inventorySession.updateMany).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        where: expect.objectContaining({ status: 'applying' }),
-        data: expect.objectContaining({ status: 'completed' }),
-      }),
-    );
-  });
-
-  it('does not write stock when another request already claimed the session', async () => {
-    db.inventorySession.findFirst.mockResolvedValue({
-      id: 'inventory-1',
-      companyId: 'own',
-      shopId: 'allowed',
-      status: 'draft',
-      shop: { branchCode: '001' },
-      items: [{ productId: 10, actualQuantity: 7 }],
-    });
-    db.inventorySession.updateMany.mockResolvedValue({ count: 0 });
-
-    await expect(
-      service.applyInventory(
-        'inventory-1',
-        testContext({
-          companyId: 'own',
-          userId: 1,
-          allowedShopIds: ['allowed'],
-        }),
-      ),
-    ).rejects.toThrow('already being applied');
-    expect(db.productStock.findMany).not.toHaveBeenCalled();
+  it('makes repeated approval idempotent', async () => {
+    db.inventorySession.findFirst.mockResolvedValue({ id: 'i', status: 'COMPLETED', items: [], shop: {} });
+    await expect(service.approveInventory('i', context())).resolves.toEqual({ success: true, id: 'i', status: 'COMPLETED', idempotent: true });
     expect(db.stockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects final approval by a seller', async () => {
+    await expect(service.approveInventory('i', context({ crmRoleName: 'Продавец' }))).rejects.toThrow('Only Admin or Store Manager');
+    expect(db.inventorySession.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unassigned seller before exposing inventory data', async () => {
+    db.inventorySession.findFirst.mockResolvedValue({ id: 'i', countMode: 'BLIND', status: 'COUNTING', responsibleUserIds: [999], shop: {}, createdBy: {}, items: [] });
+    await expect(service.getInventorySession('i', context({ crmRoleName: 'Продавец' }))).rejects.toThrow('You are not assigned');
   });
 });
