@@ -8,6 +8,10 @@ import {
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { barcodeTypeIdFor } from './price-tag-element.constant';
+import {
+  normalizeProductFeatures,
+  parseBusinessType,
+} from './product-feature-settings';
 
 type CurrencyConfig = {
   id: string;
@@ -703,6 +707,11 @@ export class CompanySettingsService {
             name: companyFromDb.name,
             subdomen: companyFromDb.subdomain,
             is_active: companyFromDb.isActive,
+            business_type: companyFromDb.businessType,
+            product_features: normalizeProductFeatures(
+              parseBusinessType(companyFromDb.businessType),
+              companyFromDb.productFeatureSettings,
+            ),
           }
         : {}),
     };
@@ -746,11 +755,25 @@ export class CompanySettingsService {
 
     const company = await this.db.company.findUnique({
       where: { id: targetCompanyId },
-      select: { id: true, name: true, subdomain: true, isActive: true },
+      select: { id: true, name: true, subdomain: true, isActive: true, businessType: true, productFeatureSettings: true },
     });
 
     if (!company) {
       throw new NotFoundException('Company not found');
+    }
+
+    const businessType = body.business_type === undefined
+      ? parseBusinessType(company.businessType)
+      : parseBusinessType(body.business_type);
+    const productFeatures = body.product_features === undefined
+      ? normalizeProductFeatures(businessType, company.productFeatureSettings)
+      : normalizeProductFeatures(businessType, body.product_features);
+
+    if (body.business_type !== undefined || body.product_features !== undefined) {
+      await this.db.company.update({
+        where: { id: targetCompanyId },
+        data: { businessType, productFeatureSettings: productFeatures },
+      });
     }
 
     const existingProfile = await this.db.companyProfileSetting.findUnique({
@@ -807,6 +830,8 @@ export class CompanySettingsService {
       name: company.name,
       subdomen: company.subdomain,
       is_active: company.isActive,
+      business_type: businessType,
+      product_features: productFeatures,
     };
 
     return merged;

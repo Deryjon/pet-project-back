@@ -170,6 +170,8 @@ model Company {
   supplierInvoices       SupplierInvoice[]
   supplierProductAliases SupplierProductAlias[]
   supplyPriceStrategy    SupplyPriceStrategy      @default(LAST_PURCHASE)
+  businessType          String                   @default("clothing_store")
+  productFeatureSettings Json                    @default("{}")
   createdAt              DateTime                 @default(now())
   updatedAt              DateTime                 @updatedAt
 

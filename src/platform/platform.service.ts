@@ -6,6 +6,10 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { createDefaultCrmRolesForCompany } from '../roles/default-crm-roles';
 import { UpdatePlatformSettingsDto } from './dto/update-platform-settings.dto';
+import {
+  defaultProductFeatures,
+  parseBusinessType,
+} from '../company-settings/product-feature-settings';
 
 const DEFAULT_COMPANY_ROLES = [
   { code: 'owner', name: 'Owner', isSystem: true },
@@ -30,6 +34,7 @@ export class PlatformService {
       body.subdomain ?? body.login,
       'subdomain',
     );
+    const businessType = parseBusinessType(body.business_type ?? 'general_store');
 
     const existing = await this.db.company.findFirst({
       where: {
@@ -53,6 +58,8 @@ export class PlatformService {
           status: 'active',
           blockReason: null,
           isActive: true,
+          businessType,
+          productFeatureSettings: defaultProductFeatures(businessType),
         },
       });
 
