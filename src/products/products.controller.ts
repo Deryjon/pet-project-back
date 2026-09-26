@@ -550,6 +550,15 @@ export class ProductsController {
     );
   }
 
+  @Get('v2/catalog/filter-options')
+  @UseGuards(PermissionsGuard)
+  @Permissions('catalog-operations')
+  getCatalogFilterOptions(
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.productsService.getCatalogFilterOptions(requestContext);
+  }
+
   @Get('v2/product/:id')
   @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
@@ -631,6 +640,8 @@ export class ProductsController {
   }
 
   @Post('v2/product/photo')
+  @UseGuards(PermissionsGuard)
+  @Permissions('product-photo')
   @UseInterceptors(FileInterceptor('photo'))
   uploadProductPhoto(
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
@@ -646,6 +657,8 @@ export class ProductsController {
   }
 
   @Put('v2/product/:id')
+  @UseGuards(PermissionsGuard)
+  @Permissions('product-edit')
   updateCatalogProduct(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -655,6 +668,8 @@ export class ProductsController {
   }
 
   @Patch('v2/product/:id/identifiers')
+  @UseGuards(PermissionsGuard)
+  @Permissions('product-edit')
   patchProductIdentifiers(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -668,6 +683,8 @@ export class ProductsController {
   }
 
   @Put('v2/products/bulk/archive')
+  @UseGuards(PermissionsGuard)
+  @Permissions('product-edit')
   bulkArchiveProducts(
     @Body() body: Record<string, unknown>,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
@@ -676,6 +693,8 @@ export class ProductsController {
   }
 
   @Delete('v2/products/archived')
+  @UseGuards(PermissionsGuard)
+  @Permissions('product-edit')
   clearAllArchivedProducts(
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
@@ -683,6 +702,8 @@ export class ProductsController {
   }
 
   @Delete('v2/products/bulk/delete')
+  @UseGuards(PermissionsGuard)
+  @Permissions('product-edit')
   bulkDeleteProducts(
     @Body() body: Record<string, unknown>,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
@@ -691,6 +712,8 @@ export class ProductsController {
   }
 
   @Post('v2/product/generate-sku')
+  @UseGuards(PermissionsGuard)
+  @Permissions('product-create')
   generateSku(
     @Body() body: Record<string, unknown>,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
@@ -699,6 +722,8 @@ export class ProductsController {
   }
 
   @Post('v2/product/generate-barcode')
+  @UseGuards(PermissionsGuard)
+  @Permissions('product-create')
   generateBarcode(
     @Body() body: Record<string, unknown>,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,

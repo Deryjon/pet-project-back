@@ -143,3 +143,32 @@ describe('Product attribute safety', () => {
     expect(prisma.productSize.delete).not.toHaveBeenCalled();
   });
 });
+
+describe('Catalog deletion safety', () => {
+  it('never deletes operational history when a product has movements', async () => {
+    const tx = {
+      product: {
+        count: jest.fn().mockResolvedValue(1),
+        deleteMany: jest.fn(),
+      },
+      saleItem: { updateMany: jest.fn() },
+      orderItem: { deleteMany: jest.fn() },
+      stockMovement: { deleteMany: jest.fn() },
+      transferItem: { deleteMany: jest.fn() },
+      productSupplier: { deleteMany: jest.fn() },
+      productStock: { deleteMany: jest.fn() },
+      productSupplyPriceHistory: { deleteMany: jest.fn() },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback: any) => callback(tx)),
+    };
+    const service = new ProductsService(prisma as any, {} as any);
+
+    await expect(
+      (service as any).deleteProductsByInternalIds([10], 'company-1'),
+    ).rejects.toThrow('Товар нельзя удалить');
+    expect(tx.product.deleteMany).not.toHaveBeenCalled();
+    expect(tx.stockMovement.deleteMany).not.toHaveBeenCalled();
+    expect(tx.orderItem.deleteMany).not.toHaveBeenCalled();
+  });
+});

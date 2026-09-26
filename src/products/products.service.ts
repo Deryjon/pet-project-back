@@ -3613,6 +3613,23 @@ export class ProductsService {
     return this.buildProductsStatistics(productsForStatistics);
   }
 
+  async getCatalogFilterOptions(requestContext: CompanyRequestContext) {
+    const context = await this.getRequestContext(requestContext);
+    const companyId = context.companyId;
+    const [categories, brands, suppliers, units] = await Promise.all([
+      this.prisma.category.findMany({ where: { companyId }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
+      this.prisma.brand.findMany({ where: { companyId }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
+      this.prisma.supplier.findMany({ where: { companyId, isActive: true }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
+      this.prisma.product.findMany({ where: { companyId, archivedAt: null, unit: { not: null } }, select: { unit: true }, distinct: ['unit'], orderBy: { unit: 'asc' } }),
+    ]);
+    return {
+      categories: categories.map((item) => ({ value: String(item.id), label: item.name })),
+      brands: brands.map((item) => ({ value: String(item.id), label: item.name })),
+      suppliers: suppliers.map((item) => ({ value: String(item.id), label: item.name })),
+      units: units.map((item) => ({ value: String(item.unit), label: String(item.unit) })),
+    };
+  }
+
   async create(
     body: Record<string, unknown>,
     requestContext: CompanyRequestContext,
@@ -3874,6 +3891,7 @@ export class ProductsService {
     const markupPercent = this.toNumber(body.profit_margin);
     const description = this.optionalString(body.description);
     const brandName = this.optionalString(body.brand_name);
+    const supplierName = this.optionalString(body.supplier_name);
     const imageUrl = this.extractFirstImage(body.images);
     const supplierIds = this.toStringArrayValue(body.supplier_ids);
     const supplierIdNumbers = supplierIds
@@ -3883,6 +3901,21 @@ export class ProductsService {
       supplierIdNumbers,
       productCompanyId,
     );
+    const categoryReference = this.toStringArrayValue(body.category_ids)[0];
+    const category = categoryReference
+      ? await this.prisma.category.findFirst({
+          where: {
+            companyId: productCompanyId,
+            ...(/^\d+$/.test(categoryReference)
+              ? { id: Number(categoryReference) }
+              : { name: { equals: categoryReference, mode: 'insensitive' } }),
+          },
+          select: { id: true },
+        })
+      : null;
+    if (categoryReference && !category) {
+      throw new BadRequestException('Выбранная категория не найдена');
+    }
     const shipments = this.extractStockPayload(body);
     const shipmentsWithBranchCodes = await this.attachBranchCodesToShipments(
       shipments,
@@ -3962,6 +3995,7 @@ export class ProductsService {
           measurementUnit,
           writeContext,
         ),
+        category: category ? { connect: { id: category.id } } : undefined,
         brand: brandName
           ? {
               connectOrCreate: {
@@ -3992,7 +4026,23 @@ export class ProductsService {
                 },
               })),
             }
-          : undefined,
+          : supplierName
+            ? {
+                create: {
+                  supplier: {
+                    connectOrCreate: {
+                      where: {
+                        companyId_name: {
+                          companyId: productCompanyId,
+                          name: supplierName,
+                        },
+                      },
+                      create: { companyId: productCompanyId, name: supplierName },
+                    },
+                  },
+                },
+              }
+            : undefined,
         stocks:
           supportsStock && shipmentsWithBranchCodes.length
             ? {
@@ -4287,6 +4337,23 @@ export class ProductsService {
       writeContext.companyId ?? null,
     );
     const description = this.optionalString(body.description);
+    const categoryReference = this.toStringArrayValue(body.category_ids)[0];
+    const category = categoryReference
+      ? await this.prisma.category.findFirst({
+          where: {
+            companyId: writeContext.companyId,
+            ...(/^\d+$/.test(categoryReference)
+              ? { id: Number(categoryReference) }
+              : { name: { equals: categoryReference, mode: 'insensitive' } }),
+          },
+          select: { id: true },
+        })
+      : null;
+    if (categoryReference && !category) {
+      throw new BadRequestException('Выбранная категория не найдена');
+    }
+    const brandName = this.optionalString(body.brand_name);
+    const supplierName = this.optionalString(body.supplier_name);
 
     const updatedProduct = await this.prisma.product.update({
       where: { id: existingProduct.id },
@@ -4352,8 +4419,30 @@ export class ProductsService {
           writeContext,
           (existingProduct.metadata as Record<string, unknown> | null) ?? null,
         ),
+        category:
+          body.category_ids !== undefined
+            ? category
+              ? { connect: { id: category.id } }
+              : { disconnect: true }
+            : undefined,
+        brand:
+          body.brand_name !== undefined
+            ? brandName
+              ? {
+                  connectOrCreate: {
+                    where: {
+                      companyId_name: {
+                        companyId: writeContext.companyId,
+                        name: brandName,
+                      },
+                    },
+                    create: { companyId: writeContext.companyId, name: brandName },
+                  },
+                }
+              : { disconnect: true }
+            : undefined,
         suppliers:
-          body.supplier_ids !== undefined
+          body.supplier_ids !== undefined || body.supplier_name !== undefined
             ? {
                 deleteMany: {},
                 ...(scopedSupplierIds.length
@@ -4366,7 +4455,26 @@ export class ProductsService {
                         },
                       })),
                     }
-                  : {}),
+                    : supplierName
+                      ? {
+                          create: {
+                            supplier: {
+                              connectOrCreate: {
+                                where: {
+                                  companyId_name: {
+                                    companyId: writeContext.companyId,
+                                    name: supplierName,
+                                  },
+                                },
+                                create: {
+                                  companyId: writeContext.companyId,
+                                  name: supplierName,
+                                },
+                              },
+                            },
+                          },
+                        }
+                      : {}),
               }
             : undefined,
         stocks:
@@ -4588,19 +4696,28 @@ export class ProductsService {
     companyId: string,
   ): Promise<number> {
     return this.prisma.$transaction(async (tx) => {
-      // SaleItem.productId is nullable — preserve sale history, just unlink product
-      await tx.saleItem.updateMany({
-        where: { productId: { in: ids } },
-        data: { productId: null },
+      const productsWithHistory = await tx.product.count({
+        where: {
+          id: { in: ids },
+          companyId,
+          OR: [
+            { saleItems: { some: {} } },
+            { orderItems: { some: {} } },
+            { stockMovements: { some: {} } },
+            { transferItems: { some: {} } },
+            { inventoryItems: { some: {} } },
+            { supplierInvoiceItems: { some: {} } },
+          ],
+        },
       });
+      if (productsWithHistory) {
+        throw new ConflictException(
+          'Товар нельзя удалить, потому что по нему есть операции. Переместите его в архив.',
+        );
+      }
 
-      // OrderItem.productId and StockMovement.productId are NOT nullable — must delete
-      await tx.orderItem.deleteMany({ where: { productId: { in: ids } } });
-      await tx.stockMovement.deleteMany({ where: { productId: { in: ids } } });
-
-      // ProductSupplier, ProductStock, ProductSupplyPriceHistory, TransferItem
-      // all have onDelete: Cascade in schema and will be removed automatically,
-      // but Prisma $transaction doesn't rely on DB cascade — delete them explicitly
+      // Only products without business history reach this point. Remove their
+      // setup-only data; operational records are never destroyed.
       await tx.productSupplier.deleteMany({
         where: { productId: { in: ids } },
       });
@@ -4608,7 +4725,6 @@ export class ProductsService {
       await tx.productSupplyPriceHistory.deleteMany({
         where: { productId: { in: ids } },
       });
-      await tx.transferItem.deleteMany({ where: { productId: { in: ids } } });
 
       const { count } = await tx.product.deleteMany({
         where: { id: { in: ids }, companyId },
@@ -7862,6 +7978,8 @@ export class ProductsService {
         return { updatedAt: direction };
       case 'sale_price':
         return { salePrice: direction };
+      case 'quantity':
+        return { quantity: direction };
       case 'purchase_price':
       case 'supply_price':
         return { purchasePrice: direction };
