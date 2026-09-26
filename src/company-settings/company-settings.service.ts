@@ -684,7 +684,7 @@ export class CompanySettingsService {
     });
   }
 
-  async getCompany(companyId: string) {
+  async getCompany(companyId: string): Promise<Record<string, unknown>> {
     const companyFromDb = await this.db.company.findUnique({
       where: { id: this.requireString(companyId, 'companyId') },
     });
@@ -745,7 +745,7 @@ export class CompanySettingsService {
   async updateCompany(
     body: Record<string, unknown>,
     companyId?: string,
-  ) {
+  ): Promise<Record<string, unknown>> {
     const targetCompanyId =
       (await this.resolveCompanyId(companyId ?? this.optionalString(body.company_id))) ??
       this.optionalString(body.company_id) ??

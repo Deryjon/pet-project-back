@@ -59,6 +59,27 @@ describe('SalesService money calculations', () => {
     return { service, prisma };
   }
 
+  it('expands a bundle snapshot into variant-aware stock lines', () => {
+    const { service } = createService();
+    const result = (service as any).expandStockComposition([
+      {
+        productId: 99,
+        variantId: null,
+        quantity: 2,
+        salePrice: 500,
+        stockComposition: [
+          { productId: 10, variantId: 'variant-red-m', quantity: 1, salePrice: 100 },
+          { productId: 20, variantId: null, quantity: 3, salePrice: 50 },
+        ],
+      },
+    ]);
+
+    expect(result).toEqual([
+      expect.objectContaining({ productId: 10, variantId: 'variant-red-m', quantity: 2, salePrice: 100 }),
+      expect.objectContaining({ productId: 20, variantId: null, quantity: 6, salePrice: 50 }),
+    ]);
+  });
+
   describe('zero-safe finalized amounts', () => {
     it('keeps a legitimate zero payable total after a full discount', () => {
       const { service } = createService();

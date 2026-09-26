@@ -3926,7 +3926,7 @@ export class ProductsService {
     );
     const variants = this.extractVariants(body.variants);
     const isServiceProduct = this.isServiceProductType(productType);
-    const supportsStock = !isServiceProduct;
+    const supportsStock = this.isGoodsProductType(productType);
     const totalQuantity = supportsStock
       ? shipmentsWithBranchCodes.reduce(
           (sum, shipment) => sum + shipment.quantity,
@@ -4098,6 +4098,9 @@ export class ProductsService {
     if (isVariative) {
       await this.syncCatalogVariants(createdProduct.id, body, writeContext);
     }
+    if (productType === PRODUCT_TYPE_IDS.kit) {
+      await this.syncBundleComponents(createdProduct.id, body.set_products, writeContext.companyId);
+    }
 
     const productResponse = this.toCatalogCreateProductResponse(
       createdProduct,
@@ -4158,6 +4161,10 @@ export class ProductsService {
         variants: {
           where: { isActive: true, isDefault: false },
           include: { color: true, size: true, stocks: true },
+          orderBy: { createdAt: 'asc' },
+        },
+        bundleComponents: {
+          include: { componentProduct: true, componentVariant: { include: { color: true, size: true } } },
           orderBy: { createdAt: 'asc' },
         },
       },
@@ -4288,7 +4295,7 @@ export class ProductsService {
         false,
     );
     const measurementUnitId = this.optionalString(body.measurement_unit_id);
-    const supportsStock = !this.isServiceProductType(productType);
+    const supportsStock = this.isGoodsProductType(productType);
 
     if (isVariative && !this.isGoodsProductType(productType)) {
       throw new BadRequestException(
@@ -4519,6 +4526,11 @@ export class ProductsService {
     });
     if (isVariative && body.variants !== undefined) {
       await this.syncCatalogVariants(updatedProduct.id, body, writeContext);
+    }
+    if (productType !== PRODUCT_TYPE_IDS.kit && existingProduct.productType === PRODUCT_TYPE_IDS.kit) {
+      await this.prisma.productBundleComponent.deleteMany({ where: { bundleProductId: updatedProduct.id } });
+    } else if (body.set_products !== undefined || productType === PRODUCT_TYPE_IDS.kit) {
+      await this.syncBundleComponents(updatedProduct.id, body.set_products, writeContext.companyId);
     }
 
     if (
@@ -6211,6 +6223,13 @@ export class ProductsService {
         size: { id: string; name: string } | null;
         stocks: Array<{ shopId: string; quantity: number }>;
       }>;
+      bundleComponents?: Array<{
+        componentProductId: number;
+        componentVariantId: string | null;
+        quantity: Prisma.Decimal;
+        componentProduct: { id: number; name: string; sku: string | null; barcode: string | null };
+        componentVariant: { id: string; sku: string | null; barcode: string | null; color: { name: string } | null; size: { name: string } | null } | null;
+      }>;
     },
     transfer: any,
     item: any,
@@ -6734,6 +6753,74 @@ export class ProductsService {
     }
   }
 
+  private async syncBundleComponents(
+    bundleProductId: number,
+    value: unknown,
+    companyId: string,
+  ) {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { productFeatureSettings: true },
+    });
+    const settings = company?.productFeatureSettings as Record<string, unknown> | null;
+    if (settings?.bundles !== true) {
+      throw new BadRequestException('Функция комплектов отключена в настройках компании');
+    }
+    if (!Array.isArray(value) || value.length === 0) {
+      throw new BadRequestException('Комплект должен содержать хотя бы один товар');
+    }
+
+    const rows = value.map((raw, index) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new BadRequestException(`Некорректная позиция комплекта #${index + 1}`);
+      }
+      const item = raw as Record<string, unknown>;
+      const componentProductId = this.toInt(item.product_id);
+      const componentVariantId = this.optionalString(item.variant_id);
+      const quantity = this.toNumber(item.quantity);
+      if (!componentProductId || !quantity || quantity <= 0) {
+        throw new BadRequestException(`Позиция комплекта #${index + 1} требует product_id и положительное quantity`);
+      }
+      if (componentProductId === bundleProductId) {
+        throw new BadRequestException('Комплект не может включать сам себя');
+      }
+      return { componentProductId, componentVariantId, quantity };
+    });
+    const keys = rows.map((row) => `${row.componentProductId}:${row.componentVariantId ?? ''}`);
+    if (new Set(keys).size !== keys.length) {
+      throw new BadRequestException('Состав комплекта содержит повторяющиеся товары');
+    }
+
+    const products = await this.prisma.product.findMany({
+      where: { companyId, id: { in: rows.map((row) => row.componentProductId) }, archivedAt: null },
+      select: { id: true, productType: true },
+    });
+    if (products.length !== new Set(rows.map((row) => row.componentProductId)).size) {
+      throw new BadRequestException('Один из товаров комплекта не найден');
+    }
+    if (products.some((product) => product.productType === PRODUCT_TYPE_IDS.kit)) {
+      throw new BadRequestException('Вложенные комплекты не поддерживаются');
+    }
+    const variantIds = rows.flatMap((row) => row.componentVariantId ? [row.componentVariantId] : []);
+    if (variantIds.length) {
+      const variants = await this.prisma.productVariant.findMany({
+        where: { companyId, id: { in: variantIds }, isActive: true },
+        select: { id: true, productId: true },
+      });
+      const variantMap = new Map(variants.map((variant) => [variant.id, variant.productId]));
+      if (rows.some((row) => row.componentVariantId && variantMap.get(row.componentVariantId) !== row.componentProductId)) {
+        throw new BadRequestException('Вариант не принадлежит товару комплекта');
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.productBundleComponent.deleteMany({ where: { bundleProductId } });
+      await tx.productBundleComponent.createMany({
+        data: rows.map((row) => ({ companyId, bundleProductId, ...row })),
+      });
+    });
+  }
+
   private formatDate(value: Date, companyId?: string | null) {
     return this.companySettingsService.formatDateForCompany(
       value,
@@ -7042,6 +7129,13 @@ export class ProductsService {
         size: { id: string; name: string } | null;
         stocks: Array<{ shopId: string; quantity: number }>;
       }>;
+      bundleComponents?: Array<{
+        componentProductId: number;
+        componentVariantId: string | null;
+        quantity: Prisma.Decimal;
+        componentProduct: { id: number; name: string; sku: string | null; barcode: string | null };
+        componentVariant: { id: string; sku: string | null; barcode: string | null; color: { name: string } | null; size: { name: string } | null } | null;
+      }>;
     },
     shopLookup: Map<string, ResolvedShop>,
     salesSummary: {
@@ -7172,7 +7266,15 @@ export class ProductsService {
         : [],
       brand_id: product.brandId ? String(product.brandId) : '',
       measurement_unit_id: measurementUnitId,
-      set_products: [],
+      set_products: product.bundleComponents?.map((component) => ({
+        product_id: component.componentProductId,
+        variant_id: component.componentVariantId,
+        name: component.componentProduct.name,
+        sku: component.componentVariant?.sku ?? component.componentProduct.sku,
+        barcode: component.componentVariant?.barcode ?? component.componentProduct.barcode,
+        variant_name: [component.componentVariant?.color?.name, component.componentVariant?.size?.name].filter(Boolean).join(' / '),
+        quantity: Number(component.quantity),
+      })) ?? [],
       retail_price: product.salePrice ?? 0,
       supply_price: product.purchasePrice ?? 0,
       product_group_id: product.productGroupId ?? '',
@@ -7403,7 +7505,7 @@ export class ProductsService {
       body.selected_attributes,
     );
     const variants = this.extractVariants(body.variants);
-    const supportsStock = !this.isServiceProductType(productType);
+    const supportsStock = this.isGoodsProductType(productType);
     const stockSummaries = shipments.map((shipment) => {
       const shop = this.resolveShopByBranchCode(
         shipment.branchCode,
@@ -7553,7 +7655,7 @@ export class ProductsService {
       retail_price: product.salePrice ?? 0,
       scale_code: 0,
       scale_plu: 0,
-      set_products: [],
+      set_products: Array.isArray(body.set_products) ? body.set_products : [],
       shop_free_prices: supportsStock ? normalizedShopFreePrices : [],
       shop_measurement_values: supportsStock
         ? stockSummaries.map((item) => ({

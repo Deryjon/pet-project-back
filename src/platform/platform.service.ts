@@ -1428,6 +1428,8 @@ export class PlatformService {
     status?: string;
     blockReason?: string | null;
     isActive: boolean;
+    businessType?: string;
+    productFeatureSettings?: unknown;
     shops: Array<{
       id: string;
       companyId: string;
@@ -1461,6 +1463,9 @@ export class PlatformService {
       blockReason: company.blockReason ?? null,
       block_reason: company.blockReason ?? null,
       is_active: company.isActive,
+      business_type: company.businessType ?? 'clothing_store',
+      product_features: company.productFeatureSettings ??
+        defaultProductFeatures('clothing_store'),
       subscription: company.subscriptions?.[0]
         ? this.toSubscriptionItem(company.subscriptions[0])
         : null,

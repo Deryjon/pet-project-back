@@ -23,6 +23,8 @@ const DEFAULT_PRODUCT_TYPE_ID =
   process.env.DEFAULT_PRODUCT_TYPE_ID ?? '69e939aa-9b8f-46a9-b605-8b2675475b7b';
 const SERVICE_PRODUCT_TYPE_ID =
   process.env.PRODUCT_TYPE_SERVICE_ID ?? 'f3e4d8de-5d2c-4ff0-b1c2-5ed0f7a27401';
+const KIT_PRODUCT_TYPE_ID =
+  process.env.PRODUCT_TYPE_KIT_ID ?? '85a7f6a9-0737-4f7e-a1a5-9d5f8f27d2f4';
 const DEFAULT_MEASUREMENT_UNIT = {
   id: '12a69bc0-c575-4586-9f0f-76e8295d4139',
   name: 'Штука',
@@ -648,6 +650,14 @@ export class SalesService {
 
     if (context?.userType === 'company' && context.companyId) {
       and.push({ companyId: context.companyId });
+      const company = await this.prisma.company.findUnique({
+        where: { id: context.companyId },
+        select: { productFeatureSettings: true },
+      });
+      const featureSettings = company?.productFeatureSettings as Record<string, unknown> | null;
+      if (featureSettings?.bundles !== true) {
+        and.push({ productType: { not: KIT_PRODUCT_TYPE_ID } });
+      }
     }
 
     if (branchCode) {
@@ -694,6 +704,12 @@ export class SalesService {
             where: { isActive: true, isDefault: false },
             include: { color: true, size: true, stocks: true },
             orderBy: { createdAt: 'asc' },
+          },
+          bundleComponents: {
+            include: {
+              componentProduct: { include: { stocks: true } },
+              componentVariant: { include: { stocks: true } },
+            },
           },
         },
         orderBy: {
@@ -1304,10 +1320,26 @@ export class SalesService {
         },
         context,
       ),
+      include: {
+        bundleComponents: {
+          include: { componentProduct: true, componentVariant: true },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
     });
 
     if (!product) {
       throw new NotFoundException('Product not found');
+    }
+    if (product.productType === KIT_PRODUCT_TYPE_ID) {
+      const company = await this.prisma.company.findUnique({
+        where: { id: context.companyId },
+        select: { productFeatureSettings: true },
+      });
+      const settings = company?.productFeatureSettings as Record<string, unknown> | null;
+      if (settings?.bundles !== true) {
+        throw new BadRequestException('Функция комплектов отключена в настройках компании');
+      }
     }
 
     const variant = variantId
@@ -1328,6 +1360,14 @@ export class SalesService {
     const itemName = variant
       ? `${product.name} — ${[variant.color?.name, variant.size?.name].filter(Boolean).join(' / ')}`
       : product.name;
+    const stockComposition = product.bundleComponents.length
+      ? product.bundleComponents.map((component) => ({
+          productId: component.componentProductId,
+          variantId: component.componentVariantId,
+          quantity: Number(component.quantity),
+          salePrice: component.componentVariant?.salePrice ?? component.componentProduct.salePrice ?? 0,
+        }))
+      : null;
 
     const existingItem = await this.prisma.saleItem.findFirst({
       where: {
@@ -1356,6 +1396,7 @@ export class SalesService {
             itemPurchasePrice > 0
               ? salePrice / itemPurchasePrice
               : null,
+          stockComposition: stockComposition ?? undefined,
         },
       });
     } else {
@@ -1380,6 +1421,7 @@ export class SalesService {
             itemPurchasePrice > 0
               ? salePrice / itemPurchasePrice
               : null,
+          stockComposition: stockComposition ?? undefined,
         },
       });
     }
@@ -1874,8 +1916,10 @@ export class SalesService {
               .filter((item: any) => typeof item.productId === 'number')
               .map((item: any) => ({
                 productId: item.productId as number,
+                variantId: item.variantId,
                 quantity: Number(item.quantity),
                 salePrice: Number(item.salePrice),
+                stockComposition: item.stockComposition,
               })),
             stockMultiplier,
             {
@@ -2245,6 +2289,7 @@ export class SalesService {
         retailPriceAtSale: number;
         discountAmount: number;
         finalPrice: number;
+        stockComposition?: unknown;
       }>;
     },
     rawItems: unknown,
@@ -2270,6 +2315,7 @@ export class SalesService {
       retailPriceAtSale?: number;
       discountAmount?: number;
       finalPrice?: number;
+      stockComposition?: unknown;
     }> = [];
 
     for (const rawItem of rawItems) {
@@ -2336,6 +2382,7 @@ export class SalesService {
         retailPriceAtSale: Number((quantity * originalSalePrice).toFixed(2)),
         discountAmount: 0,
         finalPrice: Number((quantity * originalSalePrice).toFixed(2)),
+        stockComposition: originalItem.stockComposition,
       });
     }
 
@@ -2364,6 +2411,7 @@ export class SalesService {
       retailPriceAtSale: number;
       discountAmount: number;
       finalPrice: number;
+      stockComposition?: unknown;
     }> = [];
 
     for (const rawItem of rawItems) {
@@ -2384,6 +2432,15 @@ export class SalesService {
 
       const product = await this.prisma.product.findFirst({
         where: this.buildProductScope({ id: productId }, context),
+        include: {
+          bundleComponents: {
+            include: {
+              componentProduct: { include: { stocks: true } },
+              componentVariant: { include: { stocks: true } },
+            },
+            orderBy: { createdAt: 'asc' },
+          },
+        },
       });
 
       if (!product) {
@@ -2427,7 +2484,14 @@ export class SalesService {
         );
       }
 
-      const availableQuantity = stock?.quantity ?? product.quantity ?? 0;
+      const bundleAvailability = product.bundleComponents.length && originalSale.branchCode
+        ? Math.min(...product.bundleComponents.map((component) => {
+            const componentStock = (component.componentVariant?.stocks ?? component.componentProduct.stocks)
+              .find((candidate) => candidate.branchCode === originalSale.branchCode);
+            return Math.floor(Number(componentStock?.quantity ?? 0) / Number(component.quantity));
+          }))
+        : null;
+      const availableQuantity = bundleAvailability ?? stock?.quantity ?? product.quantity ?? 0;
       const quantityReturnedInSameExchange = returnItems
         .filter((item) => item.productId === productId)
         .reduce((sum, item) => sum + item.quantity, 0);
@@ -2460,6 +2524,14 @@ export class SalesService {
           (quantity * Math.max(0, retailUnitPrice - salePrice)).toFixed(2),
         ),
         finalPrice: Number((quantity * salePrice).toFixed(2)),
+        stockComposition: product.bundleComponents.length
+          ? product.bundleComponents.map((component) => ({
+              productId: component.componentProductId,
+              variantId: component.componentVariantId,
+              quantity: Number(component.quantity),
+              salePrice: component.componentVariant?.salePrice ?? component.componentProduct.salePrice ?? 0,
+            }))
+          : null,
       });
     }
 
@@ -2522,6 +2594,7 @@ export class SalesService {
         retailPriceAtSale?: number;
         discountAmount?: number;
         finalPrice?: number;
+        stockComposition?: unknown;
       }>;
       sellerId?: number;
       paymentMethod?: string;
@@ -2577,6 +2650,7 @@ export class SalesService {
             retailPriceAtSale: item.retailPriceAtSale ?? item.lineTotal,
             discountAmount: item.discountAmount ?? 0,
             finalPrice: item.finalPrice ?? item.lineTotal,
+            stockComposition: item.stockComposition as Prisma.InputJsonValue | undefined,
           })),
         },
       },
@@ -2611,7 +2685,7 @@ export class SalesService {
 
   private async applyStockDelta(
     branchCode: string | null,
-    items: Array<{ productId: number; variantId?: string | null; quantity: number; salePrice: number }>,
+    items: Array<{ productId: number; variantId?: string | null; quantity: number; salePrice: number; stockComposition?: unknown }>,
     multiplier: 1 | -1,
     meta?: {
       companyId?: string | null;
@@ -2634,7 +2708,7 @@ export class SalesService {
       );
     }
 
-    for (const item of items) {
+    for (const item of this.expandStockComposition(items)) {
       if (item.variantId) {
         if (multiplier === -1) {
           const claimed = await tx.productVariantStock.updateMany({
@@ -2771,10 +2845,13 @@ export class SalesService {
   }
 
   private async syncProductsQuantity(
-    items: Array<{ productId: number }>,
+    items: Array<{ productId: number; variantId?: string | null; quantity?: Prisma.Decimal | number; salePrice?: Prisma.Decimal | number; stockComposition?: unknown }>,
     tx: Prisma.TransactionClient | PrismaService = this.prisma,
   ) {
-    const uniqueProductIds = [...new Set(items.map((item) => item.productId))];
+    const expandedItems = this.expandStockComposition(
+      items.map((item) => ({ ...item, quantity: item.quantity ?? 0, salePrice: item.salePrice ?? 0 })),
+    );
+    const uniqueProductIds = [...new Set(expandedItems.map((item) => item.productId).filter((id): id is number => typeof id === 'number'))];
 
     for (const productId of uniqueProductIds) {
       const product = await tx.product.findUnique({
@@ -3054,7 +3131,23 @@ export class SalesService {
       );
 
       let unitSupplyPrice = 0;
-      if (typeof item.productId === 'number') {
+      if (Array.isArray(item.stockComposition) && item.stockComposition.length) {
+        for (const raw of item.stockComposition) {
+          const component = raw as Record<string, unknown>;
+          const componentProductId = Number(component.productId);
+          const componentVariantId = typeof component.variantId === 'string' ? component.variantId : null;
+          const componentQuantity = Number(component.quantity);
+          const componentStock = effectiveBranchCode
+            ? componentVariantId
+              ? await tx.productVariantStock.findFirst({ where: { variantId: componentVariantId, branchCode: effectiveBranchCode } })
+              : await tx.productStock.findFirst({ where: { productId: componentProductId, branchCode: effectiveBranchCode } })
+            : null;
+          const componentRecord = componentVariantId
+            ? await tx.productVariant.findUnique({ where: { id: componentVariantId }, select: { purchasePrice: true } })
+            : await tx.product.findUnique({ where: { id: componentProductId }, select: { purchasePrice: true } });
+          unitSupplyPrice += Number(componentStock?.purchasePrice ?? componentRecord?.purchasePrice ?? 0) * componentQuantity;
+        }
+      } else if (typeof item.productId === 'number') {
         const stock = effectiveBranchCode
           ? await tx.productStock.findFirst({
               where: {
@@ -3106,6 +3199,31 @@ export class SalesService {
     }
   }
 
+  private expandStockComposition<T extends {
+    productId: number | null;
+    variantId?: string | null;
+    quantity: Prisma.Decimal | number;
+    salePrice: Prisma.Decimal | number;
+    stockComposition?: unknown;
+  }>(items: T[]) {
+    return items.flatMap((item) => {
+      if (!Array.isArray(item.stockComposition) || item.stockComposition.length === 0) {
+        return [item];
+      }
+      return item.stockComposition.map((raw) => {
+        const component = raw as Record<string, unknown>;
+        return {
+          ...item,
+          productId: Number(component.productId),
+          variantId: typeof component.variantId === 'string' ? component.variantId : null,
+          quantity: Number(item.quantity) * Number(component.quantity),
+          salePrice: Number(component.salePrice ?? 0),
+          stockComposition: null,
+        };
+      });
+    });
+  }
+
   private async writeOffSaleItemsFromStock(
     saleInput: {
       id: number;
@@ -3118,6 +3236,7 @@ export class SalesService {
         variantId?: string | null;
         quantity: Prisma.Decimal | number;
         salePrice: Prisma.Decimal | number;
+        stockComposition?: unknown;
       }[];
     },
     branchCodeOverride?: string | null,
@@ -3126,7 +3245,7 @@ export class SalesService {
   ): Promise<SaleStockWriteOffResult | undefined> {
     const sale = {
       ...saleInput,
-      items: saleInput.items.map((item) => ({
+      items: this.expandStockComposition(saleInput.items).map((item) => ({
         ...item,
         quantity: Number(item.quantity),
         salePrice: Number(item.salePrice),
@@ -3305,6 +3424,7 @@ export class SalesService {
       variantId?: string | null;
       quantity: Prisma.Decimal | number;
       salePrice: Prisma.Decimal | number;
+      stockComposition?: unknown;
       product?: {
         purchasePrice: number | null;
       } | null;
@@ -3312,7 +3432,7 @@ export class SalesService {
   }) {
     const sale = {
       ...saleInput,
-      items: saleInput.items.map((item) => ({
+      items: this.expandStockComposition(saleInput.items).map((item) => ({
         ...item,
         quantity: Number(item.quantity),
         salePrice: Number(item.salePrice),
@@ -4419,6 +4539,31 @@ export class SalesService {
     };
   }
 
+  private calculateBundleStocks(components: Array<{
+    quantity: Prisma.Decimal | number;
+    componentProduct: { stocks: Array<{ branchCode: string; quantity: number; purchasePrice: number | null; salePrice: number | null }> };
+    componentVariant: { stocks: Array<{ branchCode: string; quantity: number; purchasePrice: number | null; salePrice: number | null }> } | null;
+  }>) {
+    const branchCodes = new Set(
+      components.flatMap((component) =>
+        (component.componentVariant?.stocks ?? component.componentProduct.stocks).map((stock) => stock.branchCode),
+      ),
+    );
+    return [...branchCodes].map((branchCode) => {
+      const quantities = components.map((component) => {
+        const stock = (component.componentVariant?.stocks ?? component.componentProduct.stocks)
+          .find((candidate) => candidate.branchCode === branchCode);
+        return Math.floor(Number(stock?.quantity ?? 0) / Number(component.quantity));
+      });
+      return {
+        branchCode,
+        quantity: quantities.length ? Math.min(...quantities) : 0,
+        purchasePrice: null,
+        salePrice: null,
+      };
+    });
+  }
+
   private toNewSaleProductResponse(
     product: {
       id: number;
@@ -4439,6 +4584,11 @@ export class SalesService {
         purchasePrice: number | null;
         salePrice: number | null;
       }[];
+      bundleComponents?: Array<{
+        quantity: Prisma.Decimal | number;
+        componentProduct: { stocks: Array<{ branchCode: string; quantity: number; purchasePrice: number | null; salePrice: number | null }> };
+        componentVariant: { stocks: Array<{ branchCode: string; quantity: number; purchasePrice: number | null; salePrice: number | null }> } | null;
+      }>;
     },
     branchCode?: string,
     context?: any,
@@ -4447,12 +4597,16 @@ export class SalesService {
       context?.companyId,
     );
     const isService = product.productType === SERVICE_PRODUCT_TYPE_ID;
+    const bundleStocks = product.bundleComponents?.length
+      ? this.calculateBundleStocks(product.bundleComponents)
+      : null;
+    const effectiveStocks = bundleStocks ?? product.stocks;
     const relevantStocks = branchCode
-      ? product.stocks.filter((stock) => stock.branchCode === branchCode)
-      : product.stocks;
+      ? effectiveStocks.filter((stock) => stock.branchCode === branchCode)
+      : effectiveStocks;
     const selectedStocks = relevantStocks.length
       ? relevantStocks
-      : product.stocks;
+      : effectiveStocks;
     const totalMeasurementValue = selectedStocks.reduce(
       (sum, stock) => sum + stock.quantity,
       0,
