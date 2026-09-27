@@ -132,6 +132,7 @@ describe('SalesService money calculations', () => {
                 {
                   stocks: {
                     some: {
+                      quantity: { gt: 0 },
                       OR: [{ branchCode: 'B1' }, { shopId: 'shop-1' }],
                     },
                   },

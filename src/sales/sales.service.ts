@@ -671,8 +671,11 @@ export class SalesService {
 
     if (branchCode) {
       const selectedShopStockWhere = requestedShopId
-        ? { OR: [{ branchCode }, { shopId: requestedShopId }] }
-        : { branchCode };
+        ? {
+            quantity: { gt: 0 },
+            OR: [{ branchCode }, { shopId: requestedShopId }],
+          }
+        : { branchCode, quantity: { gt: 0 } };
       and.push({
         OR: [
           { stocks: { some: selectedShopStockWhere } },
@@ -684,7 +687,8 @@ export class SalesService {
               },
             },
           },
-          { stocks: { none: {} } },
+          { productType: SERVICE_PRODUCT_TYPE_ID },
+          { productType: KIT_PRODUCT_TYPE_ID },
         ],
       });
     } else if (context?.allowedBranchCodes?.length) {
@@ -694,6 +698,7 @@ export class SalesService {
             stocks: {
               some: {
                 branchCode: { in: context.allowedBranchCodes },
+                quantity: { gt: 0 },
               },
             },
           },
@@ -704,27 +709,30 @@ export class SalesService {
                 stocks: {
                   some: {
                     branchCode: { in: context.allowedBranchCodes },
+                    quantity: { gt: 0 },
                   },
                 },
               },
             },
           },
-          { stocks: { none: {} } },
+          { productType: SERVICE_PRODUCT_TYPE_ID },
+          { productType: KIT_PRODUCT_TYPE_ID },
         ],
       });
     } else {
       and.push({
         OR: [
-          { stocks: { some: {} } },
+          { stocks: { some: { quantity: { gt: 0 } } } },
           {
             variants: {
               some: {
                 isActive: true,
-                stocks: { some: {} },
+                stocks: { some: { quantity: { gt: 0 } } },
               },
             },
           },
-          { stocks: { none: {} } },
+          { productType: SERVICE_PRODUCT_TYPE_ID },
+          { productType: KIT_PRODUCT_TYPE_ID },
         ],
       });
     }
@@ -761,19 +769,24 @@ export class SalesService {
 
     const currencyCode =
       this.companySettingsService.getDefaultCurrencyIsoCode();
-    const normalizedProducts = products.flatMap((product) =>
-      product.variants?.length
-        ? product.variants.map((variant) =>
-            this.toNewSaleVariantResponse(
-              product,
-              variant,
-              branchCode,
-              context,
-              requestedShopId,
-            ),
-          )
-        : [this.toNewSaleProductResponse(product, branchCode, context, requestedShopId)],
-    );
+    const normalizedProducts = products
+      .flatMap((product) =>
+        product.variants?.length
+          ? product.variants.map((variant) =>
+              this.toNewSaleVariantResponse(
+                product,
+                variant,
+                branchCode,
+                context,
+                requestedShopId,
+              ),
+            )
+          : [this.toNewSaleProductResponse(product, branchCode, context, requestedShopId)],
+      )
+      .filter(
+        (product) =>
+          product.stock === null || Number(product.stock ?? 0) > 0,
+      );
     const totals = normalizedProducts.reduce(
       (acc, product) => {
         const measurementValue =
