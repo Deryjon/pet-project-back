@@ -664,6 +664,14 @@ export class SalesService {
       and.push({
         OR: [
           { stocks: { some: { branchCode, quantity: { gt: 0 } } } },
+          {
+            variants: {
+              some: {
+                isActive: true,
+                stocks: { some: { branchCode, quantity: { gt: 0 } } },
+              },
+            },
+          },
           { stocks: { none: {} } },
         ],
       });
@@ -678,6 +686,19 @@ export class SalesService {
               },
             },
           },
+          {
+            variants: {
+              some: {
+                isActive: true,
+                stocks: {
+                  some: {
+                    branchCode: { in: context.allowedBranchCodes },
+                    quantity: { gt: 0 },
+                  },
+                },
+              },
+            },
+          },
           { stocks: { none: {} } },
         ],
       });
@@ -685,6 +706,14 @@ export class SalesService {
       and.push({
         OR: [
           { stocks: { some: { quantity: { gt: 0 } } } },
+          {
+            variants: {
+              some: {
+                isActive: true,
+                stocks: { some: { quantity: { gt: 0 } } },
+              },
+            },
+          },
           { stocks: { none: {} } },
         ],
       });
