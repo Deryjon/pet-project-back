@@ -6737,9 +6737,26 @@ export class ProductsService {
           },
           data: { isActive: false, isDefault: false },
         });
+
+        const activeVariantStocks = await tx.productVariantStock.findMany({
+          where: {
+            variant: {
+              productId,
+              isActive: true,
+              isDefault: false,
+            },
+          },
+          select: { quantity: true },
+        });
         await tx.product.update({
           where: { id: productId },
-          data: { variantType: 'variative' },
+          data: {
+            variantType: 'variative',
+            quantity: activeVariantStocks.reduce(
+              (sum, stock) => sum + stock.quantity,
+              0,
+            ),
+          },
         });
       });
     } catch (error) {
