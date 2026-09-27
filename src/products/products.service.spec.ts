@@ -16,6 +16,19 @@ const companyContext: CompanyRequestContext = {
   canSwitchShops: false,
 };
 
+describe('ProductsService product type compatibility', () => {
+  const service = new ProductsService({} as any, {} as any);
+
+  it.each([
+    ['goods', '69e939aa-9b8f-46a9-b605-8b2675475b7b'],
+    ['service', 'f3e4d8de-5d2c-4ff0-b1c2-5ed0f7a27401'],
+    ['bundle', '85a7f6a9-0737-4f7e-a1a5-9d5f8f27d2f4'],
+    ['kit', '85a7f6a9-0737-4f7e-a1a5-9d5f8f27d2f4'],
+  ])('maps API product type %s to its persisted type id', (input, expected) => {
+    expect((service as any).resolveProductType(input)).toBe(expected);
+  });
+});
+
 describe('ProductsService identifier generation', () => {
   const buildService = () => {
     const prisma = {

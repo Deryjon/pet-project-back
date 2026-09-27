@@ -10403,15 +10403,28 @@ export class ProductsService {
       return DEFAULT_PRODUCT_TYPE_ID;
     }
 
-    if (normalized === PRODUCT_TYPE_IDS.goods || normalized === 'товар') {
+    if (
+      normalized === PRODUCT_TYPE_IDS.goods ||
+      normalized === 'goods' ||
+      normalized === 'товар'
+    ) {
       return PRODUCT_TYPE_IDS.goods;
     }
 
-    if (normalized === PRODUCT_TYPE_IDS.service || normalized === 'услуга') {
+    if (
+      normalized === PRODUCT_TYPE_IDS.service ||
+      normalized === 'service' ||
+      normalized === 'услуга'
+    ) {
       return PRODUCT_TYPE_IDS.service;
     }
 
-    if (normalized === PRODUCT_TYPE_IDS.kit || normalized === 'комплект') {
+    if (
+      normalized === PRODUCT_TYPE_IDS.kit ||
+      normalized === 'bundle' ||
+      normalized === 'kit' ||
+      normalized === 'комплект'
+    ) {
       return PRODUCT_TYPE_IDS.kit;
     }
 
