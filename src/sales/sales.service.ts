@@ -621,6 +621,7 @@ export class SalesService {
     const safePage = Math.max(1, args.page);
     const safeLimit = Math.min(Math.max(1, args.limit), 100);
     const branchCode = await this.resolveScopedBranchCode(args.shopId, context);
+    const requestedShopId = args.shopId?.trim();
 
     const and: any[] = [];
 
@@ -661,14 +662,17 @@ export class SalesService {
     }
 
     if (branchCode) {
+      const selectedShopStockWhere = requestedShopId
+        ? { OR: [{ branchCode }, { shopId: requestedShopId }] }
+        : { branchCode };
       and.push({
         OR: [
-          { stocks: { some: { branchCode } } },
+          { stocks: { some: selectedShopStockWhere } },
           {
             variants: {
               some: {
                 isActive: true,
-                stocks: { some: { branchCode } },
+                stocks: { some: selectedShopStockWhere },
               },
             },
           },
@@ -752,9 +756,15 @@ export class SalesService {
     const normalizedProducts = products.flatMap((product) =>
       product.variants?.length
         ? product.variants.map((variant) =>
-            this.toNewSaleVariantResponse(product, variant, branchCode, context),
+            this.toNewSaleVariantResponse(
+              product,
+              variant,
+              branchCode,
+              context,
+              requestedShopId,
+            ),
           )
-        : [this.toNewSaleProductResponse(product, branchCode, context)],
+        : [this.toNewSaleProductResponse(product, branchCode, context, requestedShopId)],
     );
     const totals = normalizedProducts.reduce(
       (acc, product) => {
@@ -4606,6 +4616,7 @@ export class SalesService {
       category: { name: string } | null;
       brand: { name: string } | null;
       stocks: {
+        shopId: string;
         branchCode: string;
         quantity: number;
         purchasePrice: number | null;
@@ -4619,6 +4630,7 @@ export class SalesService {
     },
     branchCode?: string,
     context?: any,
+    shopId?: string,
   ) {
     const currencyCode = this.companySettingsService.getDefaultCurrencyIsoCode(
       context?.companyId,
@@ -4628,8 +4640,12 @@ export class SalesService {
       ? this.calculateBundleStocks(product.bundleComponents)
       : null;
     const effectiveStocks = bundleStocks ?? product.stocks;
-    const relevantStocks = branchCode
-      ? effectiveStocks.filter((stock) => stock.branchCode === branchCode)
+    const relevantStocks = branchCode || shopId
+      ? effectiveStocks.filter(
+          (stock) =>
+            stock.branchCode === branchCode ||
+            ('shopId' in stock && stock.shopId === shopId),
+        )
       : effectiveStocks;
     const selectedStocks = relevantStocks.length
       ? relevantStocks
@@ -4641,8 +4657,12 @@ export class SalesService {
     // When the request is scoped to a shop, keep the legacy flat price fields
     // in sync with the selected shop as well. Some POS clients still read
     // `retail_price` instead of `shop_prices[0].retail_price`.
-    const selectedPriceStock = branchCode
-      ? selectedStocks.find((stock) => stock.branchCode === branchCode)
+    const selectedPriceStock = branchCode || shopId
+      ? selectedStocks.find(
+          (stock) =>
+            stock.branchCode === branchCode ||
+            ('shopId' in stock && stock.shopId === shopId),
+        )
       : selectedStocks[0];
     const selectedRetailPrice =
       selectedPriceStock?.salePrice ?? product.salePrice ?? 0;
@@ -4790,6 +4810,7 @@ export class SalesService {
       color: { id: string; name: string } | null;
       size: { id: string; name: string } | null;
       stocks: Array<{
+        shopId: string;
         branchCode: string;
         quantity: number;
         purchasePrice: number | null;
@@ -4798,6 +4819,7 @@ export class SalesService {
     },
     branchCode?: string,
     context?: any,
+    shopId?: string,
   ) {
     const label = [variant.color?.name, variant.size?.name]
       .filter(Boolean)
@@ -4814,6 +4836,7 @@ export class SalesService {
       },
       branchCode,
       context,
+      shopId,
     );
     return {
       ...response,
