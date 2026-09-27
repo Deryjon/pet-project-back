@@ -37,7 +37,9 @@ describe('SalesService money calculations', () => {
       ...prismaOverrides,
     } as unknown as PrismaService;
 
-    const companySettingsService = {} as CompanySettingsService;
+    const companySettingsService = {
+      getDefaultCurrencyIsoCode: jest.fn().mockReturnValue('UZS'),
+    } as unknown as CompanySettingsService;
     const usersService = {
       getCompanyRequestContext: jest.fn().mockResolvedValue({
         userId: 7,
@@ -78,6 +80,58 @@ describe('SalesService money calculations', () => {
       expect.objectContaining({ productId: 10, variantId: 'variant-red-m', quantity: 2, salePrice: 100 }),
       expect.objectContaining({ productId: 20, variantId: null, quantity: 6, salePrice: 50 }),
     ]);
+  });
+
+  it('finds sale products by the selected shop id as well as its branch code', async () => {
+    const productCount = jest.fn().mockResolvedValue(0);
+    const productFindMany = jest.fn().mockResolvedValue([]);
+    const { service } = createService({
+      shop: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'shop-1', branchCode: 'B1' }),
+      },
+      company: {
+        findUnique: jest.fn().mockResolvedValue({
+          productFeatureSettings: { bundles: false },
+        }),
+      },
+      product: {
+        count: productCount,
+        findMany: productFindMany,
+      },
+      $transaction: jest.fn((operations: Array<Promise<unknown>>) =>
+        Promise.all(operations),
+      ),
+    });
+
+    await service.findProductsForNewSale(
+      {
+        page: 1,
+        limit: 100,
+        search: '2000000022925',
+        shopId: 'shop-1',
+      },
+      testContext(),
+    );
+
+    expect(productFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          AND: expect.arrayContaining([
+            expect.objectContaining({
+              OR: expect.arrayContaining([
+                {
+                  stocks: {
+                    some: {
+                      OR: [{ branchCode: 'B1' }, { shopId: 'shop-1' }],
+                    },
+                  },
+                },
+              ]),
+            }),
+          ]),
+        }),
+      }),
+    );
   });
 
   describe('zero-safe finalized amounts', () => {
