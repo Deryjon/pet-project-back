@@ -117,6 +117,16 @@ describe('SalesService money calculations', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           AND: expect.arrayContaining([
+            {
+              OR: [
+                { productType: null },
+                {
+                  productType: {
+                    not: '85a7f6a9-0737-4f7e-a1a5-9d5f8f27d2f4',
+                  },
+                },
+              ],
+            },
             expect.objectContaining({
               OR: expect.arrayContaining([
                 {

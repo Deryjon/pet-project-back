@@ -657,7 +657,15 @@ export class SalesService {
       });
       const featureSettings = company?.productFeatureSettings as Record<string, unknown> | null;
       if (featureSettings?.bundles !== true) {
-        and.push({ productType: { not: KIT_PRODUCT_TYPE_ID } });
+        // Legacy products may not have productType populated. They are regular
+        // goods and must remain searchable when the optional bundles feature is
+        // disabled. SQL `productType <> kit` does not match NULL values.
+        and.push({
+          OR: [
+            { productType: null },
+            { productType: { not: KIT_PRODUCT_TYPE_ID } },
+          ],
+        });
       }
     }
 
