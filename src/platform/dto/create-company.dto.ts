@@ -1,4 +1,11 @@
-import { IsIn, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import {
+  IsDateString,
+  IsEmail,
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+} from 'class-validator';
 
 export class CreateCompanyDto {
   @IsString()
@@ -16,4 +23,28 @@ export class CreateCompanyDto {
   @IsOptional()
   @IsIn(['clothing_store', 'general_store'])
   business_type?: 'clothing_store' | 'general_store';
+
+  @IsOptional()
+  @IsString()
+  owner_name?: string;
+
+  @IsOptional()
+  @IsString()
+  owner_phone?: string;
+
+  @IsOptional()
+  @IsEmail()
+  owner_email?: string;
+
+  @IsOptional()
+  @IsString()
+  plan_id?: string;
+
+  @IsOptional()
+  @IsDateString()
+  subscription_start_date?: string;
+
+  @IsOptional()
+  @IsDateString()
+  subscription_end_date?: string;
 }

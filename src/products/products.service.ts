@@ -4541,7 +4541,14 @@ export class ProductsService {
       await this.logManualStockAdjustments(
         existingProduct.stocks,
         shipmentsWithBranchCodes,
-        updatedProduct.id,
+        {
+          id: updatedProduct.id,
+          name: updatedProduct.name,
+          sku: updatedProduct.sku,
+          barcode: updatedProduct.barcode,
+          salePrice: updatedProduct.salePrice,
+        },
+        supplierName ?? 'Ручной приход',
         writeContext,
       );
     }
@@ -10051,8 +10058,20 @@ export class ProductsService {
 
   private async logManualStockAdjustments(
     previousStocks: Array<{ branchCode: string; quantity: number }>,
-    nextStocks: Array<{ branchCode: string; quantity: number }>,
-    productId: number,
+    nextStocks: Array<{
+      branchCode: string;
+      quantity: number;
+      supplyPrice: number;
+      retailPrice: number;
+    }>,
+    product: {
+      id: number;
+      name: string;
+      sku: string | null;
+      barcode: string | null;
+      salePrice: number | null;
+    },
+    supplierName: string,
     writeContext: { companyId?: string | null; userId: number },
   ) {
     const companyId = writeContext.companyId;
@@ -10083,9 +10102,92 @@ export class ProductsService {
       companyId,
     );
 
+    const increases = changedBranchCodes.flatMap((branchCode) => {
+      const before = beforeByBranch.get(branchCode) ?? 0;
+      const nextStock = nextStocks.find(
+        (stock) => stock.branchCode === branchCode,
+      );
+      const after = nextStock?.quantity ?? 0;
+      const quantity = after - before;
+      const shop = this.resolveShopByBranchCode(branchCode, shopLookup);
+      return quantity > 0 && shop.id && nextStock
+        ? [{ branchCode, before, after, quantity, shop, nextStock }]
+        : [];
+    });
+
+    if (increases.length) {
+      const totalQuantity = increases.reduce(
+        (sum, item) => sum + item.quantity,
+        0,
+      );
+      const totalAmount = increases.reduce(
+        (sum, item) => sum + item.quantity * item.nextStock.supplyPrice,
+        0,
+      );
+      const weightedSupplyPrice = totalQuantity
+        ? totalAmount / totalQuantity
+        : 0;
+      const supplier = await this.prisma.supplier.upsert({
+        where: {
+          companyId_name: {
+            companyId,
+            name: supplierName.trim() || 'Ручной приход',
+          },
+        },
+        update: {},
+        create: {
+          companyId,
+          name: supplierName.trim() || 'Ручной приход',
+        },
+      });
+      const now = new Date();
+      await this.prisma.supplierInvoice.create({
+        data: {
+          companyId,
+          supplierId: supplier.id,
+          invoiceNumber: `MANUAL-${now.getTime()}`,
+          invoiceDate: now,
+          status: 'COMMITTED',
+          totalAmount,
+          totalQuantity,
+          createdById: writeContext.userId,
+          committedAt: now,
+          items: {
+            create: {
+              rawName: product.name,
+              rawSku: product.sku,
+              rawBarcode: product.barcode,
+              correctedName: product.name,
+              correctedSku: product.sku,
+              correctedBarcode: product.barcode,
+              originalQuantity: totalQuantity,
+              originalSupplyPrice: weightedSupplyPrice,
+              quantity: totalQuantity,
+              supplyPrice: weightedSupplyPrice,
+              totalPrice: totalAmount,
+              matchedProductId: product.id,
+              matchMethod: 'MANUAL_RECEIPT',
+              matchConfidence: 100,
+              status: 'MATCHED',
+              userConfirmed: true,
+              allocations: {
+                create: increases.map((item) => ({
+                  shop: { connect: { id: item.shop.id! } },
+                  quantity: item.quantity,
+                })),
+              },
+            },
+          },
+        },
+      });
+    }
+
     for (const branchCode of changedBranchCodes) {
       const before = beforeByBranch.get(branchCode) ?? 0;
       const after = afterByBranch.get(branchCode) ?? 0;
+      const nextStock = nextStocks.find(
+        (stock) => stock.branchCode === branchCode,
+      );
       const shop = this.resolveShopByBranchCode(branchCode, shopLookup);
       if (!shop.id) {
         continue;
@@ -10094,8 +10196,8 @@ export class ProductsService {
       await this.createStockMovementRecord(this.prisma, {
         companyId,
         shopId: shop.id,
-        productId,
-        type: 'ADJUSTMENT',
+        productId: product.id,
+        type: after > before ? 'PURCHASE' : 'ADJUSTMENT',
         quantity: after - before,
         beforeQuantity: before,
         afterQuantity: after,
@@ -10103,11 +10205,11 @@ export class ProductsService {
         externalId: '',
         fromShopId: '',
         toShopId: '',
-        supplyPrice: 0,
-        retailPrice: 0,
-        newRetailPrice: 0,
-        fromRetailPrice: 0,
-        fromSupplyPrice: 0,
+        supplyPrice: nextStock?.supplyPrice ?? 0,
+        retailPrice: nextStock?.retailPrice ?? product.salePrice ?? 0,
+        newRetailPrice: nextStock?.retailPrice ?? product.salePrice ?? 0,
+        fromRetailPrice: nextStock?.retailPrice ?? product.salePrice ?? 0,
+        fromSupplyPrice: nextStock?.supplyPrice ?? 0,
       });
     }
   }
