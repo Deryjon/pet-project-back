@@ -31,7 +31,33 @@ export class RolesService {
     const description = this.optionalString(body.description) ?? '';
     const isAdmin = this.optionalBoolean(body.is_admin) ?? false;
 
+    const deletedRole = await this.db.role.findFirst({
+      where: {
+        companyId,
+        name,
+        deletedAt: {
+          not: 0,
+        },
+      },
+    });
+
     await this.ensureRoleNameIsUnique(companyId, name);
+
+    if (deletedRole) {
+      const restoredRole = await this.db.role.update({
+        where: { id: deletedRole.id },
+        data: {
+          description,
+          isAdmin,
+          deletedAt: 0,
+        },
+      });
+
+      return {
+        message: restoredRole.id,
+      };
+    }
+
     const externalId = await this.getNextExternalId(companyId);
 
     const role = await this.db.role.create({

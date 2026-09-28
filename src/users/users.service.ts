@@ -718,10 +718,32 @@ export class UsersService {
         },
       });
 
-      if (existingPlatformUser) {
+      if (existingPlatformUser && existingPlatformUser.deletedAt === 0) {
         throw new BadRequestException(
           'Platform user with this phone number already exists',
         );
+      }
+
+      if (existingPlatformUser) {
+        await this.db.user.update({
+          where: { id: existingPlatformUser.id },
+          data: {
+            firstName,
+            lastName,
+            phoneNumber,
+            email,
+            passwordHash,
+            userType: 'platform',
+            platformRole: role,
+            isActive,
+            status: isActive ? 'active' : 'blocked',
+            deletedAt: 0,
+            canSwitchShops: false,
+            birthDate,
+          },
+        });
+
+        return this.findOneResponse(existingPlatformUser.id);
       }
 
       const user = await this.db.user.create({
@@ -777,10 +799,47 @@ export class UsersService {
       },
     });
 
-    if (existingCompanyUser) {
+    if (existingCompanyUser && existingCompanyUser.deletedAt === 0) {
       throw new BadRequestException(
         'User with this phone number already exists in this company',
       );
+    }
+
+    if (existingCompanyUser) {
+      await this.db.user.update({
+        where: { id: existingCompanyUser.id },
+        data: {
+          firstName,
+          lastName,
+          phoneNumber,
+          email,
+          passwordHash,
+          userType: 'company',
+          crmRoleId: crmRole?.id ?? null,
+          companyId,
+          isActive,
+          status: isActive ? 'active' : 'blocked',
+          deletedAt: 0,
+          branchCode: currentShop?.branchCode ?? null,
+          currentShopId: currentShop?.id ?? null,
+          canSwitchShops,
+          birthDate,
+          shopAccesses: {
+            deleteMany: {},
+            ...(allowedShops.length
+              ? {
+                  createMany: {
+                    data: allowedShops.map((shop) => ({
+                      shopId: shop.id,
+                    })),
+                  },
+                }
+              : {}),
+          },
+        },
+      });
+
+      return this.findOneResponse(existingCompanyUser.id);
     }
 
     const user = await this.db.user.create({
