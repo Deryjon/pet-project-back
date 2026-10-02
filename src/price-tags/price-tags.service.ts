@@ -46,6 +46,7 @@ export class PriceTagsService {
       .filter((id) => Number.isInteger(id) && id > 0);
     const publicIds = requestedIds.filter((id) => !/^\d+$/.test(id));
 
+    const normalizedBranchId = branchId?.trim();
     const [products, shop] = await Promise.all([
       this.prisma.product.findMany({
         where: {
@@ -57,8 +58,16 @@ export class PriceTagsService {
         },
         include: { stocks: true },
       }),
-      branchId
-        ? this.prisma.shop.findFirst({ where: { companyId, branchCode: branchId } })
+      normalizedBranchId
+        ? this.prisma.shop.findFirst({
+            where: {
+              companyId,
+              OR: [
+                { id: normalizedBranchId },
+                { branchCode: normalizedBranchId },
+              ],
+            },
+          })
         : null,
     ]);
 
@@ -68,20 +77,43 @@ export class PriceTagsService {
 
     return {
       products: requestedIds
-        .map((rawId) => ({ rawId, product: byNumericId.get(rawId) ?? byPublicId.get(rawId) }))
+        .map((rawId) => ({
+          rawId,
+          product: byNumericId.get(rawId) ?? byPublicId.get(rawId),
+        }))
         .filter(
-          (entry): entry is { rawId: string; product: NonNullable<typeof entry.product> } =>
-            Boolean(entry.product),
+          (
+            entry,
+          ): entry is {
+            rawId: string;
+            product: NonNullable<typeof entry.product>;
+          } => Boolean(entry.product),
         )
         .map(({ rawId, product: p }) => {
-          const stock = branchId
-            ? p.stocks.find((s) => s.branchCode === branchId)
+          const stock = normalizedBranchId
+            ? p.stocks.find(
+                (s) =>
+                  s.shopId === shop?.id ||
+                  s.branchCode === shop?.branchCode ||
+                  s.shopId === normalizedBranchId ||
+                  s.branchCode === normalizedBranchId,
+              )
             : p.stocks[0];
-          const price = stock?.salePrice ?? p.discountPrice ?? p.salePrice ?? 0;
+          const stockPrice = Number(stock?.salePrice ?? 0);
+          const discountPrice = Number(p.discountPrice ?? 0);
+          const productPrice = Number(p.salePrice ?? 0);
+          const price =
+            stockPrice > 0
+              ? stockPrice
+              : discountPrice > 0
+                ? discountPrice
+                : productPrice;
 
           const oldPrice = p.salePrice ?? 0;
           const hasDiscount =
-            p.discountPrice != null && oldPrice > 0 && p.discountPrice < oldPrice;
+            p.discountPrice != null &&
+            oldPrice > 0 &&
+            p.discountPrice < oldPrice;
           const discountPercent = hasDiscount
             ? Math.round((1 - p.discountPrice! / oldPrice) * 100)
             : 0;
