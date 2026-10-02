@@ -710,7 +710,10 @@ export class ProductsService {
     return requireCompanyContext(requestContext);
   }
 
-  async listProductColors(requestContext: CompanyRequestContext, includeInactive = false) {
+  async listProductColors(
+    requestContext: CompanyRequestContext,
+    includeInactive = false,
+  ) {
     const { companyId } = await this.getRequestContext(requestContext);
     return this.prisma.productColor.findMany({
       where: { companyId, ...(includeInactive ? {} : { isActive: true }) },
@@ -718,8 +721,13 @@ export class ProductsService {
     });
   }
 
-  async createProductColor(body: Record<string, unknown>, requestContext: CompanyRequestContext) {
-    const { companyId } = this.requireCatalogWriteContext(await this.getRequestContext(requestContext));
+  async createProductColor(
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const { companyId } = this.requireCatalogWriteContext(
+      await this.getRequestContext(requestContext),
+    );
     const name = this.requireString(body.name, 'name');
     const code = this.optionalString(body.code);
     if (code && !/^#[0-9a-f]{6}$/i.test(code)) {
@@ -730,16 +738,27 @@ export class ProductsService {
         data: { companyId, name, code: code?.toUpperCase() },
       });
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
         throw new ConflictException('Цвет с таким названием уже существует');
       }
       throw error;
     }
   }
 
-  async updateProductColor(id: string, body: Record<string, unknown>, requestContext: CompanyRequestContext) {
-    const { companyId } = this.requireCatalogWriteContext(await this.getRequestContext(requestContext));
-    const current = await this.prisma.productColor.findFirst({ where: { id, companyId } });
+  async updateProductColor(
+    id: string,
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const { companyId } = this.requireCatalogWriteContext(
+      await this.getRequestContext(requestContext),
+    );
+    const current = await this.prisma.productColor.findFirst({
+      where: { id, companyId },
+    });
     if (!current) throw new NotFoundException('Color not found');
     const code = body.code === null ? null : this.optionalString(body.code);
     if (code && !/^#[0-9a-f]{6}$/i.test(code)) {
@@ -749,13 +768,22 @@ export class ProductsService {
       return await this.prisma.productColor.update({
         where: { id },
         data: {
-          ...(body.name !== undefined ? { name: this.requireString(body.name, 'name') } : {}),
-          ...(body.code !== undefined ? { code: code?.toUpperCase() ?? null } : {}),
-          ...(typeof body.is_active === 'boolean' ? { isActive: body.is_active } : {}),
+          ...(body.name !== undefined
+            ? { name: this.requireString(body.name, 'name') }
+            : {}),
+          ...(body.code !== undefined
+            ? { code: code?.toUpperCase() ?? null }
+            : {}),
+          ...(typeof body.is_active === 'boolean'
+            ? { isActive: body.is_active }
+            : {}),
         },
       });
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
         throw new ConflictException('Цвет с таким названием уже существует');
       }
       throw error;
@@ -763,11 +791,21 @@ export class ProductsService {
   }
 
   async deleteProductColor(id: string, requestContext: CompanyRequestContext) {
-    const { companyId } = this.requireCatalogWriteContext(await this.getRequestContext(requestContext));
-    const current = await this.prisma.productColor.findFirst({ where: { id, companyId } });
+    const { companyId } = this.requireCatalogWriteContext(
+      await this.getRequestContext(requestContext),
+    );
+    const current = await this.prisma.productColor.findFirst({
+      where: { id, companyId },
+    });
     if (!current) throw new NotFoundException('Color not found');
-    if (await this.prisma.productVariant.count({ where: { companyId, colorId: id } })) {
-      throw new ConflictException('Нельзя удалить цвет, который используется в вариантах товара');
+    if (
+      await this.prisma.productVariant.count({
+        where: { companyId, colorId: id },
+      })
+    ) {
+      throw new ConflictException(
+        'Нельзя удалить цвет, который используется в вариантах товара',
+      );
     }
     await this.prisma.productColor.delete({ where: { id } });
     return { success: true };
@@ -792,8 +830,13 @@ export class ProductsService {
     });
   }
 
-  async createProductSize(body: Record<string, unknown>, requestContext: CompanyRequestContext) {
-    const { companyId } = this.requireCatalogWriteContext(await this.getRequestContext(requestContext));
+  async createProductSize(
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const { companyId } = this.requireCatalogWriteContext(
+      await this.getRequestContext(requestContext),
+    );
     const name = this.requireString(body.name, 'name');
     const type = this.requireString(body.type, 'type').toUpperCase();
     const system = this.optionalString(body.system)?.toUpperCase();
@@ -814,19 +857,36 @@ export class ProductsService {
         },
       });
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
         throw new ConflictException('Такой размер уже существует');
       }
       throw error;
     }
   }
 
-  async updateProductSize(id: string, body: Record<string, unknown>, requestContext: CompanyRequestContext) {
-    const { companyId } = this.requireCatalogWriteContext(await this.getRequestContext(requestContext));
-    const current = await this.prisma.productSize.findFirst({ where: { id, companyId } });
+  async updateProductSize(
+    id: string,
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const { companyId } = this.requireCatalogWriteContext(
+      await this.getRequestContext(requestContext),
+    );
+    const current = await this.prisma.productSize.findFirst({
+      where: { id, companyId },
+    });
     if (!current) throw new NotFoundException('Size not found');
-    const type = body.type === undefined ? undefined : this.requireString(body.type, 'type').toUpperCase();
-    const system = body.system === null ? null : this.optionalString(body.system)?.toUpperCase();
+    const type =
+      body.type === undefined
+        ? undefined
+        : this.requireString(body.type, 'type').toUpperCase();
+    const system =
+      body.system === null
+        ? null
+        : this.optionalString(body.system)?.toUpperCase();
     if (type && !['CLOTHING', 'SHOES', 'OTHER'].includes(type)) {
       throw new BadRequestException('type must be CLOTHING, SHOES or OTHER');
     }
@@ -837,15 +897,26 @@ export class ProductsService {
       return await this.prisma.productSize.update({
         where: { id },
         data: {
-          ...(body.name !== undefined ? { name: this.requireString(body.name, 'name') } : {}),
+          ...(body.name !== undefined
+            ? { name: this.requireString(body.name, 'name') }
+            : {}),
           ...(type ? { type: type as 'CLOTHING' | 'SHOES' | 'OTHER' } : {}),
-          ...(body.system !== undefined ? { system: system as 'EU' | 'US' | 'UK' | 'OTHER' | null } : {}),
-          ...(body.sort_order !== undefined ? { sortOrder: this.toInt(body.sort_order) ?? 0 } : {}),
-          ...(typeof body.is_active === 'boolean' ? { isActive: body.is_active } : {}),
+          ...(body.system !== undefined
+            ? { system: system as 'EU' | 'US' | 'UK' | 'OTHER' | null }
+            : {}),
+          ...(body.sort_order !== undefined
+            ? { sortOrder: this.toInt(body.sort_order) ?? 0 }
+            : {}),
+          ...(typeof body.is_active === 'boolean'
+            ? { isActive: body.is_active }
+            : {}),
         },
       });
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
         throw new ConflictException('Такой размер уже существует');
       }
       throw error;
@@ -853,20 +924,36 @@ export class ProductsService {
   }
 
   async deleteProductSize(id: string, requestContext: CompanyRequestContext) {
-    const { companyId } = this.requireCatalogWriteContext(await this.getRequestContext(requestContext));
-    const current = await this.prisma.productSize.findFirst({ where: { id, companyId } });
+    const { companyId } = this.requireCatalogWriteContext(
+      await this.getRequestContext(requestContext),
+    );
+    const current = await this.prisma.productSize.findFirst({
+      where: { id, companyId },
+    });
     if (!current) throw new NotFoundException('Size not found');
-    if (await this.prisma.productVariant.count({ where: { companyId, sizeId: id } })) {
-      throw new ConflictException('Нельзя удалить размер, который используется в вариантах товара');
+    if (
+      await this.prisma.productVariant.count({
+        where: { companyId, sizeId: id },
+      })
+    ) {
+      throw new ConflictException(
+        'Нельзя удалить размер, который используется в вариантах товара',
+      );
     }
     await this.prisma.productSize.delete({ where: { id } });
     return { success: true };
   }
 
-  async listProductVariants(productId: string, requestContext: CompanyRequestContext) {
+  async listProductVariants(
+    productId: string,
+    requestContext: CompanyRequestContext,
+  ) {
     const context = await this.getRequestContext(requestContext);
     const product = await this.prisma.product.findFirst({
-      where: this.applyProductScope(this.buildProductIdentifierWhere(productId), context),
+      where: this.applyProductScope(
+        this.buildProductIdentifierWhere(productId),
+        context,
+      ),
       select: { id: true },
     });
     if (!product) throw new NotFoundException('Product not found');
@@ -882,38 +969,82 @@ export class ProductsService {
     body: Record<string, unknown>,
     requestContext: CompanyRequestContext,
   ) {
-    const context = this.requireCatalogWriteContext(await this.getRequestContext(requestContext));
+    const context = this.requireCatalogWriteContext(
+      await this.getRequestContext(requestContext),
+    );
     const product = await this.prisma.product.findFirst({
-      where: this.applyProductScope(this.buildProductIdentifierWhere(productId), context),
-      select: { id: true, companyId: true, purchasePrice: true, salePrice: true },
+      where: this.applyProductScope(
+        this.buildProductIdentifierWhere(productId),
+        context,
+      ),
+      select: {
+        id: true,
+        companyId: true,
+        purchasePrice: true,
+        salePrice: true,
+      },
     });
-    if (!product || !product.companyId) throw new NotFoundException('Product not found');
+    if (!product || !product.companyId)
+      throw new NotFoundException('Product not found');
 
     const colorId = this.optionalString(body.color_id);
     const sizeId = this.optionalString(body.size_id);
     const [color, size] = await Promise.all([
-      colorId ? this.prisma.productColor.findFirst({ where: { id: colorId, companyId: context.companyId, isActive: true } }) : null,
-      sizeId ? this.prisma.productSize.findFirst({ where: { id: sizeId, companyId: context.companyId, isActive: true } }) : null,
+      colorId
+        ? this.prisma.productColor.findFirst({
+            where: {
+              id: colorId,
+              companyId: context.companyId,
+              isActive: true,
+            },
+          })
+        : null,
+      sizeId
+        ? this.prisma.productSize.findFirst({
+            where: { id: sizeId, companyId: context.companyId, isActive: true },
+          })
+        : null,
     ]);
-    if (colorId && !color) throw new BadRequestException('Цвет недоступен или отключён');
-    if (sizeId && !size) throw new BadRequestException('Размер недоступен или отключён');
+    if (colorId && !color)
+      throw new BadRequestException('Цвет недоступен или отключён');
+    if (sizeId && !size)
+      throw new BadRequestException('Размер недоступен или отключён');
 
     if (colorId || sizeId) {
       const duplicate = await this.prisma.productVariant.findFirst({
-        where: { productId: product.id, colorId: colorId ?? null, sizeId: sizeId ?? null, isActive: true },
+        where: {
+          productId: product.id,
+          colorId: colorId ?? null,
+          sizeId: sizeId ?? null,
+          isActive: true,
+        },
       });
-      if (duplicate) throw new ConflictException('Такой вариант цвета и размера уже существует');
+      if (duplicate)
+        throw new ConflictException(
+          'Такой вариант цвета и размера уже существует',
+        );
     }
 
     const stockRows = Array.isArray(body.stocks)
-      ? body.stocks.filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
+      ? body.stocks.filter(
+          (row): row is Record<string, unknown> =>
+            !!row && typeof row === 'object',
+        )
       : [];
     const resolvedStocks = await this.attachBranchCodesToShipments(
       stockRows.map((stock) => ({
         shopId: this.extractShopIdentifier(stock),
         quantity: this.toNumber(stock.quantity) ?? 0,
-        supplyPrice: this.toNumber(stock.purchase_price) ?? this.toNumber(body.purchase_price) ?? product.purchasePrice ?? 0,
-        retailPrice: this.toNumber(stock.sale_price) ?? this.toNumber(body.sale_price) ?? product.salePrice ?? 0,
+        supplyPrice:
+          this.toNumber(stock.purchase_price) ??
+          this.toNumber(body.purchase_price) ??
+          product.purchasePrice ??
+          0,
+        retailPrice:
+          this.toNumber(stock.sale_price) ??
+          this.toNumber(body.sale_price) ??
+          product.salePrice ??
+          0,
         hasTrigger: false,
         smallLeftMeasurementValue: 0,
       })),
@@ -936,7 +1067,8 @@ export class ProductsService {
             sizeId,
             barcode: this.optionalString(body.barcode),
             sku: this.optionalString(body.sku),
-            purchasePrice: this.toNumber(body.purchase_price) ?? product.purchasePrice,
+            purchasePrice:
+              this.toNumber(body.purchase_price) ?? product.purchasePrice,
             salePrice: this.toNumber(body.sale_price) ?? product.salePrice,
             attributeValues: this.toJsonFieldValue(body.attribute_values),
             stocks: resolvedStocks.length
@@ -952,32 +1084,64 @@ export class ProductsService {
                 }
               : undefined,
           },
-          include: { color: true, size: true, stocks: { include: { shop: true } } },
+          include: {
+            color: true,
+            size: true,
+            stocks: { include: { shop: true } },
+          },
         });
-        await tx.product.update({ where: { id: product.id }, data: { variantType: 'variative' } });
+        await tx.product.update({
+          where: { id: product.id },
+          data: { variantType: 'variative' },
+        });
         return variant;
       });
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        throw new ConflictException('Barcode или SKU уже используется другим вариантом');
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          'Barcode или SKU уже используется другим вариантом',
+        );
       }
       throw error;
     }
   }
 
-  async updateProductVariant(id: string, body: Record<string, unknown>, requestContext: CompanyRequestContext) {
-    const context = this.requireCatalogWriteContext(await this.getRequestContext(requestContext));
-    const variant = await this.prisma.productVariant.findFirst({ where: { id, companyId: context.companyId } });
+  async updateProductVariant(
+    id: string,
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = this.requireCatalogWriteContext(
+      await this.getRequestContext(requestContext),
+    );
+    const variant = await this.prisma.productVariant.findFirst({
+      where: { id, companyId: context.companyId },
+    });
     if (!variant) throw new NotFoundException('Product variant not found');
     return this.prisma.productVariant.update({
       where: { id },
       data: {
-        ...(body.barcode !== undefined ? { barcode: this.optionalString(body.barcode) ?? null } : {}),
-        ...(body.sku !== undefined ? { sku: this.optionalString(body.sku) ?? null } : {}),
-        ...(body.purchase_price !== undefined ? { purchasePrice: this.toNumber(body.purchase_price) } : {}),
-        ...(body.sale_price !== undefined ? { salePrice: this.toNumber(body.sale_price) } : {}),
-        ...(typeof body.is_active === 'boolean' ? { isActive: body.is_active } : {}),
-        ...(body.attribute_values !== undefined ? { attributeValues: this.toJsonFieldValue(body.attribute_values) } : {}),
+        ...(body.barcode !== undefined
+          ? { barcode: this.optionalString(body.barcode) ?? null }
+          : {}),
+        ...(body.sku !== undefined
+          ? { sku: this.optionalString(body.sku) ?? null }
+          : {}),
+        ...(body.purchase_price !== undefined
+          ? { purchasePrice: this.toNumber(body.purchase_price) }
+          : {}),
+        ...(body.sale_price !== undefined
+          ? { salePrice: this.toNumber(body.sale_price) }
+          : {}),
+        ...(typeof body.is_active === 'boolean'
+          ? { isActive: body.is_active }
+          : {}),
+        ...(body.attribute_values !== undefined
+          ? { attributeValues: this.toJsonFieldValue(body.attribute_values) }
+          : {}),
       },
       include: { color: true, size: true, stocks: { include: { shop: true } } },
     });
@@ -3617,16 +3781,45 @@ export class ProductsService {
     const context = await this.getRequestContext(requestContext);
     const companyId = context.companyId;
     const [categories, brands, suppliers, units] = await Promise.all([
-      this.prisma.category.findMany({ where: { companyId }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
-      this.prisma.brand.findMany({ where: { companyId }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
-      this.prisma.supplier.findMany({ where: { companyId, isActive: true }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
-      this.prisma.product.findMany({ where: { companyId, archivedAt: null, unit: { not: null } }, select: { unit: true }, distinct: ['unit'], orderBy: { unit: 'asc' } }),
+      this.prisma.category.findMany({
+        where: { companyId },
+        select: { id: true, name: true },
+        orderBy: { name: 'asc' },
+      }),
+      this.prisma.brand.findMany({
+        where: { companyId },
+        select: { id: true, name: true },
+        orderBy: { name: 'asc' },
+      }),
+      this.prisma.supplier.findMany({
+        where: { companyId, isActive: true },
+        select: { id: true, name: true },
+        orderBy: { name: 'asc' },
+      }),
+      this.prisma.product.findMany({
+        where: { companyId, archivedAt: null, unit: { not: null } },
+        select: { unit: true },
+        distinct: ['unit'],
+        orderBy: { unit: 'asc' },
+      }),
     ]);
     return {
-      categories: categories.map((item) => ({ value: String(item.id), label: item.name })),
-      brands: brands.map((item) => ({ value: String(item.id), label: item.name })),
-      suppliers: suppliers.map((item) => ({ value: String(item.id), label: item.name })),
-      units: units.map((item) => ({ value: String(item.unit), label: String(item.unit) })),
+      categories: categories.map((item) => ({
+        value: String(item.id),
+        label: item.name,
+      })),
+      brands: brands.map((item) => ({
+        value: String(item.id),
+        label: item.name,
+      })),
+      suppliers: suppliers.map((item) => ({
+        value: String(item.id),
+        label: item.name,
+      })),
+      units: units.map((item) => ({
+        value: String(item.unit),
+        label: String(item.unit),
+      })),
     };
   }
 
@@ -4037,7 +4230,10 @@ export class ProductsService {
                           name: supplierName,
                         },
                       },
-                      create: { companyId: productCompanyId, name: supplierName },
+                      create: {
+                        companyId: productCompanyId,
+                        name: supplierName,
+                      },
                     },
                   },
                 },
@@ -4099,7 +4295,11 @@ export class ProductsService {
       await this.syncCatalogVariants(createdProduct.id, body, writeContext);
     }
     if (productType === PRODUCT_TYPE_IDS.kit) {
-      await this.syncBundleComponents(createdProduct.id, body.set_products, writeContext.companyId);
+      await this.syncBundleComponents(
+        createdProduct.id,
+        body.set_products,
+        writeContext.companyId,
+      );
     }
 
     const productResponse = this.toCatalogCreateProductResponse(
@@ -4164,7 +4364,10 @@ export class ProductsService {
           orderBy: { createdAt: 'asc' },
         },
         bundleComponents: {
-          include: { componentProduct: true, componentVariant: { include: { color: true, size: true } } },
+          include: {
+            componentProduct: true,
+            componentVariant: { include: { color: true, size: true } },
+          },
           orderBy: { createdAt: 'asc' },
         },
       },
@@ -4395,15 +4598,13 @@ export class ProductsService {
           this.optionalString(body.product_group_id) ??
           existingProduct.productGroupId,
         tier: this.resolveProductTier(body.tier) ?? existingProduct.tier,
-        article:
-          this.optionalString(body.article) ?? existingProduct.article,
+        article: this.optionalString(body.article) ?? existingProduct.article,
         gender: this.optionalString(body.gender) ?? existingProduct.gender,
         season:
           body.season !== undefined
             ? this.resolveProductSeason(body.season)
             : existingProduct.season,
-        seasonYear:
-          this.toInt(body.season_year) ?? existingProduct.seasonYear,
+        seasonYear: this.toInt(body.season_year) ?? existingProduct.seasonYear,
         collection:
           this.optionalString(body.collection) ?? existingProduct.collection,
         quantity: supportsStock
@@ -4443,7 +4644,10 @@ export class ProductsService {
                         name: brandName,
                       },
                     },
-                    create: { companyId: writeContext.companyId, name: brandName },
+                    create: {
+                      companyId: writeContext.companyId,
+                      name: brandName,
+                    },
                   },
                 }
               : { disconnect: true }
@@ -4462,26 +4666,26 @@ export class ProductsService {
                         },
                       })),
                     }
-                    : supplierName
-                      ? {
-                          create: {
-                            supplier: {
-                              connectOrCreate: {
-                                where: {
-                                  companyId_name: {
-                                    companyId: writeContext.companyId,
-                                    name: supplierName,
-                                  },
-                                },
-                                create: {
+                  : supplierName
+                    ? {
+                        create: {
+                          supplier: {
+                            connectOrCreate: {
+                              where: {
+                                companyId_name: {
                                   companyId: writeContext.companyId,
                                   name: supplierName,
                                 },
                               },
+                              create: {
+                                companyId: writeContext.companyId,
+                                name: supplierName,
+                              },
                             },
                           },
-                        }
-                      : {}),
+                        },
+                      }
+                    : {}),
               }
             : undefined,
         stocks:
@@ -4527,10 +4731,22 @@ export class ProductsService {
     if (isVariative && body.variants !== undefined) {
       await this.syncCatalogVariants(updatedProduct.id, body, writeContext);
     }
-    if (productType !== PRODUCT_TYPE_IDS.kit && existingProduct.productType === PRODUCT_TYPE_IDS.kit) {
-      await this.prisma.productBundleComponent.deleteMany({ where: { bundleProductId: updatedProduct.id } });
-    } else if (body.set_products !== undefined || productType === PRODUCT_TYPE_IDS.kit) {
-      await this.syncBundleComponents(updatedProduct.id, body.set_products, writeContext.companyId);
+    if (
+      productType !== PRODUCT_TYPE_IDS.kit &&
+      existingProduct.productType === PRODUCT_TYPE_IDS.kit
+    ) {
+      await this.prisma.productBundleComponent.deleteMany({
+        where: { bundleProductId: updatedProduct.id },
+      });
+    } else if (
+      body.set_products !== undefined ||
+      productType === PRODUCT_TYPE_IDS.kit
+    ) {
+      await this.syncBundleComponents(
+        updatedProduct.id,
+        body.set_products,
+        writeContext.companyId,
+      );
     }
 
     if (
@@ -4796,6 +5012,8 @@ export class ProductsService {
     query: {
       limit: number;
       page: number;
+      supplyPriceLimit: number;
+      supplyPricePage: number;
       fromCreatedAt?: string;
       toCreatedAt?: string;
       movementType?: string;
@@ -4824,6 +5042,14 @@ export class ProductsService {
     );
     const safeLimit = Math.max(1, Math.trunc(query.limit || 10));
     const safePage = Math.max(1, Math.trunc(query.page || 1));
+    const safeSupplyPriceLimit = Math.max(
+      1,
+      Math.trunc(query.supplyPriceLimit || 10),
+    );
+    const safeSupplyPricePage = Math.max(
+      1,
+      Math.trunc(query.supplyPricePage || 1),
+    );
     const movementWhere = await this.buildProductMovementWhere(
       product.id,
       query,
@@ -4874,29 +5100,37 @@ export class ProductsService {
         quantity: true,
       },
     });
-    const supplyPriceHistory =
-      await this.prisma.productSupplyPriceHistory.findMany({
-        where: {
-          productId: product.id,
-          ...(context?.userType === 'company' && context.allowedShopIds?.length
-            ? {
-                shopId: {
-                  in: context.allowedShopIds,
-                },
-              }
-            : {}),
-        },
-        include: {
-          shop: {
-            select: {
-              id: true,
+    const supplyPriceHistoryWhere = {
+      productId: product.id,
+      ...(context?.userType === 'company' && context.allowedShopIds?.length
+        ? {
+            shopId: {
+              in: context.allowedShopIds,
+            },
+          }
+        : {}),
+    };
+    const [supplyPriceHistoryCount, supplyPriceHistory] =
+      await this.prisma.$transaction([
+        this.prisma.productSupplyPriceHistory.count({
+          where: supplyPriceHistoryWhere,
+        }),
+        this.prisma.productSupplyPriceHistory.findMany({
+          where: supplyPriceHistoryWhere,
+          include: {
+            shop: {
+              select: {
+                id: true,
+              },
             },
           },
-        },
-        orderBy: {
-          createdAt: 'desc',
-        },
-      });
+          orderBy: {
+            createdAt: 'desc',
+          },
+          skip: (safeSupplyPricePage - 1) * safeSupplyPriceLimit,
+          take: safeSupplyPriceLimit,
+        }),
+      ]);
     const acceptedOrderAggregate = await this.prisma.orderItem.aggregate({
       where: {
         productId: product.id,
@@ -4937,6 +5171,7 @@ export class ProductsService {
       written_off: stats.writtenOff,
       count,
       movements: pagedMovements,
+      supply_price_history_count: supplyPriceHistoryCount,
       supply_price_history: supplyPriceHistory.map((item) => ({
         product_id: product.publicId,
         shop_id: item.shop.id,
@@ -5390,7 +5625,9 @@ export class ProductsService {
                 product,
                 transfer,
                 transfer.items.find(
-                  (item: any) => item.productId === product.id && item.variantId === variant.id,
+                  (item: any) =>
+                    item.productId === product.id &&
+                    item.variantId === variant.id,
                 ),
                 shopLookup,
                 variant,
@@ -5401,7 +5638,8 @@ export class ProductsService {
                 product,
                 transfer,
                 transfer.items.find(
-                  (item: any) => item.productId === product.id && !item.variantId,
+                  (item: any) =>
+                    item.productId === product.id && !item.variantId,
                 ),
                 shopLookup,
               ),
@@ -5715,8 +5953,11 @@ export class ProductsService {
               branchCode: transfer.arrivalShop.branchCode,
               quantity,
               purchasePrice:
-                sourceVariantStock?.purchasePrice ?? item.variant?.purchasePrice ?? 0,
-              salePrice: sourceVariantStock?.salePrice ?? item.variant?.salePrice ?? 0,
+                sourceVariantStock?.purchasePrice ??
+                item.variant?.purchasePrice ??
+                0,
+              salePrice:
+                sourceVariantStock?.salePrice ?? item.variant?.salePrice ?? 0,
             },
             update: { quantity: { increment: quantity } },
           });
@@ -5867,8 +6108,11 @@ export class ProductsService {
               branchCode: transfer.arrivalShop.branchCode,
               quantity: arrivedQty,
               purchasePrice:
-                sourceVariantStock?.purchasePrice ?? item.variant?.purchasePrice ?? 0,
-              salePrice: sourceVariantStock?.salePrice ?? item.variant?.salePrice ?? 0,
+                sourceVariantStock?.purchasePrice ??
+                item.variant?.purchasePrice ??
+                0,
+              salePrice:
+                sourceVariantStock?.salePrice ?? item.variant?.salePrice ?? 0,
             },
             update: { quantity: { increment: arrivedQty } },
           });
@@ -6234,8 +6478,19 @@ export class ProductsService {
         componentProductId: number;
         componentVariantId: string | null;
         quantity: Prisma.Decimal;
-        componentProduct: { id: number; name: string; sku: string | null; barcode: string | null };
-        componentVariant: { id: string; sku: string | null; barcode: string | null; color: { name: string } | null; size: { name: string } | null } | null;
+        componentProduct: {
+          id: number;
+          name: string;
+          sku: string | null;
+          barcode: string | null;
+        };
+        componentVariant: {
+          id: string;
+          sku: string | null;
+          barcode: string | null;
+          color: { name: string } | null;
+          size: { name: string } | null;
+        } | null;
       }>;
     },
     transfer: any,
@@ -6302,7 +6557,8 @@ export class ProductsService {
               name: `${item.product.name} — ${[item.variant.color?.name, item.variant.size?.name].filter(Boolean).join(' / ')}`,
               sku: item.variant.sku,
               barcode: item.variant.barcode,
-              purchasePrice: item.variant.purchasePrice ?? item.product.purchasePrice,
+              purchasePrice:
+                item.variant.purchasePrice ?? item.product.purchasePrice,
               salePrice: item.variant.salePrice ?? item.product.salePrice,
               stocks: item.variant.stocks,
             }
@@ -6628,7 +6884,9 @@ export class ProductsService {
       (item) => `${item.colorId ?? ''}:${item.sizeId ?? ''}`,
     );
     if (new Set(combinationKeys).size !== combinationKeys.length) {
-      throw new ConflictException('Матрица содержит повторяющиеся цвет и размер');
+      throw new ConflictException(
+        'Матрица содержит повторяющиеся цвет и размер',
+      );
     }
 
     const [validColors, validSizes, existingVariants] = await Promise.all([
@@ -6636,9 +6894,11 @@ export class ProductsService {
         where: {
           companyId: context.companyId,
           isActive: true,
-          id: { in: normalized.flatMap((item) =>
-            item.colorId ? [item.colorId] : [],
-          ) },
+          id: {
+            in: normalized.flatMap((item) =>
+              item.colorId ? [item.colorId] : [],
+            ),
+          },
         },
         select: { id: true },
       }),
@@ -6646,9 +6906,11 @@ export class ProductsService {
         where: {
           companyId: context.companyId,
           isActive: true,
-          id: { in: normalized.flatMap((item) =>
-            item.sizeId ? [item.sizeId] : [],
-          ) },
+          id: {
+            in: normalized.flatMap((item) =>
+              item.sizeId ? [item.sizeId] : [],
+            ),
+          },
         },
         select: { id: true },
       }),
@@ -6666,7 +6928,9 @@ export class ProductsService {
           (item.sizeId && !sizeIds.has(item.sizeId)),
       )
     ) {
-      throw new BadRequestException('Цвет или размер варианта недоступен либо отключён');
+      throw new BadRequestException(
+        'Цвет или размер варианта недоступен либо отключён',
+      );
     }
 
     const existingIds = new Set(existingVariants.map((item) => item.id));
@@ -6721,7 +6985,9 @@ export class ProductsService {
                 select: { id: true },
               });
           retainedIds.add(variant.id);
-          await tx.productVariantStock.deleteMany({ where: { variantId: variant.id } });
+          await tx.productVariantStock.deleteMany({
+            where: { variantId: variant.id },
+          });
           if (stocks.length) {
             await tx.productVariantStock.createMany({
               data: stocks.map((stock) => ({
@@ -6771,7 +7037,9 @@ export class ProductsService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
-        throw new ConflictException('Barcode или SKU варианта уже используется');
+        throw new ConflictException(
+          'Barcode или SKU варианта уже используется',
+        );
       }
       throw error;
     }
@@ -6786,59 +7054,97 @@ export class ProductsService {
       where: { id: companyId },
       select: { productFeatureSettings: true },
     });
-    const settings = company?.productFeatureSettings as Record<string, unknown> | null;
+    const settings = company?.productFeatureSettings as Record<
+      string,
+      unknown
+    > | null;
     if (settings?.bundles !== true) {
-      throw new BadRequestException('Функция комплектов отключена в настройках компании');
+      throw new BadRequestException(
+        'Функция комплектов отключена в настройках компании',
+      );
     }
     if (!Array.isArray(value) || value.length === 0) {
-      throw new BadRequestException('Комплект должен содержать хотя бы один товар');
+      throw new BadRequestException(
+        'Комплект должен содержать хотя бы один товар',
+      );
     }
 
     const rows = value.map((raw, index) => {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-        throw new BadRequestException(`Некорректная позиция комплекта #${index + 1}`);
+        throw new BadRequestException(
+          `Некорректная позиция комплекта #${index + 1}`,
+        );
       }
       const item = raw as Record<string, unknown>;
       const componentProductId = this.toInt(item.product_id);
       const componentVariantId = this.optionalString(item.variant_id);
       const quantity = this.toNumber(item.quantity);
       if (!componentProductId || !quantity || quantity <= 0) {
-        throw new BadRequestException(`Позиция комплекта #${index + 1} требует product_id и положительное quantity`);
+        throw new BadRequestException(
+          `Позиция комплекта #${index + 1} требует product_id и положительное quantity`,
+        );
       }
       if (componentProductId === bundleProductId) {
         throw new BadRequestException('Комплект не может включать сам себя');
       }
       return { componentProductId, componentVariantId, quantity };
     });
-    const keys = rows.map((row) => `${row.componentProductId}:${row.componentVariantId ?? ''}`);
+    const keys = rows.map(
+      (row) => `${row.componentProductId}:${row.componentVariantId ?? ''}`,
+    );
     if (new Set(keys).size !== keys.length) {
-      throw new BadRequestException('Состав комплекта содержит повторяющиеся товары');
+      throw new BadRequestException(
+        'Состав комплекта содержит повторяющиеся товары',
+      );
     }
 
     const products = await this.prisma.product.findMany({
-      where: { companyId, id: { in: rows.map((row) => row.componentProductId) }, archivedAt: null },
+      where: {
+        companyId,
+        id: { in: rows.map((row) => row.componentProductId) },
+        archivedAt: null,
+      },
       select: { id: true, productType: true },
     });
-    if (products.length !== new Set(rows.map((row) => row.componentProductId)).size) {
+    if (
+      products.length !==
+      new Set(rows.map((row) => row.componentProductId)).size
+    ) {
       throw new BadRequestException('Один из товаров комплекта не найден');
     }
-    if (products.some((product) => product.productType === PRODUCT_TYPE_IDS.kit)) {
+    if (
+      products.some((product) => product.productType === PRODUCT_TYPE_IDS.kit)
+    ) {
       throw new BadRequestException('Вложенные комплекты не поддерживаются');
     }
-    const variantIds = rows.flatMap((row) => row.componentVariantId ? [row.componentVariantId] : []);
+    const variantIds = rows.flatMap((row) =>
+      row.componentVariantId ? [row.componentVariantId] : [],
+    );
     if (variantIds.length) {
       const variants = await this.prisma.productVariant.findMany({
         where: { companyId, id: { in: variantIds }, isActive: true },
         select: { id: true, productId: true },
       });
-      const variantMap = new Map(variants.map((variant) => [variant.id, variant.productId]));
-      if (rows.some((row) => row.componentVariantId && variantMap.get(row.componentVariantId) !== row.componentProductId)) {
-        throw new BadRequestException('Вариант не принадлежит товару комплекта');
+      const variantMap = new Map(
+        variants.map((variant) => [variant.id, variant.productId]),
+      );
+      if (
+        rows.some(
+          (row) =>
+            row.componentVariantId &&
+            variantMap.get(row.componentVariantId) !== row.componentProductId,
+        )
+      ) {
+        throw new BadRequestException(
+          'Вариант не принадлежит товару комплекта',
+        );
       }
     }
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.productBundleComponent.deleteMany({ where: { bundleProductId } });
+      await tx.productBundleComponent.deleteMany({
+        where: { bundleProductId },
+      });
       await tx.productBundleComponent.createMany({
         data: rows.map((row) => ({ companyId, bundleProductId, ...row })),
       });
@@ -7157,8 +7463,19 @@ export class ProductsService {
         componentProductId: number;
         componentVariantId: string | null;
         quantity: Prisma.Decimal;
-        componentProduct: { id: number; name: string; sku: string | null; barcode: string | null };
-        componentVariant: { id: string; sku: string | null; barcode: string | null; color: { name: string } | null; size: { name: string } | null } | null;
+        componentProduct: {
+          id: number;
+          name: string;
+          sku: string | null;
+          barcode: string | null;
+        };
+        componentVariant: {
+          id: string;
+          sku: string | null;
+          barcode: string | null;
+          color: { name: string } | null;
+          size: { name: string } | null;
+        } | null;
       }>;
     },
     shopLookup: Map<string, ResolvedShop>,
@@ -7290,15 +7607,24 @@ export class ProductsService {
         : [],
       brand_id: product.brandId ? String(product.brandId) : '',
       measurement_unit_id: measurementUnitId,
-      set_products: product.bundleComponents?.map((component) => ({
-        product_id: component.componentProductId,
-        variant_id: component.componentVariantId,
-        name: component.componentProduct.name,
-        sku: component.componentVariant?.sku ?? component.componentProduct.sku,
-        barcode: component.componentVariant?.barcode ?? component.componentProduct.barcode,
-        variant_name: [component.componentVariant?.color?.name, component.componentVariant?.size?.name].filter(Boolean).join(' / '),
-        quantity: Number(component.quantity),
-      })) ?? [],
+      set_products:
+        product.bundleComponents?.map((component) => ({
+          product_id: component.componentProductId,
+          variant_id: component.componentVariantId,
+          name: component.componentProduct.name,
+          sku:
+            component.componentVariant?.sku ?? component.componentProduct.sku,
+          barcode:
+            component.componentVariant?.barcode ??
+            component.componentProduct.barcode,
+          variant_name: [
+            component.componentVariant?.color?.name,
+            component.componentVariant?.size?.name,
+          ]
+            .filter(Boolean)
+            .join(' / '),
+          quantity: Number(component.quantity),
+        })) ?? [],
       retail_price: product.salePrice ?? 0,
       supply_price: product.purchasePrice ?? 0,
       product_group_id: product.productGroupId ?? '',
@@ -7778,16 +8104,37 @@ export class ProductsService {
     }
     if (seasonYear !== undefined) and.push({ seasonYear });
     if (gender) and.push({ gender: { equals: gender, mode: 'insensitive' } });
-    if (collection) and.push({ collection: { contains: collection, mode: 'insensitive' } });
+    if (collection)
+      and.push({ collection: { contains: collection, mode: 'insensitive' } });
     if (stockState === 'in_stock') {
-      and.push(resolvedShopIds.length
-        ? { stocks: { some: { branchCode: { in: resolvedShopIds }, quantity: { gt: 0 } } } }
-        : { quantity: { gt: 0 } });
+      and.push(
+        resolvedShopIds.length
+          ? {
+              stocks: {
+                some: {
+                  branchCode: { in: resolvedShopIds },
+                  quantity: { gt: 0 },
+                },
+              },
+            }
+          : { quantity: { gt: 0 } },
+      );
     }
     if (stockState === 'out_of_stock') {
-      and.push(resolvedShopIds.length
-        ? { NOT: { stocks: { some: { branchCode: { in: resolvedShopIds }, quantity: { gt: 0 } } } } }
-        : { quantity: { lte: 0 } });
+      and.push(
+        resolvedShopIds.length
+          ? {
+              NOT: {
+                stocks: {
+                  some: {
+                    branchCode: { in: resolvedShopIds },
+                    quantity: { gt: 0 },
+                  },
+                },
+              },
+            }
+          : { quantity: { lte: 0 } },
+      );
     }
 
     if (search) {
@@ -8536,7 +8883,12 @@ export class ProductsService {
           rowNumber: index + 1,
         },
       ].map(({ rowNumber, ...prepared }) => {
-        if (!prepared.name && !prepared.article && !prepared.sku && !prepared.barcode) {
+        if (
+          !prepared.name &&
+          !prepared.article &&
+          !prepared.sku &&
+          !prepared.barcode
+        ) {
           throw new BadRequestException(
             `Row ${rowNumber} must contain at least name, sku, or barcode`,
           );
@@ -8694,10 +9046,7 @@ export class ProductsService {
       const variant = await this.prisma.productVariant.findFirst({
         where: {
           companyId,
-          OR: [
-            ...(sku ? [{ sku }] : []),
-            ...(barcode ? [{ barcode }] : []),
-          ],
+          OR: [...(sku ? [{ sku }] : []), ...(barcode ? [{ barcode }] : [])],
         },
         include: {
           product: {
@@ -9091,7 +9440,9 @@ export class ProductsService {
         row,
         companyId,
       );
-      const hasVariantDimensions = Boolean(dimensions.colorId || dimensions.sizeId);
+      const hasVariantDimensions = Boolean(
+        dimensions.colorId || dimensions.sizeId,
+      );
       const product = await tx.product.create({
         data: {
           company: {
@@ -9273,7 +9624,8 @@ export class ProductsService {
       normalizedSizeType === 'CLOTHING' ||
       normalizedSizeType === 'OTHER'
         ? normalizedSizeType
-        : row.sizeName && /^\d+(?:[.,]\d+)?$/.test(row.sizeName) &&
+        : row.sizeName &&
+            /^\d+(?:[.,]\d+)?$/.test(row.sizeName) &&
             Number(row.sizeName.replace(',', '.')) >= 35 &&
             Number(row.sizeName.replace(',', '.')) <= 50
           ? 'SHOES'
@@ -9380,7 +9732,10 @@ export class ProductsService {
               salePrice: appliedRetailPrice,
             },
           });
-          changedFields.push({ field: 'variant', reason: 'new_variant_created' });
+          changedFields.push({
+            field: 'variant',
+            reason: 'new_variant_created',
+          });
         }
         const variantStock = await tx.productVariantStock.findUnique({
           where: { variantId_shopId: { variantId: variant.id, shopId } },
@@ -9414,7 +9769,9 @@ export class ProductsService {
         });
         changedFields.push({
           field: 'variant_quantity',
-          reason: variantStock ? 'existing_variant_stock_incremented' : 'new_variant_stock_created',
+          reason: variantStock
+            ? 'existing_variant_stock_incremented'
+            : 'new_variant_stock_created',
         });
       }
 
@@ -9684,8 +10041,14 @@ export class ProductsService {
       ) {
         const candidate = this.formatSku(prefix, skuNumber);
         const [existingProduct, existingVariant] = await Promise.all([
-          this.prisma.product.findFirst({ where: { companyId, sku: candidate }, select: { id: true } }),
-          this.prisma.productVariant.findFirst({ where: { companyId, sku: candidate }, select: { id: true } }),
+          this.prisma.product.findFirst({
+            where: { companyId, sku: candidate },
+            select: { id: true },
+          }),
+          this.prisma.productVariant.findFirst({
+            where: { companyId, sku: candidate },
+            select: { id: true },
+          }),
         ]);
         if (!existingProduct && !existingVariant) {
           sku = candidate;
@@ -9718,8 +10081,14 @@ export class ProductsService {
       while (nextPayload <= BARCODE_PAYLOAD_MAX) {
         const candidate = this.formatEan13Barcode(nextPayload);
         const [existingProduct, existingVariant] = await Promise.all([
-          this.prisma.product.findFirst({ where: { companyId, barcode: candidate }, select: { id: true } }),
-          this.prisma.productVariant.findFirst({ where: { companyId, barcode: candidate }, select: { id: true } }),
+          this.prisma.product.findFirst({
+            where: { companyId, barcode: candidate },
+            select: { id: true },
+          }),
+          this.prisma.productVariant.findFirst({
+            where: { companyId, barcode: candidate },
+            select: { id: true },
+          }),
         ]);
         if (!existingProduct && !existingVariant) {
           barcode = candidate;

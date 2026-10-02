@@ -84,7 +84,10 @@ export class ProductsController {
     @Query('include_inactive') includeInactive: string | undefined,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.productsService.listProductColors(requestContext, this.toBoolean(includeInactive));
+    return this.productsService.listProductColors(
+      requestContext,
+      this.toBoolean(includeInactive),
+    );
   }
 
   @Post('product-colors')
@@ -482,7 +485,10 @@ export class ProductsController {
         seasonYear: this.toNumber(seasonYear),
         gender: gender?.trim(),
         collection: collection?.trim(),
-        stockState: stockState === 'in_stock' || stockState === 'out_of_stock' ? stockState : undefined,
+        stockState:
+          stockState === 'in_stock' || stockState === 'out_of_stock'
+            ? stockState
+            : undefined,
       },
       requestContext,
     );
@@ -544,7 +550,10 @@ export class ProductsController {
         seasonYear: this.toNumber(seasonYear),
         gender: gender?.trim(),
         collection: collection?.trim(),
-        stockState: stockState === 'in_stock' || stockState === 'out_of_stock' ? stockState : undefined,
+        stockState:
+          stockState === 'in_stock' || stockState === 'out_of_stock'
+            ? stockState
+            : undefined,
       },
       requestContext,
     );
@@ -736,6 +745,8 @@ export class ProductsController {
     @Param('id') id: string,
     @Query('limit') limit: string | undefined,
     @Query('page') page: string | undefined,
+    @Query('supply_price_limit') supplyPriceLimit: string | undefined,
+    @Query('supply_price_page') supplyPricePage: string | undefined,
     @Query('from_created_at') fromCreatedAt: string | undefined,
     @Query('to_created_at') toCreatedAt: string | undefined,
     @Query('movement_type') movementType: string | undefined,
@@ -747,6 +758,8 @@ export class ProductsController {
       {
         limit: Number(limit) || 10,
         page: Number(page) || 1,
+        supplyPriceLimit: Number(supplyPriceLimit) || 10,
+        supplyPricePage: Number(supplyPricePage) || 1,
         fromCreatedAt: fromCreatedAt?.trim(),
         toCreatedAt: toCreatedAt?.trim(),
         movementType: movementType?.trim(),
@@ -820,7 +833,10 @@ export class ProductsController {
         seasonYear: this.toNumber(body.season_year),
         gender: this.toOptionalString(body.gender),
         collection: this.toOptionalString(body.collection),
-        stockState: body.stock_state === 'in_stock' || body.stock_state === 'out_of_stock' ? body.stock_state : undefined,
+        stockState:
+          body.stock_state === 'in_stock' || body.stock_state === 'out_of_stock'
+            ? body.stock_state
+            : undefined,
       },
       requestContext,
     );
@@ -861,7 +877,10 @@ export class ProductsController {
         seasonYear: this.toNumber(body.season_year),
         gender: this.toOptionalString(body.gender),
         collection: this.toOptionalString(body.collection),
-        stockState: body.stock_state === 'in_stock' || body.stock_state === 'out_of_stock' ? body.stock_state : undefined,
+        stockState:
+          body.stock_state === 'in_stock' || body.stock_state === 'out_of_stock'
+            ? body.stock_state
+            : undefined,
       },
       requestContext,
     );
