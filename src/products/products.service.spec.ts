@@ -36,6 +36,9 @@ describe('ProductsService identifier generation', () => {
         findMany: jest.fn(),
         findFirst: jest.fn(),
       },
+      productVariant: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
     };
 
     const service = new ProductsService(prisma as any, {} as any);

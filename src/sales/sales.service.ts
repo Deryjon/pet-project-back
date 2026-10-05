@@ -12,6 +12,10 @@ import {
   CompanyRequestContext,
   requireCompanyContext,
 } from '../auth/request-context';
+import {
+  LOYALTY_CASHBACK_PAYMENT_METHOD,
+  LOYALTY_CASHBACK_PAYMENT_NAME,
+} from '../common/loyalty-payment';
 import { postSaleStockDecrease } from '../common/sale-stock-posting';
 import { runSerializableTransaction } from '../common/serializable-transaction';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
@@ -912,11 +916,17 @@ export class SalesService {
           (p) => p && typeof p === 'object',
         )
       : [];
-    this.validatePaymentAmounts(
-      paymentsInput,
-      this.getSalePayableAmount(recalculatedSale),
+    // Part paid from the client's loyalty balance; money payments and debt
+    // must cover the rest.
+    const cashbackPayment = this.parseCashbackPayment(
       body,
+      this.getSalePayableAmount(recalculatedSale),
     );
+    const moneyDue =
+      Math.round(
+        (this.getSalePayableAmount(recalculatedSale) - cashbackPayment) * 100,
+      ) / 100;
+    this.validatePaymentAmounts(paymentsInput, moneyDue, body);
 
     const primaryMethodRaw =
       paymentsInput[0]?.company_payment_type_id ??
@@ -929,9 +939,7 @@ export class SalesService {
       context?.companyId,
     );
 
-    const hasDebtComponent = Boolean(
-      this.parseDebtPayload(body, this.getSalePayableAmount(recalculatedSale)),
-    );
+    const hasDebtComponent = Boolean(this.parseDebtPayload(body, moneyDue));
     const extraPayments =
       paymentsInput.length > 1 || (hasDebtComponent && paymentsInput.length > 0)
         ? await Promise.all(
@@ -950,6 +958,13 @@ export class SalesService {
             }),
           )
         : null;
+    const loyaltyPayments = this.withCashbackPayment(
+      extraPayments,
+      paymentMethod,
+      moneyDue,
+      hasDebtComponent,
+      cashbackPayment,
+    );
 
     const resolvedClient = await this.resolveSaleClientPayload(
       body,
@@ -993,15 +1008,26 @@ export class SalesService {
           data: {
             status: 'paid',
             isDraft: false,
-            paymentMethod,
-            extraPayments: extraPayments ?? undefined,
+            paymentMethod: loyaltyPayments.paymentMethod,
+            extraPayments: loyaltyPayments.extraPayments ?? undefined,
             clientId: resolvedClient.clientId,
             clientName: resolvedClient.clientName,
             parkNote: null,
             paidAt: new Date(),
           },
         });
-        await this.createDebtForFinalizedSale(tx, updatedSale, body, context);
+        await this.debitCashbackPayment(tx, updatedSale, cashbackPayment);
+        await this.createDebtForFinalizedSale(
+          tx,
+          updatedSale,
+          body,
+          context,
+          moneyDue,
+        );
+        await this.creditSaleCashback(tx, {
+          ...updatedSale,
+          cashbackPaid: cashbackPayment,
+        });
         await this.refreshClientSalesAggregates(
           tx,
           updatedSale.companyId ?? context?.companyId ?? null,
@@ -1191,20 +1217,29 @@ export class SalesService {
       );
       await this.syncProductsQuantity(returnItems, tx);
       await this.refreshBaseSaleStatus(originalSale.id, tx);
+      const refundedToBalance = await this.refundCashbackPayment(
+        tx,
+        createdReturnSale,
+        originalSale,
+      );
       await this.applyReturnCreditToDebt(
         tx,
         originalSale,
-        Number(createdReturnSale.payableTotal ?? 0),
+        Number(createdReturnSale.payableTotal ?? 0) - refundedToBalance,
       );
 
-      return createdReturnSale;
+      return { createdReturnSale, refundedToBalance };
     });
 
+    const refundTotal = Number(returnSale.createdReturnSale.payableTotal ?? 0);
     return {
       success: true,
       type: 'return',
       original_order_id: String(originalSale.id),
-      return_order: this.toSaleListItem(returnSale, context),
+      return_order: this.toSaleListItem(returnSale.createdReturnSale, context),
+      refunded_to_loyalty_balance: returnSale.refundedToBalance,
+      refunded_in_money:
+        Math.round((refundTotal - returnSale.refundedToBalance) * 100) / 100,
     };
   }
 
@@ -1413,6 +1448,9 @@ export class SalesService {
       : null;
     if (variantId && !variant) {
       throw new NotFoundException('Product variant not found');
+    }
+    if (!variant) {
+      await this.assertNoColourSizeVariants(productId, context.companyId);
     }
     const itemPurchasePrice = variant?.purchasePrice ?? product.purchasePrice ?? 0;
     const itemName = variant
@@ -1699,11 +1737,17 @@ export class SalesService {
         )
       : [];
 
-    this.validatePaymentAmounts(
-      paymentsInput,
-      this.getSalePayableAmount(recalculatedSale),
+    // Part paid from the client's loyalty balance; money payments and debt
+    // must cover the rest.
+    const cashbackPayment = this.parseCashbackPayment(
       body,
+      this.getSalePayableAmount(recalculatedSale),
     );
+    const moneyDue =
+      Math.round(
+        (this.getSalePayableAmount(recalculatedSale) - cashbackPayment) * 100,
+      ) / 100;
+    this.validatePaymentAmounts(paymentsInput, moneyDue, body);
 
     const primaryMethodRaw =
       this.optionalString(
@@ -1716,9 +1760,7 @@ export class SalesService {
       context?.companyId,
     );
 
-    const hasDebtComponent = Boolean(
-      this.parseDebtPayload(body, this.getSalePayableAmount(recalculatedSale)),
-    );
+    const hasDebtComponent = Boolean(this.parseDebtPayload(body, moneyDue));
     const extraPayments =
       paymentsInput.length > 1 || (hasDebtComponent && paymentsInput.length > 0)
         ? await Promise.all(
@@ -1737,6 +1779,13 @@ export class SalesService {
             }),
           )
         : null;
+    const loyaltyPayments = this.withCashbackPayment(
+      extraPayments,
+      paymentMethod,
+      moneyDue,
+      hasDebtComponent,
+      cashbackPayment,
+    );
 
     const saleComment = this.optionalString(body.comment);
 
@@ -1773,8 +1822,10 @@ export class SalesService {
           data: {
             status: 'paid',
             isDraft: false,
-            paymentMethod,
-            ...(extraPayments !== null ? { extraPayments } : {}),
+            paymentMethod: loyaltyPayments.paymentMethod,
+            ...(loyaltyPayments.extraPayments !== null
+              ? { extraPayments: loyaltyPayments.extraPayments }
+              : {}),
             ...(resolvedSellerId !== null ? { userId: resolvedSellerId } : {}),
             clientId: resolvedClient.clientId,
             clientName: resolvedClient.clientName,
@@ -1784,7 +1835,18 @@ export class SalesService {
             ...(saleComment ? { comment: saleComment } : {}),
           },
         });
-        await this.createDebtForFinalizedSale(tx, persistedSale, body, context);
+        await this.debitCashbackPayment(tx, persistedSale, cashbackPayment);
+        await this.createDebtForFinalizedSale(
+          tx,
+          persistedSale,
+          body,
+          context,
+          moneyDue,
+        );
+        await this.creditSaleCashback(tx, {
+          ...persistedSale,
+          cashbackPaid: cashbackPayment,
+        });
         await this.refreshClientSalesAggregates(
           tx,
           persistedSale.companyId ?? context?.companyId ?? null,
@@ -1954,6 +2016,11 @@ export class SalesService {
 
     this.assertSaleAccess(sale, context);
 
+    // A second cancel would restore stock and reverse cashback again.
+    if (sale.status === 'cancelled') {
+      throw new BadRequestException('Документ уже отменён');
+    }
+
     if (sale.parentSaleId) {
       if (!['return', 'exchange'].includes(String(sale.saleType))) {
         throw new BadRequestException('Unsupported adjustment document type');
@@ -2028,7 +2095,11 @@ export class SalesService {
             })),
           },
         );
+        for (const adjustment of adjustmentSales) {
+          await this.undoSaleCashback(tx, adjustment);
+        }
         await this.refreshBaseSaleStatus(sale.parentSaleId, tx);
+        await this.refreshClientSalesAggregates(tx, sale.companyId, sale.clientId);
       });
 
       return {
@@ -2081,6 +2152,15 @@ export class SalesService {
         cancelReason: cancelReason ?? 'Cancelled sale document',
       },
     });
+    await this.undoSaleCashback(
+      this.prisma as unknown as Prisma.TransactionClient,
+      sale,
+    );
+    await this.refreshClientSalesAggregates(
+      this.prisma as unknown as Prisma.TransactionClient,
+      sale.companyId,
+      sale.clientId,
+    );
     await this.createSaleAuditLog(
       this.prisma,
       context,
@@ -2514,6 +2594,9 @@ export class SalesService {
       if (variantId && !variant) {
         throw new NotFoundException(`Product variant ${variantId} not found`);
       }
+      if (!variant) {
+        await this.assertNoColourSizeVariants(productId, context.companyId);
+      }
 
       const stock = originalSale.branchCode
         ? variantId
@@ -2737,6 +2820,22 @@ export class SalesService {
     if (!sale) {
       throw new InternalServerErrorException('Adjustment sale was not created');
     }
+
+    if (args.saleType === 'return') {
+      await this.reverseReturnCashback(
+        tx as Prisma.TransactionClient,
+        sale,
+        args.originalSale,
+      );
+    } else {
+      await this.creditSaleCashback(tx as Prisma.TransactionClient, sale);
+    }
+
+    await this.refreshClientSalesAggregates(
+      tx as Prisma.TransactionClient,
+      sale.companyId,
+      sale.clientId,
+    );
 
     return sale;
   }
@@ -3280,6 +3379,24 @@ export class SalesService {
         };
       });
     });
+  }
+
+  /**
+   * Stock of a colour/size product lives on its variants; selling the bare
+   * product would decrement the total but leave every size untouched.
+   */
+  private async assertNoColourSizeVariants(productId: number, companyId: string | null) {
+    const colourSizeVariants = await this.prisma.productVariant.count({
+      where: {
+        productId,
+        ...(companyId ? { companyId } : {}),
+        isActive: true,
+        OR: [{ colorId: { not: null } }, { sizeId: { not: null } }],
+      },
+    });
+    if (colourSizeVariants > 0) {
+      throw new BadRequestException('Выберите цвет и размер товара');
+    }
   }
 
   private async writeOffSaleItemsFromStock(
@@ -4148,6 +4265,7 @@ export class SalesService {
       total: Prisma.Decimal | number;
       payableTotal: Prisma.Decimal | number;
       discountAmount: Prisma.Decimal | number;
+      cashbackAmount?: Prisma.Decimal | number | null;
       clientId?: string | null;
       clientName?: string | null;
       paymentMethod: string | null;
@@ -4459,8 +4577,8 @@ export class SalesService {
             },
           ];
         })(),
-        with_cashback: 0,
-        returned_cashback: 0,
+        with_cashback: Math.max(0, Number(saleInput.cashbackAmount ?? 0)),
+        returned_cashback: Math.max(0, -Number(saleInput.cashbackAmount ?? 0)),
         loyalty_balance_income: 0,
         loyalty_balance_outcome: 0,
         loyalty_payment: 0,
@@ -5512,10 +5630,11 @@ export class SalesService {
       userId?: number;
       companyId?: string | null;
     } | null,
+    amountDue?: number,
   ) {
     const debtInput = this.parseDebtPayload(
       body,
-      this.getSalePayableAmount(sale),
+      amountDue ?? this.getSalePayableAmount(sale),
     );
     if (!debtInput) {
       return null;
@@ -5623,6 +5742,285 @@ export class SalesService {
     return (creditMinor - remainingCredit) / 100;
   }
 
+  /**
+   * Loyalty cashback: credited to the client's balance only when the sale has
+   * a client and the company's loyalty program is on. The credited amount is
+   * stored on the sale so returns/cancellations reverse exactly that amount.
+   */
+  private async creditSaleCashback(
+    tx: Prisma.TransactionClient,
+    sale: {
+      id: number;
+      companyId: string | null;
+      clientId: string | null;
+      payableTotal: Prisma.Decimal | number;
+      cashbackPaid?: Prisma.Decimal | number | null;
+    },
+  ) {
+    if (!sale.companyId || !sale.clientId) {
+      return 0;
+    }
+    // No cashback on the part paid with the cashback itself.
+    const base = Number(sale.payableTotal) - Number(sale.cashbackPaid ?? 0);
+    const [loyalty, currency] = await Promise.all([
+      tx.loyaltyProgramSetting.findUnique({
+        where: { companyId: sale.companyId },
+      }),
+      tx.companyCurrencySetting.findUnique({
+        where: { companyId: sale.companyId },
+        select: { precision: true },
+      }),
+    ]);
+    const percent = loyalty?.isActive
+      ? loyalty.type === 'bonus'
+        ? loyalty.bonusPercent
+        : loyalty.cashbackPercent
+      : 0;
+    if (!(percent > 0)) {
+      return 0;
+    }
+    const amount = this.roundToCurrency(
+      (base * percent) / 100,
+      currency?.precision ?? 0,
+    );
+    if (amount <= 0) {
+      return 0;
+    }
+    await tx.sale.update({
+      where: { id: sale.id },
+      data: { cashbackAmount: amount },
+    });
+    await tx.client.update({
+      where: { id: sale.clientId },
+      data: { balanceUzs: { increment: amount } },
+    });
+    return amount;
+  }
+
+  /**
+   * A return takes back the cashback earned on the returned part of the
+   * original sale, never more than what is still left of it.
+   */
+  private async reverseReturnCashback(
+    tx: Prisma.TransactionClient,
+    returnSale: {
+      id: number;
+      clientId: string | null;
+      payableTotal: Prisma.Decimal | number;
+    },
+    originalSale: {
+      id: number;
+      cashbackAmount?: Prisma.Decimal | number | null;
+      payableTotal: Prisma.Decimal | number;
+    },
+  ) {
+    const earned = Number(originalSale.cashbackAmount ?? 0);
+    const originalTotal = Number(originalSale.payableTotal);
+    if (!returnSale.clientId || earned <= 0 || originalTotal <= 0) {
+      return 0;
+    }
+    const alreadyReversed = await tx.sale.aggregate({
+      where: {
+        parentSaleId: originalSale.id,
+        saleType: 'return',
+        status: { not: 'cancelled' },
+        id: { not: returnSale.id },
+      },
+      _sum: { cashbackAmount: true },
+    });
+    const remaining = earned + Number(alreadyReversed._sum.cashbackAmount ?? 0);
+    const proportional =
+      (earned * Number(returnSale.payableTotal)) / originalTotal;
+    const amount = Math.round(Math.min(remaining, proportional) * 100) / 100;
+    if (amount <= 0) {
+      return 0;
+    }
+    await tx.sale.update({
+      where: { id: returnSale.id },
+      data: { cashbackAmount: -amount },
+    });
+    await tx.client.update({
+      where: { id: returnSale.clientId },
+      data: { balanceUzs: { decrement: amount } },
+    });
+    return amount;
+  }
+
+  /**
+   * Cancelling a document undoes everything it moved on the loyalty balance:
+   * cashback credited (cashbackAmount) and balance spent/refunded
+   * (cashbackPaid).
+   */
+  private async undoSaleCashback(
+    tx: Prisma.TransactionClient,
+    sale: {
+      clientId: string | null;
+      cashbackAmount?: Prisma.Decimal | number | null;
+      cashbackPaid?: Prisma.Decimal | number | null;
+    },
+  ) {
+    const amount =
+      Number(sale.cashbackAmount ?? 0) - Number(sale.cashbackPaid ?? 0);
+    if (!sale.clientId || amount === 0) {
+      return;
+    }
+    await tx.client.update({
+      where: { id: sale.clientId },
+      data: { balanceUzs: { decrement: amount } },
+    });
+  }
+
+  private parseCashbackPayment(body: Record<string, unknown>, payable: number) {
+    const raw = body.cashback_payment ?? body.loyalty_payment;
+    if (raw === undefined || raw === null || raw === '') {
+      return 0;
+    }
+    const amount = Number(raw);
+    if (!Number.isFinite(amount) || amount < 0) {
+      throw new BadRequestException('Сумма оплаты бонусами указана неверно');
+    }
+    if (Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-8) {
+      throw new BadRequestException(
+        'Payment amounts cannot contain fractions smaller than 0.01',
+      );
+    }
+    if (Math.round(amount * 100) > Math.round(Math.max(0, payable) * 100)) {
+      throw new BadRequestException(
+        'Оплата бонусами не может превышать сумму к оплате',
+      );
+    }
+    return amount;
+  }
+
+  /**
+   * Adds the loyalty-balance part to the payment breakdown. With bonuses the
+   * breakdown is always explicit, otherwise readers would attribute the whole
+   * payable total to the primary payment method.
+   */
+  private withCashbackPayment(
+    extraPayments: Array<{ payment_method: string | null; amount: number }> | null,
+    paymentMethod: string | null,
+    moneyDue: number,
+    hasDebt: boolean,
+    cashbackPayment: number,
+  ) {
+    if (cashbackPayment <= 0) {
+      return { paymentMethod, extraPayments };
+    }
+    const money =
+      extraPayments ??
+      (moneyDue > 0 && !hasDebt ? [{ payment_method: paymentMethod, amount: moneyDue }] : []);
+    return {
+      paymentMethod:
+        moneyDue <= 0 ? LOYALTY_CASHBACK_PAYMENT_METHOD : paymentMethod,
+      extraPayments: [
+        ...money,
+        { payment_method: LOYALTY_CASHBACK_PAYMENT_METHOD, amount: cashbackPayment },
+      ],
+    };
+  }
+
+  /** Spends the client's loyalty balance; never lets it go below zero. */
+  private async debitCashbackPayment(
+    tx: Prisma.TransactionClient,
+    sale: { id: number; companyId: string | null; clientId: string | null },
+    amount: number,
+  ) {
+    if (amount <= 0) {
+      return;
+    }
+    if (!sale.companyId || !sale.clientId) {
+      throw new BadRequestException('Выберите клиента, чтобы оплатить бонусами');
+    }
+    const loyalty = await tx.loyaltyProgramSetting.findUnique({
+      where: { companyId: sale.companyId },
+    });
+    if (!loyalty?.isActive) {
+      throw new BadRequestException('Программа лояльности выключена');
+    }
+    const debited = await tx.client.updateMany({
+      where: {
+        id: sale.clientId,
+        companyId: sale.companyId,
+        balanceUzs: { gte: amount },
+      },
+      data: { balanceUzs: { decrement: amount } },
+    });
+    if (debited.count !== 1) {
+      throw new ConflictException('Недостаточно бонусов на балансе клиента');
+    }
+    await tx.sale.update({
+      where: { id: sale.id },
+      data: { cashbackPaid: amount },
+    });
+  }
+
+  /**
+   * A return gives back to the loyalty balance the share of the returned part
+   * that was paid with bonuses — only the rest is refunded in money.
+   */
+  private async refundCashbackPayment(
+    tx: Prisma.TransactionClient,
+    returnSale: {
+      id: number;
+      clientId: string | null;
+      payableTotal: Prisma.Decimal | number;
+      paymentMethod: string | null;
+    },
+    originalSale: {
+      id: number;
+      cashbackPaid?: Prisma.Decimal | number | null;
+      payableTotal: Prisma.Decimal | number;
+    },
+  ) {
+    const paid = Number(originalSale.cashbackPaid ?? 0);
+    const originalTotal = Number(originalSale.payableTotal);
+    const returnTotal = Number(returnSale.payableTotal);
+    if (!returnSale.clientId || paid <= 0 || originalTotal <= 0) {
+      return 0;
+    }
+    const alreadyRefunded = await tx.sale.aggregate({
+      where: {
+        parentSaleId: originalSale.id,
+        saleType: 'return',
+        status: { not: 'cancelled' },
+        id: { not: returnSale.id },
+      },
+      _sum: { cashbackPaid: true },
+    });
+    const remaining = paid + Number(alreadyRefunded._sum.cashbackPaid ?? 0);
+    const amount =
+      Math.round(
+        Math.min(remaining, (paid * returnTotal) / originalTotal, returnTotal) * 100,
+      ) / 100;
+    if (amount <= 0) {
+      return 0;
+    }
+    const moneyRefund = Math.round((returnTotal - amount) * 100) / 100;
+    await tx.sale.update({
+      where: { id: returnSale.id },
+      data: {
+        cashbackPaid: -amount,
+        extraPayments: [
+          ...(moneyRefund > 0
+            ? [{ payment_method: returnSale.paymentMethod, amount: moneyRefund }]
+            : []),
+          { payment_method: LOYALTY_CASHBACK_PAYMENT_METHOD, amount },
+        ],
+      },
+    });
+    await tx.client.update({
+      where: { id: returnSale.clientId },
+      data: { balanceUzs: { increment: amount } },
+    });
+    return amount;
+  }
+
+  private roundToCurrency(value: number, precision: number) {
+    const factor = 10 ** Math.max(0, Math.min(2, precision));
+    return Math.round(value * factor) / factor;
+  }
+
   private async refreshClientSalesAggregates(
     tx: Prisma.TransactionClient,
     companyId?: string | null,
@@ -5632,22 +6030,18 @@ export class SalesService {
       return;
     }
 
-    const [visitsCount, aggregate] = await Promise.all([
-      tx.sale.count({
-        where: {
-          companyId,
-          clientId,
-          isDraft: false,
-          saleType: { in: ['sale', 'exchange'] },
-        },
-      }),
+    // Cancelled documents never count; returns reduce the purchase total.
+    const purchaseWhere = {
+      companyId,
+      clientId,
+      isDraft: false,
+      status: { not: 'cancelled' },
+      saleType: { in: ['sale', 'exchange'] },
+    };
+    const [visitsCount, aggregate, returns] = await Promise.all([
+      tx.sale.count({ where: purchaseWhere }),
       tx.sale.aggregate({
-        where: {
-          companyId,
-          clientId,
-          isDraft: false,
-          saleType: { in: ['sale', 'exchange'] },
-        },
+        where: purchaseWhere,
         _sum: {
           payableTotal: true,
         },
@@ -5656,13 +6050,21 @@ export class SalesService {
           createdAt: true,
         },
       }),
+      tx.sale.aggregate({
+        where: { ...purchaseWhere, saleType: 'return' },
+        _sum: { payableTotal: true },
+      }),
     ]);
 
     await tx.client.update({
       where: { id: clientId },
       data: {
         totalPurchasesUzs: new Prisma.Decimal(
-          Number(aggregate._sum?.payableTotal ?? 0),
+          Math.max(
+            0,
+            Number(aggregate._sum?.payableTotal ?? 0) -
+              Number(returns._sum?.payableTotal ?? 0),
+          ),
         ),
         visitsCount,
         lastPurchaseAt:
@@ -5851,6 +6253,12 @@ export class SalesService {
           typeof paymentTypeMeta?.name === 'string' ? paymentTypeMeta.name : '',
       });
     }
+    lookup.set(LOYALTY_CASHBACK_PAYMENT_METHOD, {
+      id: LOYALTY_CASHBACK_PAYMENT_METHOD,
+      name: LOYALTY_CASHBACK_PAYMENT_NAME,
+      payment_type_id: LOYALTY_CASHBACK_PAYMENT_METHOD,
+      payment_type_name: LOYALTY_CASHBACK_PAYMENT_NAME,
+    });
 
     return lookup;
   }

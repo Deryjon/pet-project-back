@@ -121,6 +121,15 @@ export class ProductsController {
     return this.productsService.deleteProductColor(id, requestContext);
   }
 
+  @Get('product-size-grids')
+  @UseGuards(PermissionsGuard)
+  @Permissions('catalog-operations')
+  getSizeGridPresets(
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.productsService.getSizeGridPresets(requestContext);
+  }
+
   @Get('product-sizes')
   @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')

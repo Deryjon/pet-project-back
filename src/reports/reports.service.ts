@@ -1193,7 +1193,7 @@ export class ReportsService {
           supplier: item.product?.suppliers?.[0]?.supplier?.name ?? '',
           product_id: item.productId,
           product_name: item.name,
-          quantity: item.quantity,
+          quantity: Number(item.quantity),
           return_amount: this.getItemFinalPrice(item),
           reason: 'Customer return',
           responsible: this.buildUserName(sale.user),

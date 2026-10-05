@@ -17,6 +17,7 @@
     "ocr:test": "python3 -m unittest discover -s ocr -p 'test_*.py'",
     "prisma:seed": "ts-node prisma/seed.ts",
     "repair:orphaned-exchange-returns": "ts-node prisma/repair-orphaned-exchange-returns.ts",
+    "repair:variant-product-stocks": "ts-node prisma/fix-variant-product-stocks.ts",
     "prisma:studio": "prisma studio",
     "start": "nest start",
     "start:dev": "nest start --watch",

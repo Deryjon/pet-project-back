@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { LOYALTY_CASHBACK_PAYMENT_METHOD } from '../common/loyalty-payment';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateChequeSettingsDto } from './dto/update-cheque-settings.dto';
 import {
@@ -119,8 +120,11 @@ export class ReceiptsService {
 
     let paidCash = 0;
     let paidCard = 0;
+    let paidCashback = 0;
     for (const p of payments) {
-      if (isCash(p.payment_method)) {
+      if (p.payment_method === LOYALTY_CASHBACK_PAYMENT_METHOD) {
+        paidCashback += p.amount;
+      } else if (isCash(p.payment_method)) {
         paidCash += p.amount;
       } else {
         paidCard += p.amount;
@@ -137,13 +141,11 @@ export class ReceiptsService {
       0,
     );
 
-    const loyalty = await this.prisma.loyaltyProgramSetting.findUnique({
-      where: { companyId },
-    });
-    const cashbackEarned =
-      loyalty?.isActive && loyalty.cashbackPercent > 0
-        ? (Number(sale.payableTotal) * loyalty.cashbackPercent) / 100
-        : 0;
+    // Exactly what was credited to the client's balance for this sale: zero
+    // when no client was selected (the receipt line is then hidden), negative
+    // on a return (cashback taken back).
+    const cashbackMoved = Number(sale.cashbackAmount ?? 0);
+    const cashbackEarned = Math.max(0, cashbackMoved);
 
     const items: ReceiptItemSnapshot[] = sale.items.map((item) => {
       const lineTotal = Number(item.lineTotal);
@@ -184,7 +186,6 @@ export class ReceiptsService {
     // Balance/debt breakdown for this sale, derived from the client's current
     // (post-sale) totals minus the delta this sale caused — so it's exact at
     // the moment the receipt is first created, then frozen forever after.
-    const paidCashback = 0;
     let balanceAfter = 0;
     let balanceAdded = 0;
     let balanceDeducted = 0;
@@ -197,7 +198,11 @@ export class ReceiptsService {
     if (sale.client) {
       balanceAfter = Number(sale.client.balanceUzs);
       balanceAdded = cashbackEarned;
-      balanceDeducted = paidCashback;
+      // On a sale paidCashback was spent from the balance; on a return it was
+      // given back to it.
+      const cashbackPaid = Number(sale.cashbackPaid ?? 0);
+      balanceAdded += Math.max(0, -cashbackPaid);
+      balanceDeducted = Math.max(0, cashbackPaid) + Math.max(0, -cashbackMoved);
       balanceBefore = balanceAfter - balanceAdded + balanceDeducted;
 
       debtAfter = Number(sale.client.debtUzs);

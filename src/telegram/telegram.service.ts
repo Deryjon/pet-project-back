@@ -11,6 +11,10 @@ import {
   requireCompanyContext,
 } from '../auth/request-context';
 import { PlatformService } from '../platform/platform.service';
+import {
+  LOYALTY_CASHBACK_PAYMENT_METHOD,
+  LOYALTY_CASHBACK_PAYMENT_NAME,
+} from '../common/loyalty-payment';
 import { PrismaService } from '../prisma/prisma.service';
 
 function randomToken(length = 8): string {
@@ -274,6 +278,12 @@ export class TelegramService {
       const paymentLines: string[] = [];
       if (extraPayments && extraPayments.length > 0) {
         for (const p of extraPayments) {
+          if (p.payment_method === LOYALTY_CASHBACK_PAYMENT_METHOD) {
+            paymentLines.push(
+              `🎁 ${LOYALTY_CASHBACK_PAYMENT_NAME}: ${this.fmt(p.amount)} UZS`,
+            );
+            continue;
+          }
           const pt = findPaymentType(p.payment_method);
           const label = pt
             ? `${pt.isCashPaymentType ? '💵' : '💳'} ${pt.name}`

@@ -56,7 +56,19 @@ export class PriceTagsService {
             ...(publicIds.length ? [{ publicId: { in: publicIds } }] : []),
           ],
         },
-        include: { stocks: true },
+        include: {
+          stocks: true,
+          // Clothing/shoes: every colour/size has its own barcode, so it
+          // needs its own price tag.
+          variants: {
+            where: {
+              isActive: true,
+              OR: [{ colorId: { not: null } }, { sizeId: { not: null } }],
+            },
+            include: { color: true, size: true, stocks: true },
+            orderBy: { createdAt: 'asc' },
+          },
+        },
       }),
       normalizedBranchId
         ? this.prisma.shop.findFirst({
@@ -89,7 +101,7 @@ export class PriceTagsService {
             product: NonNullable<typeof entry.product>;
           } => Boolean(entry.product),
         )
-        .map(({ rawId, product: p }) => {
+        .flatMap(({ rawId, product: p }) => {
           const stock = normalizedBranchId
             ? p.stocks.find(
                 (s) =>
@@ -118,8 +130,9 @@ export class PriceTagsService {
             ? Math.round((1 - p.discountPrice! / oldPrice) * 100)
             : 0;
 
-          return {
+          const productTag = {
             id: p.id,
+            tag_key: String(p.id),
             name: p.name,
             sku: p.sku ?? '',
             barcode: p.barcode ?? '',
@@ -131,6 +144,40 @@ export class PriceTagsService {
             quantity: stock?.quantity ?? p.quantity ?? 0,
             copies: copiesMap.get(rawId) ?? 1,
           };
+          if (!p.variants.length) {
+            return [productTag];
+          }
+          return p.variants.map((variant) => {
+            const variantStock = normalizedBranchId
+              ? variant.stocks.find(
+                  (s) =>
+                    s.shopId === shop?.id ||
+                    s.branchCode === shop?.branchCode ||
+                    s.shopId === normalizedBranchId ||
+                    s.branchCode === normalizedBranchId,
+                )
+              : variant.stocks[0];
+            const variantPrice =
+              Number(variantStock?.salePrice ?? 0) ||
+              Number(variant.salePrice ?? 0) ||
+              price;
+            const label = [variant.color?.name, variant.size?.name]
+              .filter(Boolean)
+              .join(' / ');
+            return {
+              ...productTag,
+              tag_key: `${p.id}:${variant.id}`,
+              name: label ? `${p.name} ${label}` : p.name,
+              sku: variant.sku ?? productTag.sku,
+              barcode: variant.barcode ?? productTag.barcode,
+              price: variantPrice,
+              old_price: hasDiscount && oldPrice > variantPrice ? oldPrice : 0,
+              discount_percent:
+                hasDiscount && oldPrice > variantPrice ? discountPercent : 0,
+              quantity: variantStock?.quantity ?? 0,
+              copies: copiesMap.get(`${p.id}:${variant.id}`) ?? copiesMap.get(rawId) ?? 1,
+            };
+          });
         }),
     };
   }

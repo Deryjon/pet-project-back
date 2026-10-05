@@ -9,6 +9,10 @@ import {
   getSignedSaleAmount,
 } from '../common/money-calculations';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
+import {
+  LOYALTY_CASHBACK_PAYMENT_METHOD,
+  LOYALTY_CASHBACK_PAYMENT_NAME,
+} from '../common/loyalty-payment';
 import { PrismaService } from '../prisma/prisma.service';
 
 const granularityLabels: Record<string, string> = {
@@ -171,6 +175,10 @@ export class DashboardService {
         paymentTypeLookup.set(paymentTypeId, paymentTypeName);
       }
     }
+    paymentTypeLookup.set(
+      LOYALTY_CASHBACK_PAYMENT_METHOD,
+      LOYALTY_CASHBACK_PAYMENT_NAME,
+    );
 
     const paymentTotals = new Map<
       string,

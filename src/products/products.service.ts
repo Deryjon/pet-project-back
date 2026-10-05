@@ -19,6 +19,7 @@ import {
 } from '../common/product-photo.util';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { DEFAULT_PRODUCT_COLORS, SIZE_GRID_PRESETS } from './size-grid-presets';
 
 const ALLOWED_PRODUCT_PHOTO_MIME_TYPES = new Set([
   'image/jpeg',
@@ -811,6 +812,67 @@ export class ProductsService {
     return { success: true };
   }
 
+  /**
+   * Ready-made size grids (and a basic colour palette for a company that has
+   * none yet), creating any missing sizes on first use so a new clothing
+   * store can create products without filling dictionaries by hand.
+   */
+  async getSizeGridPresets(requestContext: CompanyRequestContext) {
+    const { companyId } = await this.getRequestContext(requestContext);
+
+    await this.prisma.productSize.createMany({
+      data: SIZE_GRID_PRESETS.flatMap((grid) =>
+        grid.sizes.map((name, index) => ({
+          companyId,
+          name,
+          type: grid.type,
+          system: grid.system,
+          sortOrder: index,
+        })),
+      ),
+      skipDuplicates: true,
+    });
+    if ((await this.prisma.productColor.count({ where: { companyId } })) === 0) {
+      await this.prisma.productColor.createMany({
+        data: DEFAULT_PRODUCT_COLORS.map((color) => ({ companyId, ...color })),
+        skipDuplicates: true,
+      });
+    }
+
+    const [sizes, colors] = await Promise.all([
+      this.prisma.productSize.findMany({
+        where: { companyId, isActive: true },
+        orderBy: [{ type: 'asc' }, { sortOrder: 'asc' }, { name: 'asc' }],
+      }),
+      this.prisma.productColor.findMany({
+        where: { companyId, isActive: true },
+        orderBy: [{ name: 'asc' }],
+      }),
+    ]);
+
+    const presetSizeKeys = new Set<string>();
+    const grids = SIZE_GRID_PRESETS.map((grid) => ({
+      key: grid.key,
+      name: grid.name,
+      sizes: grid.sizes.flatMap((name) => {
+        const size = sizes.find((row) => row.type === grid.type && row.name === name);
+        if (!size) return [];
+        presetSizeKeys.add(size.id);
+        return [{ id: size.id, name: size.name }];
+      }),
+    }));
+    const customSizes = sizes.filter((size) => !presetSizeKeys.has(size.id));
+    if (customSizes.length) {
+      grids.push({
+        key: 'custom',
+        name: 'Свои размеры',
+        sizes: customSizes.map((size) => ({ id: size.id, name: size.name })),
+      });
+    }
+
+    return { grids, colors };
+  }
+
   async listProductSizes(
     requestContext: CompanyRequestContext,
     options: { type?: string; includeInactive?: boolean } = {},
@@ -1094,6 +1156,9 @@ export class ProductsService {
           where: { id: product.id },
           data: { variantType: 'variative' },
         });
+        if (colorId || sizeId) {
+          await this.syncVariativeProductStocks(tx, product.id);
+        }
         return variant;
       });
     } catch (error) {
@@ -1121,29 +1186,44 @@ export class ProductsService {
       where: { id, companyId: context.companyId },
     });
     if (!variant) throw new NotFoundException('Product variant not found');
-    return this.prisma.productVariant.update({
-      where: { id },
-      data: {
-        ...(body.barcode !== undefined
-          ? { barcode: this.optionalString(body.barcode) ?? null }
-          : {}),
-        ...(body.sku !== undefined
-          ? { sku: this.optionalString(body.sku) ?? null }
-          : {}),
-        ...(body.purchase_price !== undefined
-          ? { purchasePrice: this.toNumber(body.purchase_price) }
-          : {}),
-        ...(body.sale_price !== undefined
-          ? { salePrice: this.toNumber(body.sale_price) }
-          : {}),
-        ...(typeof body.is_active === 'boolean'
-          ? { isActive: body.is_active }
-          : {}),
-        ...(body.attribute_values !== undefined
-          ? { attributeValues: this.toJsonFieldValue(body.attribute_values) }
-          : {}),
-      },
-      include: { color: true, size: true, stocks: { include: { shop: true } } },
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.productVariant.update({
+        where: { id },
+        data: {
+          ...(body.barcode !== undefined
+            ? { barcode: this.optionalString(body.barcode) ?? null }
+            : {}),
+          ...(body.sku !== undefined
+            ? { sku: this.optionalString(body.sku) ?? null }
+            : {}),
+          ...(body.purchase_price !== undefined
+            ? { purchasePrice: this.toNumber(body.purchase_price) }
+            : {}),
+          ...(body.sale_price !== undefined
+            ? { salePrice: this.toNumber(body.sale_price) }
+            : {}),
+          ...(typeof body.is_active === 'boolean'
+            ? { isActive: body.is_active }
+            : {}),
+          ...(body.attribute_values !== undefined
+            ? { attributeValues: this.toJsonFieldValue(body.attribute_values) }
+            : {}),
+        },
+        include: {
+          color: true,
+          size: true,
+          stocks: { include: { shop: true } },
+        },
+      });
+      // Activating/deactivating a colour/size variant changes the product total.
+      if (
+        typeof body.is_active === 'boolean' &&
+        body.is_active !== variant.isActive &&
+        (variant.colorId || variant.sizeId)
+      ) {
+        await this.syncVariativeProductStocks(tx, variant.productId);
+      }
+      return updated;
     });
   }
 
@@ -4292,7 +4372,12 @@ export class ProductsService {
     );
 
     if (isVariative) {
-      await this.syncCatalogVariants(createdProduct.id, body, writeContext);
+      await this.syncCatalogVariants(
+        createdProduct.id,
+        body,
+        writeContext,
+        'create',
+      );
     }
     if (productType === PRODUCT_TYPE_IDS.kit) {
       await this.syncBundleComponents(
@@ -4564,6 +4649,9 @@ export class ProductsService {
     }
     const brandName = this.optionalString(body.brand_name);
     const supplierName = this.optionalString(body.supplier_name);
+    const stockPayloadSent =
+      body.shipments !== undefined ||
+      body.shop_measurement_values !== undefined;
 
     const updatedProduct = await this.prisma.product.update({
       where: { id: existingProduct.id },
@@ -4607,14 +4695,9 @@ export class ProductsService {
         seasonYear: this.toInt(body.season_year) ?? existingProduct.seasonYear,
         collection:
           this.optionalString(body.collection) ?? existingProduct.collection,
-        quantity: supportsStock
-          ? shipmentsWithBranchCodes.length
-            ? shipmentsWithBranchCodes.reduce(
-                (sum, shipment) => sum + shipment.quantity,
-                0,
-              )
-            : existingProduct.quantity
-          : 0,
+        // Goods quantity is re-derived from ProductStock after the stock
+        // writes below; it is never taken from the (possibly stale) form.
+        quantity: supportsStock ? existingProduct.quantity : 0,
         metadata: this.buildCatalogMetadata(
           body,
           description,
@@ -4688,28 +4771,11 @@ export class ProductsService {
                     : {}),
               }
             : undefined,
+        // Goods stock rows are written per shop by applySimpleProductStockEdits
+        // / syncCatalogVariants below — never wiped wholesale, so shops the
+        // editor cannot see keep their stock.
         stocks:
-          body.shipments !== undefined ||
-          body.shop_measurement_values !== undefined
-            ? supportsStock
-              ? {
-                  deleteMany: {},
-                  ...(shipmentsWithBranchCodes.length
-                    ? {
-                        create: shipmentsWithBranchCodes.map((shipment) => ({
-                          shopId: shipment.shopId,
-                          branchCode: shipment.branchCode,
-                          quantity: shipment.quantity,
-                          purchasePrice: shipment.supplyPrice,
-                          salePrice: shipment.retailPrice,
-                        })),
-                      }
-                    : {}),
-                }
-              : {
-                  deleteMany: {},
-                }
-            : undefined,
+          !supportsStock && stockPayloadSent ? { deleteMany: {} } : undefined,
       },
       include: {
         category: true,
@@ -4723,13 +4789,34 @@ export class ProductsService {
       },
     });
 
-    await this.syncDefaultVariantFromLegacyProduct(updatedProduct, {
-      replaceStocks:
-        body.shipments !== undefined ||
-        body.shop_measurement_values !== undefined,
-    });
-    if (isVariative && body.variants !== undefined) {
-      await this.syncCatalogVariants(updatedProduct.id, body, writeContext);
+    // Variative goods: ProductStock is derived from variant stocks, so the
+    // product-level shop quantities in the payload are ignored.
+    let previousStocks = existingProduct.stocks;
+    let appliedShipments = shipmentsWithBranchCodes;
+    if (supportsStock && stockPayloadSent && !isVariative) {
+      const applied = await this.applySimpleProductStockEdits(
+        updatedProduct.id,
+        shipmentsWithBranchCodes,
+      );
+      previousStocks = applied.previous;
+      appliedShipments = applied.applied;
+    }
+
+    if (!isVariative) {
+      const freshStocks = await this.prisma.productStock.findMany({
+        where: { productId: updatedProduct.id },
+      });
+      await this.syncDefaultVariantFromLegacyProduct(
+        { ...updatedProduct, stocks: freshStocks },
+        { replaceStocks: stockPayloadSent },
+      );
+    } else if (body.variants !== undefined) {
+      await this.syncCatalogVariants(
+        updatedProduct.id,
+        body,
+        writeContext,
+        'update',
+      );
     }
     if (
       productType !== PRODUCT_TYPE_IDS.kit &&
@@ -4749,14 +4836,10 @@ export class ProductsService {
       );
     }
 
-    if (
-      supportsStock &&
-      (body.shipments !== undefined ||
-        body.shop_measurement_values !== undefined)
-    ) {
+    if (supportsStock && stockPayloadSent && !isVariative) {
       await this.logManualStockAdjustments(
-        existingProduct.stocks,
-        shipmentsWithBranchCodes,
+        previousStocks,
+        appliedShipments,
         {
           id: updatedProduct.id,
           name: updatedProduct.name,
@@ -4774,10 +4857,14 @@ export class ProductsService {
       writeContext.companyId,
     );
 
+    const finalQuantity = await this.prisma.product.findUnique({
+      where: { id: updatedProduct.id },
+      select: { quantity: true },
+    });
     const productResponse = this.toCatalogCreateProductResponse(
-      updatedProduct,
+      { ...updatedProduct, quantity: finalQuantity?.quantity ?? 0 },
       body,
-      supportsStock ? shipmentsWithBranchCodes : [],
+      supportsStock ? appliedShipments : [],
       supplierIds,
       shopLookup,
       writeContext,
@@ -4804,7 +4891,7 @@ export class ProductsService {
         shipments: supportsStock
           ? this.buildCatalogShipmentResponse(
               updatedProduct.id,
-              shipmentsWithBranchCodes,
+              appliedShipments,
               shopLookup,
               writeContext.companyId,
             )
@@ -5338,15 +5425,21 @@ export class ProductsService {
 
     while (nextPayload <= BARCODE_PAYLOAD_MAX) {
       const barcode = this.formatEan13Barcode(nextPayload);
-      const existing = await this.prisma.product.findFirst({
-        where: {
-          companyId,
-          barcode,
-        },
-        select: { id: true },
-      });
+      const [existing, existingVariant] = await Promise.all([
+        this.prisma.product.findFirst({
+          where: {
+            companyId,
+            barcode,
+          },
+          select: { id: true },
+        }),
+        this.prisma.productVariant.findFirst({
+          where: { companyId, barcode },
+          select: { id: true },
+        }),
+      ]);
 
-      if (!existing && !excludeBarcodes.includes(barcode)) {
+      if (!existing && !existingVariant && !excludeBarcodes.includes(barcode)) {
         return {
           barcode,
         };
@@ -6772,6 +6865,226 @@ export class ProductsService {
     });
   }
 
+  /**
+   * Next free in-store EAN-13 barcodes ("2…" range), unique across both
+   * products and variants so a scan never matches two items.
+   */
+  private async allocateBarcodes(
+    companyId: string,
+    count: number,
+    exclude: string[] = [],
+  ) {
+    const [productCodes, variantCodes] = await Promise.all([
+      this.prisma.product.findMany({
+        where: { companyId, barcode: { startsWith: '2' } },
+        select: { barcode: true },
+      }),
+      this.prisma.productVariant.findMany({
+        where: { companyId, barcode: { startsWith: '2' } },
+        select: { barcode: true },
+      }),
+    ]);
+    const taken = new Set<string>([
+      ...exclude,
+      ...productCodes.map((row) => row.barcode ?? ''),
+      ...variantCodes.map((row) => row.barcode ?? ''),
+    ]);
+    let payload = [...taken].reduce<number>(
+      (max, code) => Math.max(max, this.extractEan13Payload(code) ?? 0),
+      BARCODE_PAYLOAD_BASE - 1,
+    );
+    const result: string[] = [];
+    while (result.length < count) {
+      payload += 1;
+      if (payload > BARCODE_PAYLOAD_MAX) {
+        throw new BadRequestException('Barcode range exceeded');
+      }
+      const barcode = this.formatEan13Barcode(payload);
+      if (!taken.has(barcode)) {
+        taken.add(barcode);
+        result.push(barcode);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Barcode/SKU are optional when creating colour/size variants: an existing
+   * variant keeps its codes, a new one gets the next free codes.
+   */
+  private async fillMissingVariantCodes(
+    productId: number,
+    companyId: string,
+    items: Array<{ id?: string; barcode?: string; sku?: string }>,
+    existing: Array<{ id: string; barcode: string | null; sku: string | null }>,
+  ) {
+    for (const item of items) {
+      const current = item.id ? existing.find((row) => row.id === item.id) : undefined;
+      item.barcode ??= current?.barcode ?? undefined;
+      item.sku ??= current?.sku ?? undefined;
+    }
+
+    const needBarcode = items.filter((item) => !item.barcode);
+    if (needBarcode.length) {
+      const codes = await this.allocateBarcodes(
+        companyId,
+        needBarcode.length,
+        items.flatMap((item) => (item.barcode ? [item.barcode] : [])),
+      );
+      needBarcode.forEach((item, index) => {
+        item.barcode = codes[index];
+      });
+    }
+
+    const needSku = items.filter((item) => !item.sku);
+    if (needSku.length) {
+      const product = await this.prisma.product.findUnique({
+        where: { id: productId },
+        select: { sku: true },
+      });
+      const base = product?.sku || `P${productId}`;
+      const usedRows = await this.prisma.productVariant.findMany({
+        where: { companyId, sku: { startsWith: `${base}-` } },
+        select: { sku: true },
+      });
+      const used = new Set([
+        ...usedRows.map((row) => row.sku ?? ''),
+        ...items.flatMap((item) => (item.sku ? [item.sku] : [])),
+      ]);
+      let counter = 0;
+      for (const item of needSku) {
+        let candidate: string;
+        do {
+          counter += 1;
+          candidate = `${base}-${String(counter).padStart(2, '0')}`;
+        } while (used.has(candidate));
+        used.add(candidate);
+        item.sku = candidate;
+      }
+    }
+  }
+
+  /**
+   * Sales and transfers decrement both ProductStock and ProductVariantStock,
+   * so for a variative product ProductStock in every shop must equal the sum
+   * of its active colour/size variant stocks in that shop.
+   */
+  private async syncVariativeProductStocks(
+    tx: Prisma.TransactionClient,
+    productId: number,
+  ) {
+    const [variantStocks, productStocks] = await Promise.all([
+      tx.productVariantStock.findMany({
+        where: {
+          variant: {
+            productId,
+            isActive: true,
+            OR: [{ colorId: { not: null } }, { sizeId: { not: null } }],
+          },
+        },
+      }),
+      tx.productStock.findMany({ where: { productId } }),
+    ]);
+
+    const byShop = new Map<
+      string,
+      {
+        branchCode: string;
+        quantity: number;
+        purchasePrice: number | null;
+        salePrice: number | null;
+      }
+    >();
+    for (const stock of variantStocks) {
+      const entry = byShop.get(stock.shopId) ?? {
+        branchCode: stock.branchCode,
+        quantity: 0,
+        purchasePrice: stock.purchasePrice,
+        salePrice: stock.salePrice,
+      };
+      entry.quantity += stock.quantity;
+      byShop.set(stock.shopId, entry);
+    }
+
+    for (const stock of productStocks) {
+      const quantity = byShop.get(stock.shopId)?.quantity ?? 0;
+      if (stock.quantity !== quantity) {
+        await tx.productStock.update({
+          where: { id: stock.id },
+          data: { quantity },
+        });
+      }
+      byShop.delete(stock.shopId);
+    }
+    for (const [shopId, entry] of byShop) {
+      await tx.productStock.create({
+        data: { productId, shopId, ...entry },
+      });
+    }
+
+    await this.syncProductTotalQuantity(tx, productId);
+  }
+
+  /**
+   * Applies edited per-shop quantities of a simple product. Only shops in the
+   * payload are touched; with an original quantity the edit is a delta on top
+   * of the current row, so sales made while the form was open are kept.
+   */
+  private async applySimpleProductStockEdits<
+    T extends {
+      shopId: string;
+      branchCode: string;
+      quantity: number;
+      originalQuantity?: number;
+      supplyPrice: number;
+      retailPrice: number;
+    },
+  >(productId: number, shipments: T[]) {
+    return this.prisma.$transaction(async (tx) => {
+      const previous = await tx.productStock.findMany({ where: { productId } });
+      const applied: T[] = [];
+      for (const shipment of shipments) {
+        const current = previous.find(
+          (stock) => stock.shopId === shipment.shopId,
+        );
+        const prices = {
+          purchasePrice: shipment.supplyPrice,
+          salePrice: shipment.retailPrice,
+        };
+        let after = shipment.quantity;
+        if (current) {
+          const delta =
+            shipment.originalQuantity !== undefined
+              ? shipment.quantity - shipment.originalQuantity
+              : shipment.quantity - current.quantity;
+          const updated = await tx.productStock.update({
+            where: { id: current.id },
+            data: { ...prices, quantity: { increment: delta } },
+          });
+          after = updated.quantity;
+        } else {
+          await tx.productStock.create({
+            data: {
+              ...prices,
+              productId,
+              shopId: shipment.shopId,
+              branchCode: shipment.branchCode,
+              quantity: shipment.quantity,
+            },
+          });
+        }
+        if (after < 0) {
+          throw new ConflictException(
+            'Пока форма была открыта, часть товара уже продали — остаток стал бы отрицательным. Обновите страницу и повторите.',
+          );
+        }
+        applied.push({ ...shipment, quantity: after });
+      }
+      await this.syncProductTotalQuantity(tx, productId);
+      return { previous, applied };
+    });
+  }
+
   private async syncDefaultVariantFromLegacyProduct(
     product: {
       id: number;
@@ -6791,6 +7104,19 @@ export class ProductsService {
     options: { replaceStocks?: boolean } = {},
   ) {
     if (!product.companyId) {
+      return;
+    }
+
+    // A variative product's stock lives on its colour/size variants; a
+    // default variant would duplicate the product SKU/barcode.
+    const hasColourSizeVariants = await this.prisma.productVariant.count({
+      where: {
+        productId: product.id,
+        isActive: true,
+        OR: [{ colorId: { not: null } }, { sizeId: { not: null } }],
+      },
+    });
+    if (hasColourSizeVariants) {
       return;
     }
 
@@ -6848,6 +7174,7 @@ export class ProductsService {
     productId: number,
     body: Record<string, unknown>,
     context: CompanyRequestContext & { companyId: string },
+    mode: 'create' | 'update',
   ) {
     const rows = Array.isArray(body.variants)
       ? body.variants.filter(
@@ -6916,7 +7243,7 @@ export class ProductsService {
       }),
       this.prisma.productVariant.findMany({
         where: { companyId: context.companyId, productId },
-        select: { id: true, isDefault: true },
+        select: { id: true, isDefault: true, barcode: true, sku: true },
       }),
     ]);
     const colorIds = new Set(validColors.map((item) => item.id));
@@ -6933,105 +7260,212 @@ export class ProductsService {
       );
     }
 
-    const existingIds = new Set(existingVariants.map((item) => item.id));
+    const existingIds = new Set(
+      existingVariants.filter((item) => !item.isDefault).map((item) => item.id),
+    );
+    await this.fillMissingVariantCodes(
+      productId,
+      context.companyId,
+      normalized,
+      existingVariants.filter((item) => existingIds.has(item.id)),
+    );
     const retainedIds = new Set<string>();
 
-    try {
-      await this.prisma.$transaction(async (tx) => {
-        for (const item of normalized) {
-          const rawStocks =
-            item.row.stocks &&
-            typeof item.row.stocks === 'object' &&
-            !Array.isArray(item.row.stocks)
-              ? (item.row.stocks as Record<string, unknown>)
-              : {};
-          const stocks = await this.attachBranchCodesToShipments(
-            Object.entries(rawStocks).map(([shopId, quantity]) => ({
+    const toRecord = (value: unknown) =>
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : {};
+    const preparedStocks = await Promise.all(
+      normalized.map(async (item) => {
+        const originalStocks = toRecord(item.row.original_stocks);
+        return this.attachBranchCodesToShipments(
+          Object.entries(toRecord(item.row.stocks)).map(
+            ([shopId, quantity]) => ({
               shopId,
               quantity: this.toNumber(quantity) ?? 0,
+              originalQuantity: this.toNumber(originalStocks[shopId]),
               supplyPrice: item.purchasePrice,
               retailPrice: item.salePrice,
               hasTrigger: false,
               smallLeftMeasurementValue: 0,
-            })),
-            context,
-          );
-          const canUpdate = item.id ? existingIds.has(item.id) : false;
-          const variant = canUpdate
-            ? await tx.productVariant.update({
-                where: { id: item.id! },
-                data: {
-                  colorId: item.colorId ?? null,
-                  sizeId: item.sizeId ?? null,
-                  barcode: item.barcode ?? null,
-                  sku: item.sku ?? null,
-                  purchasePrice: item.purchasePrice,
-                  salePrice: item.salePrice,
-                  isActive: true,
+            }),
+          ),
+          context,
+        );
+      }),
+    );
+
+    try {
+      await this.prisma.$transaction(
+        async (tx) => {
+          if (mode === 'update') {
+            // Turning a simple product with stock into a variative one would
+            // silently drop that stock: it cannot be attributed to a colour/size.
+            const hadVariants = existingIds.size > 0;
+            const legacyStock = await tx.productVariantStock.aggregate({
+              where: {
+                variant: { productId, isDefault: true },
+                quantity: { gt: 0 },
+              },
+              _sum: { quantity: true },
+            });
+            if (!hadVariants && (legacyStock._sum.quantity ?? 0) > 0) {
+              throw new ConflictException(
+                'У товара есть остаток без цвета/размера. Спишите его или переместите, затем добавьте варианты.',
+              );
+            }
+          }
+
+          for (const [index, item] of normalized.entries()) {
+            const stocks = preparedStocks[index];
+            const canUpdate = item.id ? existingIds.has(item.id) : false;
+            const variant = canUpdate
+              ? await tx.productVariant.update({
+                  where: { id: item.id! },
+                  data: {
+                    colorId: item.colorId ?? null,
+                    sizeId: item.sizeId ?? null,
+                    barcode: item.barcode ?? null,
+                    sku: item.sku ?? null,
+                    purchasePrice: item.purchasePrice,
+                    salePrice: item.salePrice,
+                    isActive: true,
+                  },
+                  select: { id: true },
+                })
+              : await tx.productVariant.create({
+                  data: {
+                    companyId: context.companyId,
+                    productId,
+                    colorId: item.colorId,
+                    sizeId: item.sizeId,
+                    barcode: item.barcode,
+                    sku: item.sku,
+                    purchasePrice: item.purchasePrice,
+                    salePrice: item.salePrice,
+                  },
+                  select: { id: true },
+                });
+            retainedIds.add(variant.id);
+
+            // Only the shops present in the payload are touched. With an
+            // original quantity the change is applied as a delta on top of the
+            // current row, so sales made while the form was open are kept.
+            for (const stock of stocks) {
+              const current = await tx.productVariantStock.findUnique({
+                where: {
+                  variantId_shopId: {
+                    variantId: variant.id,
+                    shopId: stock.shopId,
+                  },
                 },
-                select: { id: true },
-              })
-            : await tx.productVariant.create({
-                data: {
-                  companyId: context.companyId,
-                  productId,
-                  colorId: item.colorId,
-                  sizeId: item.sizeId,
-                  barcode: item.barcode,
-                  sku: item.sku,
-                  purchasePrice: item.purchasePrice,
-                  salePrice: item.salePrice,
-                },
-                select: { id: true },
               });
-          retainedIds.add(variant.id);
-          await tx.productVariantStock.deleteMany({
-            where: { variantId: variant.id },
-          });
-          if (stocks.length) {
-            await tx.productVariantStock.createMany({
-              data: stocks.map((stock) => ({
-                companyId: context.companyId,
-                variantId: variant.id,
-                shopId: stock.shopId,
-                branchCode: stock.branchCode,
-                quantity: stock.quantity,
+              const prices = {
                 purchasePrice: stock.supplyPrice,
                 salePrice: stock.retailPrice,
-              })),
-            });
+              };
+              let before = 0;
+              let after = stock.quantity;
+              if (current) {
+                const delta =
+                  canUpdate && stock.originalQuantity !== undefined
+                    ? stock.quantity - stock.originalQuantity
+                    : stock.quantity - current.quantity;
+                const updated = await tx.productVariantStock.update({
+                  where: { id: current.id },
+                  data: { ...prices, quantity: { increment: delta } },
+                });
+                after = updated.quantity;
+                before = after - delta;
+              } else {
+                await tx.productVariantStock.create({
+                  data: {
+                    ...prices,
+                    companyId: context.companyId,
+                    variantId: variant.id,
+                    shopId: stock.shopId,
+                    branchCode: stock.branchCode,
+                    quantity: stock.quantity,
+                  },
+                });
+              }
+              if (after < 0) {
+                throw new ConflictException(
+                  'Пока форма была открыта, часть товара уже продали — остаток стал бы отрицательным. Обновите страницу и повторите.',
+                );
+              }
+              if (after !== before) {
+                await this.createStockMovementRecord(tx, {
+                  companyId: context.companyId,
+                  shopId: stock.shopId,
+                  productId,
+                  variantId: variant.id,
+                  type: after > before ? 'PURCHASE' : 'ADJUSTMENT',
+                  quantity: after - before,
+                  beforeQuantity: before,
+                  afterQuantity: after,
+                  createdById: context.userId,
+                  externalId: '',
+                  fromShopId: '',
+                  toShopId: '',
+                  supplyPrice: stock.supplyPrice,
+                  retailPrice: stock.retailPrice,
+                  newRetailPrice: stock.retailPrice,
+                  fromRetailPrice: current?.salePrice ?? stock.retailPrice,
+                  fromSupplyPrice: current?.purchasePrice ?? stock.supplyPrice,
+                });
+              }
+            }
           }
-        }
 
-        await tx.productVariant.updateMany({
-          where: {
-            productId,
-            id: { notIn: [...retainedIds] },
-          },
-          data: { isActive: false, isDefault: false },
-        });
-
-        const activeVariantStocks = await tx.productVariantStock.findMany({
-          where: {
-            variant: {
-              productId,
-              isActive: true,
-              isDefault: false,
+          const removedWithStock = await tx.productVariantStock.findFirst({
+            where: {
+              quantity: { gt: 0 },
+              variant: {
+                productId,
+                isActive: true,
+                id: { notIn: [...retainedIds] },
+                OR: [{ colorId: { not: null } }, { sizeId: { not: null } }],
+              },
             },
-          },
-          select: { quantity: true },
-        });
-        await tx.product.update({
-          where: { id: productId },
-          data: {
-            variantType: 'variative',
-            quantity: activeVariantStocks.reduce(
-              (sum, stock) => sum + stock.quantity,
-              0,
-            ),
-          },
-        });
-      });
+            include: { variant: { include: { color: true, size: true } } },
+          });
+          if (removedWithStock) {
+            const label = [
+              removedWithStock.variant.color?.name,
+              removedWithStock.variant.size?.name,
+            ]
+              .filter(Boolean)
+              .join(' / ');
+            throw new ConflictException(
+              `Нельзя удалить вариант «${label}»: на складе остаток ${removedWithStock.quantity}. Сначала спишите или переместите его.`,
+            );
+          }
+
+          // Variants without colour/size are the legacy mirror of the
+          // product-level stock; for a variative product it is meaningless.
+          await tx.productVariantStock.deleteMany({
+            where: {
+              variant: { productId, colorId: null, sizeId: null },
+            },
+          });
+
+          await tx.productVariant.updateMany({
+            where: {
+              productId,
+              id: { notIn: [...retainedIds] },
+            },
+            data: { isActive: false, isDefault: false },
+          });
+
+          await tx.product.update({
+            where: { id: productId },
+            data: { variantType: 'variative' },
+          });
+          await this.syncVariativeProductStocks(tx, productId);
+        },
+        { timeout: 30_000 },
+      );
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -8660,6 +9094,9 @@ export class ProductsService {
           hasTrigger: this.toBooleanValue(item.has_trigger),
           smallLeftMeasurementValue:
             this.toNumber(item.small_left_measurement_value) ?? 0,
+          // Quantity the edit form was loaded with. When present, the save is
+          // applied as a delta so sales made while the form was open survive.
+          originalQuantity: this.toNumber(item.original_measurement_value),
         };
       })
       .filter((item) => item.shopId.length > 0);
@@ -11115,8 +11552,8 @@ export class ProductsService {
     });
   }
 
-  private async attachBranchCodesToShipments(
-    shipments: Array<{
+  private async attachBranchCodesToShipments<
+    T extends {
       shopId: string;
       quantity: number;
       supplyPrice: number;
@@ -11124,9 +11561,8 @@ export class ProductsService {
       supplierId?: string;
       hasTrigger: boolean;
       smallLeftMeasurementValue: number;
-    }>,
-    context: CompanyRequestContext,
-  ) {
+    },
+  >(shipments: T[], context: CompanyRequestContext) {
     const normalizedIdentifiers = [
       ...new Set(
         shipments
