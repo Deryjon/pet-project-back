@@ -84,9 +84,18 @@ export class ReceiptsService {
     };
   }
 
-  private async loadSaleForSnapshot(saleId: number, companyId: string) {
+  // A user limited to some shops only sees receipts of sales from them.
+  private branchScope(allowedBranchCodes?: string[]) {
+    return allowedBranchCodes ? { branchCode: { in: allowedBranchCodes } } : {};
+  }
+
+  private async loadSaleForSnapshot(
+    saleId: number,
+    companyId: string,
+    allowedBranchCodes?: string[],
+  ) {
     const sale = await this.prisma.sale.findFirst({
-      where: { id: saleId, companyId },
+      where: { id: saleId, companyId, ...this.branchScope(allowedBranchCodes) },
       include: {
         items: { include: { seller: true } },
         user: true,
@@ -236,8 +245,16 @@ export class ReceiptsService {
     };
   }
 
-  async getOrCreateForSale(saleId: number, companyId: string) {
-    const sale = await this.loadSaleForSnapshot(saleId, companyId);
+  async getOrCreateForSale(
+    saleId: number,
+    companyId: string,
+    allowedBranchCodes?: string[],
+  ) {
+    const sale = await this.loadSaleForSnapshot(
+      saleId,
+      companyId,
+      allowedBranchCodes,
+    );
 
     let receipt = await this.prisma.receipt.findUnique({
       where: { saleId: sale.id },
@@ -327,9 +344,13 @@ export class ReceiptsService {
     return this.assembleResponse(sale, receipt, shopInfo, companyInfo, loyaltyType);
   }
 
-  async getByNumber(number: string, companyId: string) {
+  async getByNumber(
+    number: string,
+    companyId: string,
+    allowedBranchCodes?: string[],
+  ) {
     const sale = await this.prisma.sale.findFirst({
-      where: { number, companyId },
+      where: { number, companyId, ...this.branchScope(allowedBranchCodes) },
       select: { id: true },
     });
 
@@ -337,11 +358,15 @@ export class ReceiptsService {
       throw new NotFoundException('Sale not found');
     }
 
-    return this.getOrCreateForSale(sale.id, companyId);
+    return this.getOrCreateForSale(sale.id, companyId, allowedBranchCodes);
   }
 
-  async markPrinted(saleId: number, companyId: string) {
-    await this.getOrCreateForSale(saleId, companyId);
+  async markPrinted(
+    saleId: number,
+    companyId: string,
+    allowedBranchCodes?: string[],
+  ) {
+    await this.getOrCreateForSale(saleId, companyId, allowedBranchCodes);
     const updated = await this.prisma.receipt.update({
       where: { saleId },
       data: { status: 'PRINTED', printedAt: new Date() },

@@ -14,7 +14,7 @@ import { CurrentCompanyContext } from '../auth/company-context.decorator';
 import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
-import { Permissions } from '../auth/permissions.decorator';
+import { AnyPermission, Permissions } from '../auth/permissions.decorator';
 import {
   CompanyRequestContext,
   requireCompanyContext,
@@ -22,6 +22,19 @@ import {
 import { CreateChequeTemplateDto } from './dto/create-cheque-template.dto';
 import { UpdateChequeSettingsDto } from './dto/update-cheque-settings.dto';
 import { ReceiptsService } from './receipts.service';
+
+// Receipts belong to sale documents: anyone who may sell, see sales or open
+// a client card may print one (same rights as the frontend order/client pages).
+const RECEIPT_PERMISSIONS = [
+  'new-sale',
+  'order-new',
+  'order-return',
+  'all-sales',
+  'orders',
+  'show-all-sales',
+  'all-clients',
+  'clients',
+];
 
 @Controller()
 export class ReceiptsController {
@@ -33,43 +46,63 @@ export class ReceiptsController {
   }
 
   @Get(['receipts/by-number/:number', 'v1/receipts/by-number/:number'])
-  @UseGuards(JwtAuthGuard, CompanyAccessGuard)
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...RECEIPT_PERMISSIONS)
   async getReceiptByNumber(
     @Param('number') number: string,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     const companyId = await this.requireCompanyId(requestContext);
-    return this.receiptsService.getByNumber(number, companyId);
+    return this.receiptsService.getByNumber(
+      number,
+      companyId,
+      requestContext.allowedBranchCodes,
+    );
   }
 
   @Get(['receipts/:saleId', 'v1/receipts/:saleId'])
-  @UseGuards(JwtAuthGuard, CompanyAccessGuard)
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...RECEIPT_PERMISSIONS)
   async getReceipt(
     @Param('saleId', ParseIntPipe) saleId: number,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     const companyId = await this.requireCompanyId(requestContext);
-    return this.receiptsService.getOrCreateForSale(saleId, companyId);
+    return this.receiptsService.getOrCreateForSale(
+      saleId,
+      companyId,
+      requestContext.allowedBranchCodes,
+    );
   }
 
   @Post(['receipts', 'v1/receipts'])
-  @UseGuards(JwtAuthGuard, CompanyAccessGuard)
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...RECEIPT_PERMISSIONS)
   async createReceipt(
     @Body('sale_id', ParseIntPipe) saleId: number,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     const companyId = await this.requireCompanyId(requestContext);
-    return this.receiptsService.getOrCreateForSale(saleId, companyId);
+    return this.receiptsService.getOrCreateForSale(
+      saleId,
+      companyId,
+      requestContext.allowedBranchCodes,
+    );
   }
 
   @Post(['receipts/:saleId/mark-printed', 'v1/receipts/:saleId/mark-printed'])
-  @UseGuards(JwtAuthGuard, CompanyAccessGuard)
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...RECEIPT_PERMISSIONS)
   async markPrinted(
     @Param('saleId', ParseIntPipe) saleId: number,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     const companyId = await this.requireCompanyId(requestContext);
-    return this.receiptsService.markPrinted(saleId, companyId);
+    return this.receiptsService.markPrinted(
+      saleId,
+      companyId,
+      requestContext.allowedBranchCodes,
+    );
   }
 
   // send-telegram deferred — future work should reuse TelegramService.sendMessage()
