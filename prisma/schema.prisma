@@ -884,6 +884,7 @@ model PriceTagSetting {
   barcodeType   String
   barcodeTypeId String
   isDefault     Boolean  @default(false)
+  showPrice     Boolean  @default(true)
   properties    Json?
   company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   createdAt     DateTime @default(now())

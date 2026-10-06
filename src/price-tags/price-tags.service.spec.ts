@@ -164,4 +164,98 @@ describe('PriceTagsService', () => {
       }),
     ]);
   });
+
+  describe('variant tags', () => {
+    const product = {
+      id: 7,
+      publicId: 'p-7',
+      name: 'Куртка',
+      sku: 'JKT',
+      article: 'ART-77',
+      barcode: null,
+      salePrice: 500,
+      discountPrice: null,
+      brand: null,
+      stocks: [{ shopId: 'shop-1', branchCode: 'a', salePrice: 480, quantity: 9 }],
+      variants: [
+        {
+          id: 'v-1',
+          sku: 'JKT-BLK-M',
+          barcode: '111',
+          salePrice: 520,
+          color: { name: 'Чёрный' },
+          size: { name: 'M' },
+          attributeValues: [],
+          stocks: [
+            { shopId: 'shop-1', branchCode: 'a', salePrice: 530, quantity: 2 },
+            { shopId: 'shop-2', branchCode: 'b', salePrice: 540, quantity: 3 },
+            { shopId: 'shop-3', branchCode: 'c', salePrice: 550, quantity: 10 },
+          ],
+        },
+      ],
+    };
+    const makeService = (shop: unknown = null) =>
+      new PriceTagsService({
+        product: { findMany: jest.fn().mockResolvedValue([product]) },
+        shop: { findFirst: jest.fn().mockResolvedValue(shop) },
+      } as any);
+
+    it('prints the model article, not the variant SKU, on every tag', async () => {
+      const result = await makeService().getPriceTagsData('7', undefined, 'c-1');
+      expect(result.products[0]).toEqual(
+        expect.objectContaining({ article: 'ART-77', sku: 'JKT-BLK-M' }),
+      );
+    });
+
+    it('uses the variant default price and summed allowed stock for all shops', async () => {
+      const result = await makeService().getPriceTagsData('7', undefined, 'c-1', undefined, [
+        'shop-1',
+        'shop-2',
+      ]);
+      expect(result.products[0]).toEqual(
+        expect.objectContaining({ price: 520, quantity: 5 }),
+      );
+    });
+
+    it('refuses a shop outside the allowed shops', async () => {
+      await expect(
+        makeService({ id: 'shop-3', branchCode: 'c', name: 'C' }).getPriceTagsData(
+          '7',
+          undefined,
+          'c-1',
+          'shop-3',
+          ['shop-1', 'shop-2'],
+        ),
+      ).rejects.toThrow('Нет доступа');
+    });
+
+    it('falls back to the variant price, then the product price', async () => {
+      const variant = product.variants[0];
+      const noStockPrice = {
+        ...product,
+        variants: [
+          { ...variant, stocks: variant.stocks.map((s) => ({ ...s, salePrice: null })) },
+          { ...variant, id: 'v-2', salePrice: null, stocks: [] },
+        ],
+      };
+      const service = new PriceTagsService({
+        product: { findMany: jest.fn().mockResolvedValue([noStockPrice]) },
+        shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-1', branchCode: 'a', name: 'A' }) },
+      } as any);
+      const result = await service.getPriceTagsData('7', undefined, 'c-1', 'shop-1');
+      expect(result.products.map((row: any) => row.price)).toEqual([520, 480]);
+    });
+
+    it("uses the shop's variant price and stock for one shop", async () => {
+      const result = await makeService({ id: 'shop-2', branchCode: 'b', name: 'B' }).getPriceTagsData(
+        '7',
+        undefined,
+        'c-1',
+        'shop-2',
+      );
+      expect(result.products[0]).toEqual(
+        expect.objectContaining({ price: 540, quantity: 3 }),
+      );
+    });
+  });
 });

@@ -29,15 +29,16 @@ export class PriceTagsController {
     @Query('branchId') branchId: string | undefined,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    const companyId = await this.requireCompanyId(requestContext);
+    const context = await requireCompanyContext(requestContext);
     if (!productIds) {
       return { products: [] };
     }
     return this.priceTagsService.getPriceTagsData(
       productIds,
       copies,
-      companyId,
+      context.companyId,
       branchId,
+      context.allowedShopIds,
     );
   }
 

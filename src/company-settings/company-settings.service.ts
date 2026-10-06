@@ -1223,6 +1223,7 @@ export class CompanySettingsService {
         barcode_type: priceTag.barcodeType,
         barcode_type_id: priceTag.barcodeTypeId,
         is_default: priceTag.isDefault,
+        show_price: priceTag.showPrice,
         properties: priceTag.properties,
       })),
     };
@@ -1242,6 +1243,7 @@ export class CompanySettingsService {
       barcode_type: priceTag.barcodeType,
       barcode_type_id: priceTag.barcodeTypeId,
       is_default: priceTag.isDefault,
+      show_price: priceTag.showPrice,
       properties: priceTag.properties,
     };
   }
@@ -1275,6 +1277,7 @@ export class CompanySettingsService {
           barcodeType,
           barcodeTypeId: this.optionalString(body.barcode_type_id) ?? barcodeTypeIdFor(barcodeType),
           isDefault,
+          showPrice: body.show_price !== false,
           properties: (body.properties ?? []) as any,
         },
       });
@@ -1289,6 +1292,7 @@ export class CompanySettingsService {
       barcode_type: created.barcodeType,
       barcode_type_id: created.barcodeTypeId,
       is_default: created.isDefault,
+      show_price: created.showPrice,
       properties: created.properties,
     };
   }
@@ -1342,6 +1346,7 @@ export class CompanySettingsService {
             : {}),
           ...(makeDefault ? { isDefault: true } : {}),
           ...(clearDefault ? { isDefault: false } : {}),
+          ...(typeof body.show_price === 'boolean' ? { showPrice: body.show_price } : {}),
           ...(body.properties !== undefined ? { properties: body.properties as any } : {}),
         } as any,
       });
@@ -1356,6 +1361,7 @@ export class CompanySettingsService {
       barcode_type: updated.barcodeType,
       barcode_type_id: updated.barcodeTypeId,
       is_default: updated.isDefault,
+      show_price: updated.showPrice,
       properties: updated.properties,
     };
   }

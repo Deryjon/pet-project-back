@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import {
   VARIANT_ATTRIBUTES_INCLUDE,
   variantAttributes,
@@ -39,6 +39,7 @@ export class PriceTagsService {
     copies: string | undefined,
     companyId: string,
     branchId?: string,
+    allowedShopIds?: string[],
   ) {
     // Callers may pass either the internal numeric id or the product's
     // public_id (UUID) — e.g. the catalog's product-detail card only exposes
@@ -89,6 +90,11 @@ export class PriceTagsService {
           })
         : null,
     ]);
+
+    // A user limited to some shops must not read another shop's prices/stock.
+    if (shop && allowedShopIds && !allowedShopIds.includes(shop.id)) {
+      throw new ForbiddenException('Нет доступа к выбранному магазину');
+    }
 
     const byNumericId = new Map(products.map((p) => [String(p.id), p]));
     const byPublicId = new Map(products.map((p) => [p.publicId, p]));
@@ -142,6 +148,8 @@ export class PriceTagsService {
             tag_key: String(p.id),
             name: p.name,
             sku: p.sku ?? '',
+            // Model article: the same on every colour/size tag of the model.
+            article: p.article ?? '',
             barcode: p.barcode ?? '',
             price,
             old_price: hasDiscount ? oldPrice : 0,
@@ -169,11 +177,20 @@ export class PriceTagsService {
                     s.shopId === normalizedBranchId ||
                     s.branchCode === normalizedBranchId,
                 )
-              : variant.stocks[0];
+              : undefined;
+            // A shop prints its own variant price; "all shops" prints the
+            // variant's default price rather than some shop's.
             const variantPrice =
               Number(variantStock?.salePrice ?? 0) ||
               Number(variant.salePrice ?? 0) ||
               price;
+            const quantity = normalizedBranchId
+              ? Number(variantStock?.quantity ?? 0)
+              : variant.stocks
+                  .filter(
+                    (s) => !allowedShopIds || allowedShopIds.includes(s.shopId),
+                  )
+                  .reduce((sum, s) => sum + Number(s.quantity ?? 0), 0);
             const label = variantLabel(variant);
             return {
               ...productTag,
@@ -188,7 +205,7 @@ export class PriceTagsService {
               old_price: hasDiscount && oldPrice > variantPrice ? oldPrice : 0,
               discount_percent:
                 hasDiscount && oldPrice > variantPrice ? discountPercent : 0,
-              quantity: variantStock?.quantity ?? 0,
+              quantity,
               copies: copiesMap.get(`${p.id}:${variant.id}`) ?? copiesMap.get(rawId) ?? 1,
             };
           });
