@@ -2788,6 +2788,16 @@ export class SalesService {
         );
       }
 
+      if (requestedSalePrice !== undefined) {
+        await this.assertDraftItemSalePrice(
+          salePrice,
+          product,
+          variant,
+          originalSale.branchCode,
+          context,
+        );
+      }
+
       const bundleAvailability =
         product.bundleComponents.length && originalSale.branchCode
           ? Math.min(

@@ -121,3 +121,41 @@ describe('SalesService draft item price', () => {
     ).rejects.toThrow('quantity must be greater than 0');
   });
 });
+
+describe('SalesService exchange item price', () => {
+  function prepare(service: SalesService, salePrice: number) {
+    return (service as any).prepareNewExchangeItems(
+      { companyId: 'company-1', branchCode: 'B1' },
+      [{ product_id: 5, quantity: 1, sale_price: salePrice }],
+      [],
+      companyContext(),
+    );
+  }
+
+  it('accepts the shop retail price without extra rights', async () => {
+    const { service } = createService({ shopPrice: 120 });
+
+    await expect(prepare(service, 120)).resolves.toEqual([
+      expect.objectContaining({ salePrice: 120, discountAmount: 0 }),
+    ]);
+  });
+
+  it('rejects a lowered price without the manual discount right', async () => {
+    const { service } = createService({ shopPrice: 120 });
+
+    await expect(prepare(service, 1)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
+
+  it('allows a lowered price with the manual discount right', async () => {
+    const { service } = createService({
+      shopPrice: 120,
+      grantedPermissionIds: MANUAL_DISCOUNT_IDS,
+    });
+
+    await expect(prepare(service, 90)).resolves.toEqual([
+      expect.objectContaining({ salePrice: 90, discountAmount: 30 }),
+    ]);
+  });
+});
