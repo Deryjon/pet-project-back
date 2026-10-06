@@ -573,14 +573,16 @@ export class CompanySettingsService {
   }
 
   getDefaultCurrencyIsoCode(companyId?: string): string {
-    const key = companyId?.trim() || DEFAULT_COMPANY_ID;
-    return this.currencyIsoCache.get(key) ?? DEFAULT_CURRENCY_ISO_CODE;
+    // Without a company only the global default applies, never a cached value
+    // that belongs to some tenant.
+    const key = companyId?.trim();
+    return (key && this.currencyIsoCache.get(key)) || DEFAULT_CURRENCY_ISO_CODE;
   }
 
   getDefaultTimeZone(companyId?: string) {
-    const key = companyId?.trim() || DEFAULT_COMPANY_ID;
+    const key = companyId?.trim();
     return (
-      this.companyTimeZoneCache.get(key) ?? {
+      (key ? this.companyTimeZoneCache.get(key) : undefined) ?? {
         id: this.stringOrDefault(DEFAULT_COMPANY_PROFILE.time_zone_id, ''),
         name: this.stringOrDefault(
           DEFAULT_COMPANY_PROFILE.time_zone_name,
@@ -729,7 +731,7 @@ export class CompanySettingsService {
       return merged;
     }
 
-    this.companyTimeZoneCache.set(companyFromDb?.id ?? DEFAULT_COMPANY_ID, {
+    this.companyTimeZoneCache.set(companyFromDb.id, {
       id: selectedZone.id,
       name: selectedZone.shortName,
       gmtOffset: selectedZone.gmtOffset,
@@ -1281,8 +1283,9 @@ export class CompanySettingsService {
   }
 
   async updatePriceTag(id: string, body: Record<string, unknown>, resolvedCompanyId?: string) {
+    const companyId = this.requireCompanyId(resolvedCompanyId);
     const priceTag = await this.db.priceTagSetting.findUnique({ where: { id } });
-    if (!priceTag || (resolvedCompanyId && priceTag.companyId !== resolvedCompanyId)) {
+    if (!priceTag || priceTag.companyId !== companyId) {
       throw new NotFoundException('Price tag not found');
     }
 
@@ -1302,9 +1305,6 @@ export class CompanySettingsService {
       return tx.priceTagSetting.update({
         where: { id },
         data: {
-          ...(body.company_id !== undefined
-            ? { companyId: this.requireString(body.company_id, 'company_id') }
-            : {}),
           ...(body.name !== undefined
             ? { name: this.requireString(body.name, 'name') }
             : {}),
@@ -1349,9 +1349,10 @@ export class CompanySettingsService {
     };
   }
 
-  async deletePriceTag(id: string, companyId?: string) {
+  async deletePriceTag(id: string, resolvedCompanyId?: string) {
+    const companyId = this.requireCompanyId(resolvedCompanyId);
     const existing = await this.db.priceTagSetting.findUnique({ where: { id } });
-    if (!existing || (companyId && existing.companyId !== companyId)) {
+    if (!existing || existing.companyId !== companyId) {
       throw new NotFoundException('Price tag not found');
     }
     const deleted = await this.db.priceTagSetting.delete({ where: { id } });

@@ -5658,6 +5658,7 @@ export class SalesService {
   }
 
   private async findDefaultPaymentMethod(companyId?: string | null) {
+    if (!companyId) return null;
     const companyPaymentTypes =
       await this.companySettingsService.getCompanyPaymentTypes(
         undefined,
@@ -5757,13 +5758,7 @@ export class SalesService {
     );
     const scope = this.buildSaleScope(context);
 
-    if (scope) {
-      andFilters.push(scope);
-    } else if (query.company_id) {
-      andFilters.push({
-        companyId: query.company_id,
-      });
-    }
+    andFilters.push(scope);
 
     const startDate = this.parseDateOnly(query.start_date);
     if (startDate) {
@@ -6448,6 +6443,18 @@ export class SalesService {
   }
 
   private async buildPaymentTypeLookup(companyId?: string | null) {
+    if (!companyId) {
+      // No company, no payment types: never borrow another tenant's list.
+      return new Map<
+        string,
+        {
+          id: string;
+          name: string;
+          payment_type_id: string;
+          payment_type_name: string;
+        }
+      >();
+    }
     const [companyPaymentTypes, loyaltyType] = await Promise.all([
       this.companySettingsService.getCompanyPaymentTypes(
         undefined,

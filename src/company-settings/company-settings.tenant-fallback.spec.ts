@@ -7,7 +7,13 @@ import { CompanySettingsService } from './company-settings.service';
 describe('CompanySettingsService without a company', () => {
   const db = {
     company: { findFirst: jest.fn(), findUnique: jest.fn() },
-    priceTagSetting: { findMany: jest.fn(), count: jest.fn() },
+    priceTagSetting: {
+      findMany: jest.fn(),
+      count: jest.fn(),
+      findUnique: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+    },
     shop: { findMany: jest.fn(), count: jest.fn() },
   };
   const service = new CompanySettingsService(db as never);
@@ -21,6 +27,8 @@ describe('CompanySettingsService without a company', () => {
     ['getCompanyPaymentTypes', () => service.getCompanyPaymentTypes()],
     ['createPriceTag', () => service.createPriceTag({ name: 'Tag' })],
     ['updateCompany', () => service.updateCompany({ name: 'X' })],
+    ['updatePriceTag', () => service.updatePriceTag('tag-1', { name: 'X' })],
+    ['deletePriceTag', () => service.deletePriceTag('tag-1')],
   ])(
     '%s refuses instead of falling back to another company',
     async (_, call) => {
@@ -30,4 +38,23 @@ describe('CompanySettingsService without a company', () => {
       expect(db.shop.findMany).not.toHaveBeenCalled();
     },
   );
+
+  it("never touches another company's price tag", async () => {
+    db.priceTagSetting.findUnique.mockResolvedValue({
+      id: 'tag-1',
+      companyId: 'other-company',
+    });
+    await expect(
+      service.updatePriceTag('tag-1', { company_id: 'c-1' }, 'c-1'),
+    ).rejects.toThrow('Price tag not found');
+    await expect(service.deletePriceTag('tag-1', 'c-1')).rejects.toThrow(
+      'Price tag not found',
+    );
+    expect(db.priceTagSetting.update).not.toHaveBeenCalled();
+    expect(db.priceTagSetting.delete).not.toHaveBeenCalled();
+  });
+
+  it('falls back to global defaults, not a cached tenant, without a company', () => {
+    expect(service.getDefaultCurrencyIsoCode()).toBe('UZS');
+  });
 });
