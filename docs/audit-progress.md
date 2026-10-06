@@ -174,6 +174,12 @@
 - **Альтернатива на потом:** сохранять и восстанавливать `saleFlowMode` и `sourceSale`, чтобы возврат переживал перезагрузку.
 - **Как проверить руками:** начать возврат, нажать F5. Корзина пустая, «оплата» по старой продаже не уходит.
 
+### 12. Проверка отрицательных остатков (топ-10 №8, 🔴7, только запрос)
+- **Коммит:** `docs(db): add a read-only query that finds negative stock`.
+- **Что изменено:** `docs/sql/check-negative-stock.sql` — запрос только на чтение. Он показывает отрицательные остатки в `ProductVariantStock`, `ProductStock` и `Product` и сводку по компаниям. Миграции с `CHECK` нет: по правилам ночи этот пункт отложен, план ниже.
+- **Проверено:** запрос выполняется на временной базе после `prisma migrate deploy`. Все миграции ветки применились, включая индексы `CONCURRENTLY`.
+- **Как проверить руками:** `psql "$DATABASE_URL" -f docs/sql/check-negative-stock.sql` на проде или реплике. Пустой результат значит, что `CHECK` можно добавлять.
+
 ## 🧭 Решения
 
 ### D1. Долг при отмене продажи
@@ -210,8 +216,29 @@
 
 ## 📋 Отложено (из списка «НЕ делать»)
 
-_заполняется по ходу_
+- **`CHECK (quantity >= 0)` на остатках.**
+  1. Прогнать `docs/sql/check-negative-stock.sql` на проде и исправить найденное (ремонтный скрипт с `SET LOCAL konkurent.stock_ledger = 'bypass'`).
+  2. Миграция `ALTER TABLE "ProductVariantStock" ADD CONSTRAINT "ProductVariantStock_quantity_nonnegative" CHECK (quantity >= 0) NOT VALID;`, отдельной миграцией `VALIDATE CONSTRAINT`. То же для `ProductStock`.
+  3. Проверить, что `setVariantStock` и ручные `update` в `products.service.ts` (~7100, ~7156) не пытаются записать минус. Если пытаются, перевести их на `moveVariantStock` или явную проверку.
+- **Перевод денег и остатков на Decimal.**
+  1. Начать с `Receipt` (все суммы), затем цены `Product`, `ProductVariant`, `ProductStock`, `ProductVariantStock`, потом `quantity`. Деньги `Decimal(12,2)`, количества `Decimal(12,3)`.
+  2. Каждая таблица — отдельная миграция `ALTER COLUMN … TYPE DECIMAL USING round(col::numeric, 2)`. Таблица перезаписывается, нужно окно обслуживания и бэкап.
+  3. Триггер ledger (`v_delta double precision`) перевести на `numeric`.
+  4. В коде все `Number(x)` над этими полями заменить на `Prisma.Decimal` или копейки. `money-calculations.ts` уже работает в минорных единицах.
+  5. Сначала прогнать `test:postgres` и сравнить отчёты до и после на копии прода.
+- **refresh-токен в httpOnly-cookie.**
+  1. Бэкенд: `/auth/login` и `/auth/refresh` ставят `Set-Cookie: refresh=…; HttpOnly; Secure; SameSite=Strict; Path=/api/auth`, а refresh читает токен из cookie. Нужен `cookie-parser`.
+  2. CORS уже `credentials: true`, на фронте в `$fetch` для refresh — `credentials: 'include'`.
+  3. Фронт: убрать refresh-токен из `localStorage` и `useCookie` (`store/useUserStore.ts`).
+  4. Capacitor (iOS) — проверить работу cookie в WKWebView. Если не работает, оставить для мобильной сборки текущую схему.
+  5. Переходный период: бэкенд принимает refresh и из тела, и из cookie.
+- **Разделение огромных файлов** (`products.service.ts` около 12,5 тыс. строк, `sales.service.ts` около 6,7 тыс., `store/cart.ts` около 2,3 тыс.).
+  - Порядок: сначала вынести чистые функции в `common/` и `utils/` с тестами (расчёты корзины, знаковая сумма продажи, поиск магазина). Потом по подобластям:
+    - `products`: каталог, импорт-сессии, инвентаризация, перемещения, штрихкоды/SKU;
+    - `sales`: черновик и корзина, оплата, возврат и обмен, списки и поиск.
+  - Каждый перенос — отдельный PR без изменения поведения, тесты должны быть зелёными.
+- **Миграция ledger и миграции, меняющие данные.** Не трогались. `20261006140000_variant_stock_ledger` (с `stock_ledger_align()`) перед релизом прогнать на копии прода и замерить время.
 
 ## ▶ Следующий пункт
 
-Топ-10 №8: SQL-запрос проверки отрицательных остатков (`docs/sql/check-negative-stock.sql`, без миграции) и план перевода на Decimal в «Отложено»; затем топ-10 №9: часовой пояс отчётов (`decision:`) и политика отрицательного баланса лояльности (`decision:`).
+Топ-10 №9: часовой пояс отчётов (`decision:`) и политика отрицательного баланса лояльности (`decision:`).
