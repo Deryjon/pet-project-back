@@ -133,6 +133,10 @@ model Company {
   productVariants         ProductVariant[]
   productColors           ProductColor[]
   productSizes            ProductSize[]
+  attributeDefinitions    AttributeDefinition[]
+  attributeOptions        AttributeOption[]
+  variantAttributeValues  VariantAttributeValue[]
+  productAttributeValues  ProductAttributeValue[]
   productVariantStocks    ProductVariantStock[]
   productBundleComponents ProductBundleComponent[]
   categories              Category[]
@@ -503,6 +507,8 @@ model Product {
   supplierAliases      SupplierProductAlias[]
   bundleComponents     ProductBundleComponent[]    @relation("BundleProduct")
   includedInBundles    ProductBundleComponent[]    @relation("BundleComponentProduct")
+  attributeAxes        ProductAttributeAxis[]
+  attributeValues      ProductAttributeValue[]
   createdAt            DateTime                    @default(now())
   updatedAt            DateTime                    @updatedAt
 
@@ -557,6 +563,8 @@ model ProductVariant {
   purchasePrice    Float?
   salePrice        Float?
   attributeValues  Json?
+  // Sorted "definitionId:optionId" pairs of the variant axes; kept by DB triggers.
+  optionsKey       String?
   isDefault        Boolean                  @default(false)
   isActive         Boolean                  @default(true)
   company          Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
@@ -569,14 +577,120 @@ model ProductVariant {
   inventoryItems   InventoryItem[]
   stockMovements   StockMovement[]
   bundleComponents ProductBundleComponent[]
+  attributeOptions VariantAttributeValue[]
   createdAt        DateTime                 @default(now())
   updatedAt        DateTime                 @updatedAt
 
   @@unique([companyId, barcode])
   @@unique([companyId, sku])
   @@index([productId, isActive])
+  @@index([productId, optionsKey])
   @@index([colorId])
   @@index([sizeId])
+}
+
+enum AttributeKind {
+  SELECT
+  TEXT
+  NUMBER
+}
+
+// Tenant-defined product attribute (Цвет, Размер, Материал, Модель устройства…).
+// isVariantAxis attributes distinguish variants of one product; the others
+// describe the product itself. legacySource marks definitions mirrored from
+// ProductColor ("color") / ProductSize ("size") by DB triggers.
+model AttributeDefinition {
+  id            String                  @id @default(uuid())
+  companyId     String
+  code          String
+  name          String
+  kind          AttributeKind           @default(SELECT)
+  isVariantAxis Boolean                 @default(true)
+  sortOrder     Int                     @default(0)
+  isActive      Boolean                 @default(true)
+  legacySource  String?
+  company       Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  options       AttributeOption[]
+  productAxes   ProductAttributeAxis[]
+  variantValues VariantAttributeValue[]
+  productValues ProductAttributeValue[]
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+
+  @@unique([companyId, code])
+  @@index([companyId, isActive, sortOrder])
+}
+
+model AttributeOption {
+  id            String                  @id @default(uuid())
+  companyId     String
+  definitionId  String
+  value         String
+  sortOrder     Int                     @default(0)
+  meta          Json?
+  isActive      Boolean                 @default(true)
+  legacyColorId String?                 @unique
+  legacySizeId  String?                 @unique
+  company       Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  definition    AttributeDefinition     @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  variantValues VariantAttributeValue[]
+  productValues ProductAttributeValue[]
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+
+  @@unique([definitionId, value])
+  @@index([companyId])
+}
+
+// Which variant axes a product uses, in display order.
+model ProductAttributeAxis {
+  productId    Int
+  definitionId String
+  sortOrder    Int                 @default(0)
+  product      Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  definition   AttributeDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime            @default(now())
+
+  @@id([productId, definitionId])
+  @@index([definitionId])
+}
+
+model VariantAttributeValue {
+  id           String              @id @default(uuid())
+  companyId    String
+  variantId    String
+  definitionId String
+  optionId     String?
+  valueText    String?
+  company      Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  variant      ProductVariant      @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  definition   AttributeDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  option       AttributeOption?    @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  @@unique([variantId, definitionId])
+  @@index([definitionId])
+  @@index([optionId])
+}
+
+model ProductAttributeValue {
+  id           String              @id @default(uuid())
+  companyId    String
+  productId    Int
+  definitionId String
+  optionId     String?
+  valueText    String?
+  company      Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  product      Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  definition   AttributeDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  option       AttributeOption?    @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  @@unique([productId, definitionId])
+  @@index([definitionId])
+  @@index([optionId])
 }
 
 model ProductBundleComponent {

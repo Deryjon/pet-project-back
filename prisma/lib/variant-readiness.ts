@@ -29,6 +29,7 @@ export type VariantReadinessReport = {
   axisStockBelowVariants: number;
   axisStockAboveVariants: number;
   productTotalMismatches: number;
+  legacyAxesWithoutAttributes: number;
   rowsWithoutVariant: Record<string, number>;
 };
 
@@ -178,6 +179,21 @@ export async function auditVariantReadiness(
       companyId,
     ),
     productTotalMismatches: await count(sql, PRODUCT_TOTAL_MISMATCH, companyId),
+    // Stage 1 mirror check: colour/size set on a variant but not mirrored.
+    legacyAxesWithoutAttributes: await count(
+      sql,
+      `SELECT 1 FROM "ProductVariant" v JOIN "Product" p ON p.id = v."productId"
+       WHERE ${COMPANY_FILTER}
+         AND ((v."colorId" IS NOT NULL AND NOT EXISTS (
+               SELECT 1 FROM "VariantAttributeValue" vav
+               JOIN "AttributeOption" o ON o.id = vav."optionId"
+               WHERE vav."variantId" = v.id AND o."legacyColorId" = v."colorId"))
+           OR (v."sizeId" IS NOT NULL AND NOT EXISTS (
+               SELECT 1 FROM "VariantAttributeValue" vav
+               JOIN "AttributeOption" o ON o.id = vav."optionId"
+               WHERE vav."variantId" = v.id AND o."legacySizeId" = v."sizeId")))`,
+      companyId,
+    ),
     rowsWithoutVariant,
   };
 }
