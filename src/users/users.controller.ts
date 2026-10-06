@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  BadRequestException,
   Get,
   Header,
   Headers,
@@ -218,7 +219,12 @@ export class UsersController {
         if (allowed.includes(file.mimetype)) {
           cb(null, true);
         } else {
-          cb(new Error('Only JPEG, PNG and WebP images are allowed'), false);
+          cb(
+            new BadRequestException(
+              'Only JPEG, PNG and WebP images are allowed',
+            ),
+            false,
+          );
         }
       },
     }),

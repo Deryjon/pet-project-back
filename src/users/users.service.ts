@@ -32,6 +32,7 @@ const ALLOWED_AVATAR_MIME_TYPES = new Set([
   'image/jpeg',
   'image/jpg',
   'image/png',
+  'image/webp',
 ]);
 const MAX_AVATAR_SIZE_BYTES = 5 * 1024 * 1024;
 const PLATFORM_ADMIN_ROLES = new Set(['platform_admin', 'superadmin']);
@@ -1309,7 +1310,9 @@ export class UsersService {
     }
 
     if (!ALLOWED_AVATAR_MIME_TYPES.has(file.mimetype)) {
-      throw new BadRequestException('Only jpg, jpeg and png files are allowed');
+      throw new BadRequestException(
+        'Only jpg, jpeg, png and webp files are allowed',
+      );
     }
 
     if (file.size > MAX_AVATAR_SIZE_BYTES) {
@@ -1324,7 +1327,9 @@ export class UsersService {
     // The stored extension comes from the real file type, not the name.
     const kind = detectImageKind(file.buffer);
     if (!kind) {
-      throw new BadRequestException('Only jpg, jpeg and png files are allowed');
+      throw new BadRequestException(
+        'Only jpg, jpeg, png and webp files are allowed',
+      );
     }
     const fileName = `${user.id}-${randomUUID()}.${kind}`;
     const filePath = join(uploadsDirectory, fileName);

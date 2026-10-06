@@ -3,7 +3,16 @@
 // /uploads as a page.
 export type ImageKind = 'jpg' | 'png' | 'webp';
 
-export const PUBLIC_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
+// .gif/.avif stay readable for photos uploaded before the byte check; new
+// uploads are always stored as jpg, png or webp.
+export const PUBLIC_IMAGE_EXTENSIONS = [
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.webp',
+  '.gif',
+  '.avif',
+];
 
 export function detectImageKind(buffer: Buffer | undefined): ImageKind | null {
   if (!buffer || buffer.length < 12) return null;
