@@ -19,6 +19,7 @@ import {
   LOYALTY_CASHBACK_PAYMENT_NAME,
 } from '../common/loyalty-payment';
 import { postSaleStockDecrease } from '../common/sale-stock-posting';
+import { moveVariantStock } from '../common/stock-ledger';
 import { runSerializableTransaction } from '../common/serializable-transaction';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -3072,44 +3073,13 @@ export class SalesService {
     }
 
     for (const item of this.expandStockComposition(items)) {
-      if (item.variantId) {
-        if (multiplier === -1) {
-          const claimed = await tx.productVariantStock.updateMany({
-            where: {
-              variantId: item.variantId,
-              shopId,
-              branchCode,
-              quantity: { gte: item.quantity },
-            },
-            data: { quantity: { decrement: item.quantity } },
-          });
-          if (claimed.count !== 1) {
-            throw new ConflictException(
-              'Недостаточно остатка выбранного варианта',
-            );
-          }
-        } else if (meta?.companyId) {
-          const variant = await tx.productVariant.findUnique({
-            where: { id: item.variantId },
-            select: { purchasePrice: true, salePrice: true },
-          });
-          await tx.productVariantStock.upsert({
-            where: { variantId_shopId: { variantId: item.variantId, shopId } },
-            create: {
-              companyId: meta.companyId,
-              variantId: item.variantId,
-              shopId,
-              branchCode,
-              quantity: item.quantity,
-              purchasePrice: variant?.purchasePrice ?? 0,
-              salePrice: item.salePrice ?? variant?.salePrice ?? 0,
-            },
-            update: { quantity: { increment: item.quantity } },
-          });
-        }
+      if (!meta?.companyId) {
+        throw new InternalServerErrorException(
+          'Для движения товара не задана компания',
+        );
       }
       if (multiplier === -1) {
-        if (!meta?.companyId || !meta.userId || meta.movementType !== 'SALE') {
+        if (!meta.userId || meta.movementType !== 'SALE') {
           throw new InternalServerErrorException(
             'Для списания товара не задан контекст складского движения',
           );
@@ -3129,82 +3099,49 @@ export class SalesService {
         continue;
       }
 
-      const stock = await tx.productStock.findFirst({
-        where: {
-          productId: item.productId,
-          shopId,
-          branchCode,
-          ...(meta?.companyId
-            ? { product: { companyId: meta.companyId } }
-            : {}),
+      const variantPrices = item.variantId
+        ? await tx.productVariant.findUnique({
+            where: { id: item.variantId },
+            select: { purchasePrice: true, salePrice: true },
+          })
+        : await tx.product.findUnique({
+            where: { id: item.productId },
+            select: { purchasePrice: true, salePrice: true },
+          });
+      const move = await moveVariantStock(tx, {
+        companyId: meta.companyId,
+        shopId,
+        branchCode,
+        productId: item.productId,
+        variantId: item.variantId,
+        delta: item.quantity,
+        prices: {
+          purchasePrice: variantPrices?.purchasePrice ?? 0,
+          salePrice: item.salePrice,
         },
       });
 
-      if (stock) {
-        const beforeQuantity = stock.quantity;
-        const afterQuantity = stock.quantity + item.quantity * multiplier;
-
-        await tx.productStock.update({
-          where: { id: stock.id },
-          data: { quantity: { increment: item.quantity } },
+      if (meta.userId && meta.movementType) {
+        await this.createStockMovement(tx, {
+          companyId: meta.companyId,
+          shopId,
+          productId: item.productId,
+          variantId: move.variantId,
+          type: meta.movementType,
+          quantity: item.quantity,
+          beforeQuantity: move.beforeQuantity,
+          afterQuantity: move.afterQuantity,
+          createdById: meta.userId,
+          externalId: meta.externalId ?? '',
+          supplyPrice:
+            move.stock?.purchasePrice ?? variantPrices?.purchasePrice ?? 0,
+          retailPrice: item.salePrice,
+          newRetailPrice: item.salePrice,
+          fromRetailPrice:
+            move.stock?.salePrice ?? variantPrices?.salePrice ?? 0,
+          fromSupplyPrice:
+            move.stock?.purchasePrice ?? variantPrices?.purchasePrice ?? 0,
         });
-
-        if (shopId && meta?.companyId && meta?.userId && meta?.movementType) {
-          await this.createStockMovement(tx, {
-            companyId: meta.companyId,
-            shopId,
-            productId: item.productId,
-            type: meta.movementType,
-            quantity: item.quantity,
-            beforeQuantity,
-            afterQuantity,
-            createdById: meta.userId,
-            externalId: meta.externalId ?? '',
-            supplyPrice: stock.purchasePrice ?? 0,
-            retailPrice: item.salePrice,
-            newRetailPrice: item.salePrice,
-            fromRetailPrice: stock.salePrice ?? 0,
-            fromSupplyPrice: stock.purchasePrice ?? 0,
-          });
-        }
-      } else {
-        const product = await tx.product.findUnique({
-          where: { id: item.productId },
-          select: {
-            purchasePrice: true,
-            salePrice: true,
-          },
-        });
-
-        await tx.productStock.create({
-          data: {
-            productId: item.productId,
-            shopId,
-            branchCode,
-            quantity: item.quantity,
-            purchasePrice: product?.purchasePrice ?? 0,
-            salePrice: item.salePrice,
-          },
-        });
-
-        if (shopId && meta?.companyId && meta?.userId && meta?.movementType) {
-          await this.createStockMovement(tx, {
-            companyId: meta.companyId,
-            shopId,
-            productId: item.productId,
-            type: meta.movementType,
-            quantity: item.quantity,
-            beforeQuantity: 0,
-            afterQuantity: item.quantity,
-            createdById: meta.userId,
-            externalId: meta.externalId ?? '',
-            supplyPrice: product?.purchasePrice ?? 0,
-            retailPrice: item.salePrice,
-            newRetailPrice: item.salePrice,
-            fromRetailPrice: product?.salePrice ?? 0,
-            fromSupplyPrice: product?.purchasePrice ?? 0,
-          });
-        }
       }
     }
   }
@@ -3292,6 +3229,7 @@ export class SalesService {
       companyId: string;
       shopId: string;
       productId: number;
+      variantId?: string | null;
       type: 'SALE' | 'RETURN';
       quantity: number;
       beforeQuantity: number;
@@ -3312,6 +3250,7 @@ export class SalesService {
         companyId: input.companyId,
         shopId: input.shopId,
         productId: input.productId,
+        variantId: input.variantId ?? null,
         type: input.type,
         displayTypeCode: display.code,
         displayTypeLabel: display.label,
@@ -3727,24 +3666,6 @@ export class SalesService {
           continue;
         }
 
-        if (item.variantId) {
-          const claimedVariantStock = await tx.productVariantStock.updateMany({
-            where: {
-              variantId: item.variantId,
-              shopId,
-              branchCode,
-              companyId,
-              quantity: { gte: item.quantity },
-            },
-            data: { quantity: { decrement: item.quantity } },
-          });
-          if (claimedVariantStock.count !== 1) {
-            throw new ConflictException(
-              `Недостаточно остатка выбранного варианта товара ${item.productId}`,
-            );
-          }
-        }
-
         const posting = await postSaleStockDecrease(tx, {
           companyId,
           shopId,
@@ -3907,99 +3828,38 @@ export class SalesService {
           continue;
         }
 
-        if (item.variantId) {
-          await tx.productVariantStock.upsert({
-            where: {
-              variantId_shopId: { variantId: item.variantId, shopId },
-            },
-            create: {
-              companyId,
-              variantId: item.variantId,
-              shopId,
-              branchCode,
-              quantity: item.quantity,
-              purchasePrice: item.product?.purchasePrice ?? 0,
-              salePrice: item.salePrice,
-            },
-            update: { quantity: { increment: item.quantity } },
-          });
-        }
-
-        const stock = await tx.productStock.findFirst({
-          where: {
-            productId: item.productId,
-            branchCode,
-          },
-        });
-
-        if (stock) {
-          const beforeQuantity = stock.quantity;
-          const afterQuantity = stock.quantity + item.quantity;
-          await tx.productStock.update({
-            where: { id: stock.id },
-            data: {
-              quantity: {
-                increment: item.quantity,
-              },
-            },
-          });
-
-          await this.createStockMovement(tx, {
-            companyId,
-            shopId,
-            productId: item.productId,
-            type: 'RETURN',
-            quantity: item.quantity,
-            beforeQuantity,
-            afterQuantity,
-            createdById,
-            externalId: sale.number ?? '',
-            supplyPrice: stock.purchasePrice ?? 0,
-            retailPrice: item.salePrice,
-            newRetailPrice: item.salePrice,
-            fromRetailPrice: stock.salePrice ?? 0,
-            fromSupplyPrice: stock.purchasePrice ?? 0,
-          });
-          continue;
-        }
-
         const product = await tx.product.findUnique({
           where: { id: item.productId },
-          select: {
-            purchasePrice: true,
-            salePrice: true,
-          },
+          select: { purchasePrice: true, salePrice: true },
         });
-
-        await tx.productStock.create({
-          data: {
-            productId: item.productId,
-            shopId,
-            branchCode,
-            quantity: item.quantity,
-            purchasePrice:
-              item.product?.purchasePrice ?? product?.purchasePrice ?? 0,
-            salePrice: item.salePrice,
-          },
+        const purchasePrice =
+          item.product?.purchasePrice ?? product?.purchasePrice ?? 0;
+        const move = await moveVariantStock(tx, {
+          companyId,
+          shopId,
+          branchCode,
+          productId: item.productId,
+          variantId: item.variantId,
+          delta: item.quantity,
+          prices: { purchasePrice, salePrice: item.salePrice },
         });
 
         await this.createStockMovement(tx, {
           companyId,
           shopId,
           productId: item.productId,
+          variantId: move.variantId,
           type: 'RETURN',
           quantity: item.quantity,
-          beforeQuantity: 0,
-          afterQuantity: item.quantity,
+          beforeQuantity: move.beforeQuantity,
+          afterQuantity: move.afterQuantity,
           createdById,
           externalId: sale.number ?? '',
-          supplyPrice:
-            item.product?.purchasePrice ?? product?.purchasePrice ?? 0,
+          supplyPrice: move.stock?.purchasePrice ?? purchasePrice,
           retailPrice: item.salePrice,
           newRetailPrice: item.salePrice,
-          fromRetailPrice: product?.salePrice ?? 0,
-          fromSupplyPrice:
-            item.product?.purchasePrice ?? product?.purchasePrice ?? 0,
+          fromRetailPrice: move.stock?.salePrice ?? product?.salePrice ?? 0,
+          fromSupplyPrice: move.stock?.purchasePrice ?? purchasePrice,
         });
       }
 

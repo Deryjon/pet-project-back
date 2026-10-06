@@ -22,6 +22,8 @@ describe('Variant readiness audit and repair', () => {
   afterAll(() => db.end());
   beforeEach(async () => {
     await db.query('BEGIN');
+    // Pre-ledger data: written around the stage 2 ledger triggers.
+    await db.query(`SELECT set_config('konkurent.stock_ledger', 'bypass', true)`);
     await db.query(`
       INSERT INTO "Company" (id, login, name, subdomain, "updatedAt") VALUES
         ('${COMPANY}', '${COMPANY}', 'R', '${COMPANY}', now());
@@ -55,6 +57,7 @@ describe('Variant readiness audit and repair', () => {
         ('r-vs5b', '${COMPANY}', 'r-v5b', 'r-s1', 'R1', 3, now()),
         ('r-vs6', '${COMPANY}', 'r-v6', 'r-s1', 'R1', 1, now());
     `);
+    await db.query(`SELECT set_config('konkurent.stock_ledger', '', true)`);
   });
   afterEach(() => db.query('ROLLBACK'));
 

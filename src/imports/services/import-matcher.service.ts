@@ -20,6 +20,8 @@ type MatchContext = {
 
 type MatchResult = {
   product: any;
+  // The exact colour/size when the barcode or alias identifies one.
+  variantId?: string | null;
   method: string;
   confidence: number;
   conflict: boolean;
@@ -64,6 +66,19 @@ export class ImportMatcherService {
         : await db.product.findFirst({ where: { companyId, barcode } });
       if (product)
         return { product, method: 'BARCODE', confidence: 100, conflict: false };
+      // Clothing: every colour/size carries its own barcode.
+      const variant = await db.productVariant.findFirst({
+        where: { companyId, barcode, isActive: true, product: { companyId } },
+        include: { product: true },
+      });
+      if (variant)
+        return {
+          product: variant.product,
+          variantId: variant.id,
+          method: 'VARIANT_BARCODE',
+          confidence: 100,
+          conflict: false,
+        };
     }
     const aliasMatchers = [
       ...(sku
@@ -131,6 +146,7 @@ export class ImportMatcherService {
       });
       return {
         product: alias.product,
+        variantId: alias.variantId ?? null,
         method: candidate.method,
         confidence: candidate.confidence,
         conflict: false,

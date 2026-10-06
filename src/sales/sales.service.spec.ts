@@ -5,6 +5,7 @@ import { CompanySettingsService } from '../company-settings/company-settings.ser
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { UsersService } from '../users/users.service';
+import { createStockLedgerFake } from '../../test/fixtures/stock-ledger-fake';
 import { SalesService } from './sales.service';
 
 /**
@@ -610,29 +611,36 @@ describe('SalesService money calculations', () => {
         salePrice?: number | null;
       } | null,
     ) {
-      const productStockUpdate = jest.fn().mockResolvedValue({ count: 1 });
-      const stockMovementCreate = jest.fn();
+      const ledger = createStockLedgerFake({
+        products: [{ id: 1, name: 'Test product', sku: 'SKU-1' }],
+        stocks: stockRow
+          ? [
+              {
+                productId: 1,
+                shopId: 'shop-1',
+                branchCode: 'B1',
+                quantity: stockRow.quantity,
+                lowStockNotifiedAt: stockRow.lowStockNotifiedAt,
+                purchasePrice: stockRow.purchasePrice ?? 10,
+                salePrice: stockRow.salePrice ?? 100,
+              },
+            ]
+          : [],
+      });
       const notifyLowStock = jest.fn().mockResolvedValue(undefined);
 
       const prisma = {
+        ...ledger.tx,
         shop: {
           findFirst: jest.fn().mockResolvedValue({ id: 'shop-1' }),
         },
-        productStock: {
-          findFirst: jest.fn().mockResolvedValue(stockRow),
-          updateMany: productStockUpdate,
-          aggregate: jest.fn().mockResolvedValue({ _sum: { quantity: 0 } }),
-        },
         product: {
+          ...ledger.tx.product,
           findMany: jest
             .fn()
             .mockResolvedValue([
               { id: 1, name: 'Test product', sku: 'SKU-1', barcode: null },
             ]),
-          update: jest.fn(),
-        },
-        stockMovement: {
-          create: stockMovementCreate,
         },
         $transaction: jest.fn(async (fn: any) => fn(prisma)),
       } as unknown as PrismaService;
@@ -655,9 +663,10 @@ describe('SalesService money calculations', () => {
       return {
         service,
         prisma,
-        productStockUpdate,
+        productStockUpdate: ledger.tx.productStock.update,
         notifyLowStock,
         telegramService,
+        usersService,
       };
     }
 
@@ -717,8 +726,8 @@ describe('SalesService money calculations', () => {
 
       await (service as any).writeOffSaleItemsFromStock(sale);
 
-      const dataArg = (productStockUpdate.mock.calls[0]?.[0] as any)?.data;
-      expect(dataArg).not.toHaveProperty('lowStockNotifiedAt');
+      // Neither crossing nor recovery: the flag row is not written at all.
+      expect(productStockUpdate).not.toHaveBeenCalled();
       expect(notifyLowStock).not.toHaveBeenCalled();
     });
 
@@ -754,35 +763,28 @@ describe('SalesService money calculations', () => {
     // calls read quantity=1 before either has decremented, then only the
     // updateMany that still sees quantity >= gte at "commit" time succeeds.
     function createServiceWithSharedStock(initialQuantity: number) {
-      let quantity = initialQuantity;
+      const ledger = createStockLedgerFake({
+        products: [{ id: 1, name: 'Test product' }],
+        stocks: [
+          {
+            productId: 1,
+            shopId: 'shop-1',
+            branchCode: 'B1',
+            quantity: initialQuantity,
+            purchasePrice: 10,
+            salePrice: 100,
+          },
+        ],
+      });
 
       const prisma = {
+        ...ledger.tx,
         shop: {
           findFirst: jest.fn().mockResolvedValue({ id: 'shop-1' }),
         },
-        productStock: {
-          findFirst: jest.fn(async () => ({
-            id: 99,
-            quantity,
-            lowStockNotifiedAt: null,
-            purchasePrice: 10,
-            salePrice: 100,
-          })),
-          updateMany: jest.fn(async ({ where, data }: any) => {
-            if (quantity >= where.quantity.gte) {
-              quantity -= data.quantity.decrement;
-              return { count: 1 };
-            }
-            return { count: 0 };
-          }),
-          aggregate: jest.fn(async () => ({ _sum: { quantity } })),
-        },
         product: {
+          ...ledger.tx.product,
           findMany: jest.fn().mockResolvedValue([]),
-          update: jest.fn(),
-        },
-        stockMovement: {
-          create: jest.fn(),
         },
         $transaction: jest.fn(async (fn: any) => fn(prisma)),
       } as unknown as PrismaService;
@@ -800,7 +802,7 @@ describe('SalesService money calculations', () => {
         telegramService,
       );
 
-      return { service, getQuantity: () => quantity };
+      return { service, getQuantity: () => ledger.shopQuantity(1, 'shop-1') };
     }
 
     it('exactly one of two concurrent sales for a single unit of stock succeeds; stock never goes negative', async () => {

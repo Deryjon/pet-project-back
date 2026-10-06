@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { companyContext as testContext } from '../../../test/fixtures/request-context';
+import { createStockLedgerFake } from '../../../test/fixtures/stock-ledger-fake';
 import { OrdersService } from './orders.service';
 
 describe('OrdersService.complete concurrency guards', () => {
@@ -39,8 +40,21 @@ describe('OrdersService.complete concurrency guards', () => {
       payments: [{ amount: new Prisma.Decimal(10), paymentType: null }],
     };
     let claimed = false;
-    let stock = 1;
+    const ledger = createStockLedgerFake({
+      products: [{ id: 11 }],
+      stocks: [
+        {
+          productId: 11,
+          shopId: 'shop-1',
+          branchCode: '001',
+          quantity: 1,
+          purchasePrice: 4,
+          salePrice: 10,
+        },
+      ],
+    });
     const tx: any = {
+      ...ledger.tx,
       order: {
         findFirst: jest.fn(async () =>
           claimed ? { ...order, status: 'COMPLETED', versionNumber: 2 } : order,
@@ -52,24 +66,6 @@ describe('OrdersService.complete concurrency guards', () => {
         }),
         update: jest.fn(async () => ({})),
       },
-      productStock: {
-        findFirst: jest.fn(async () => ({
-          id: 21,
-          quantity: stock,
-          purchasePrice: 4,
-          salePrice: 10,
-        })),
-        updateMany: jest.fn(async () => {
-          if (stock < 1) return { count: 0 };
-          stock -= 1;
-          return { count: 1 };
-        }),
-        aggregate: jest.fn(async () => ({ _sum: { quantity: stock } })),
-      },
-      stockMovement: {
-        create: jest.fn(async () => ({ id: 'movement-1' })),
-      },
-      product: { update: jest.fn(async () => ({})) },
       auditLog: { create: jest.fn(async () => ({})) },
       clientDebt: { create: jest.fn(), aggregate: jest.fn() },
       client: { update: jest.fn() },
@@ -78,11 +74,11 @@ describe('OrdersService.complete concurrency guards', () => {
       $transaction: jest.fn((operation) => operation(tx)),
     };
 
-    return { service: new OrdersService(prisma), tx, prisma };
+    return { service: new OrdersService(prisma), tx, prisma, ledger };
   }
 
   it('allows only one completion and one stock write-off', async () => {
-    const { service, tx, prisma } = setup();
+    const { service, prisma, ledger } = setup();
 
     const results = await Promise.allSettled([
       service.complete(
@@ -103,8 +99,8 @@ describe('OrdersService.complete concurrency guards', () => {
     expect(
       results.filter((result) => result.status === 'rejected'),
     ).toHaveLength(1);
-    expect(tx.productStock.updateMany).toHaveBeenCalledTimes(1);
-    expect(tx.stockMovement.create).toHaveBeenCalledTimes(1);
+    expect(ledger.shopQuantity(11, 'shop-1')).toBe(0);
+    expect(ledger.movements).toHaveLength(1);
     expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
       isolationLevel: 'Serializable',
     });
@@ -117,8 +113,8 @@ describe('OrdersService.complete concurrency guards', () => {
       {},
       testContext({ allowedBranchCodes: ['001'] }),
     );
-    expect(tx.productStock.updateMany).toHaveBeenCalledWith({
-      where: { id: 21, quantity: { gte: 1 } },
+    expect(tx.productVariantStock.updateMany).toHaveBeenCalledWith({
+      where: { variantId: 'default-11', shopId: 'shop-1', quantity: { gte: 1 } },
       data: { quantity: { decrement: 1 } },
     });
   });

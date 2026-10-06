@@ -553,7 +553,7 @@ model ProductSize {
 }
 
 model ProductVariant {
-  id               String                   @id @default(uuid())
+  id               String                      @id @default(uuid())
   companyId        String
   productId        Int
   colorId          String?
@@ -565,12 +565,12 @@ model ProductVariant {
   attributeValues  Json?
   // Sorted "definitionId:optionId" pairs of the variant axes; kept by DB triggers.
   optionsKey       String?
-  isDefault        Boolean                  @default(false)
-  isActive         Boolean                  @default(true)
-  company          Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  product          Product                  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  color            ProductColor?            @relation(fields: [colorId], references: [id], onDelete: SetNull)
-  size             ProductSize?             @relation(fields: [sizeId], references: [id], onDelete: SetNull)
+  isDefault        Boolean                     @default(false)
+  isActive         Boolean                     @default(true)
+  company          Company                     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  product          Product                     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  color            ProductColor?               @relation(fields: [colorId], references: [id], onDelete: SetNull)
+  size             ProductSize?                @relation(fields: [sizeId], references: [id], onDelete: SetNull)
   stocks           ProductVariantStock[]
   saleItems        SaleItem[]
   transferItems    TransferItem[]
@@ -578,8 +578,12 @@ model ProductVariant {
   stockMovements   StockMovement[]
   bundleComponents ProductBundleComponent[]
   attributeOptions VariantAttributeValue[]
-  createdAt        DateTime                 @default(now())
-  updatedAt        DateTime                 @updatedAt
+  invoiceItems     SupplierInvoiceItem[]
+  supplierAliases  SupplierProductAlias[]
+  supplyPrices     ProductSupplyPriceHistory[]
+  orderItems       OrderItem[]
+  createdAt        DateTime                    @default(now())
+  updatedAt        DateTime                    @updatedAt
 
   @@unique([companyId, barcode])
   @@unique([companyId, sku])
@@ -1196,20 +1200,23 @@ model Order {
 }
 
 model OrderItem {
-  id             String   @id @default(uuid())
+  id             String          @id @default(uuid())
   orderId        String
   productId      Int
-  quantity       Decimal  @db.Decimal(12, 3)
-  price          Decimal  @db.Decimal(12, 2)
-  discountAmount Decimal  @default(0) @db.Decimal(12, 2)
-  totalPrice     Decimal  @db.Decimal(12, 2)
-  order          Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  product        Product  @relation(fields: [productId], references: [id])
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  variantId      String?
+  quantity       Decimal         @db.Decimal(12, 3)
+  price          Decimal         @db.Decimal(12, 2)
+  discountAmount Decimal         @default(0) @db.Decimal(12, 2)
+  totalPrice     Decimal         @db.Decimal(12, 2)
+  order          Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product        Product         @relation(fields: [productId], references: [id])
+  variant        ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
   @@unique([orderId, productId])
   @@index([productId])
+  @@index([variantId])
 }
 
 model OrderPayment {
@@ -1308,6 +1315,7 @@ model SupplierInvoiceItem {
   supplyPrice         Decimal                   @db.Decimal(14, 2)
   totalPrice          Decimal?                  @db.Decimal(14, 2)
   matchedProductId    Int?
+  matchedVariantId    String?
   matchMethod         String?
   matchConfidence     Int?
   status              SupplierInvoiceItemStatus @default(NEEDS_REVIEW)
@@ -1315,12 +1323,14 @@ model SupplierInvoiceItem {
   warnings            Json?
   invoice             SupplierInvoice           @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   matchedProduct      Product?                  @relation(fields: [matchedProductId], references: [id])
+  matchedVariant      ProductVariant?           @relation(fields: [matchedVariantId], references: [id], onDelete: SetNull)
   allocations         InvoiceAllocation[]
   createdAt           DateTime                  @default(now())
   updatedAt           DateTime                  @updatedAt
 
   @@index([invoiceId, status])
   @@index([matchedProductId])
+  @@index([matchedVariantId])
 }
 
 model InvoiceAllocation {
@@ -1338,43 +1348,49 @@ model InvoiceAllocation {
 }
 
 model SupplierProductAlias {
-  id              String    @id @default(uuid())
+  id              String          @id @default(uuid())
   companyId       String
   supplierId      Int
   productId       Int
+  variantId       String?
   supplierName    String
   normalizedName  String?
   supplierSku     String?
   supplierBarcode String?
-  lastSupplyPrice Decimal?  @db.Decimal(14, 2)
-  usageCount      Int       @default(0)
+  lastSupplyPrice Decimal?        @db.Decimal(14, 2)
+  usageCount      Int             @default(0)
   lastSeenAt      DateTime?
-  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  supplier        Supplier  @relation(fields: [supplierId], references: [id], onDelete: Cascade)
-  product         Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  company         Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  supplier        Supplier        @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  product         Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant         ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 
   @@unique([companyId, supplierId, supplierSku])
   @@unique([companyId, supplierId, supplierBarcode])
   @@index([companyId, supplierId, normalizedName])
   @@index([productId])
+  @@index([variantId])
 }
 
 model ProductSupplyPriceHistory {
-  id             String   @id @default(uuid())
+  id             String          @id @default(uuid())
   productId      Int
+  variantId      String?
   shopId         String
-  supplyPrice    Decimal  @db.Decimal(12, 2)
-  supplyCurrency String   @default("")
-  oldSupplyPrice Decimal  @default(0) @db.Decimal(12, 2)
+  supplyPrice    Decimal         @db.Decimal(12, 2)
+  supplyCurrency String          @default("")
+  oldSupplyPrice Decimal         @default(0) @db.Decimal(12, 2)
   createdById    Int?
-  product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  shop           Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  createdBy      User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt      DateTime @default(now())
+  product        Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant        ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  shop           Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdBy      User?           @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt      DateTime        @default(now())
 
   @@index([productId, createdAt])
+  @@index([variantId])
   @@index([shopId, createdAt])
 }
 

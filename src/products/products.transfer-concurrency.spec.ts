@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { createStockLedgerFake } from '../../test/fixtures/stock-ledger-fake';
 import { ProductsService } from './products.service';
 
 const context = {
@@ -17,17 +18,28 @@ const context = {
 } as const;
 
 /**
- * In-memory Transfer/ProductStock tables. Both requests below read the
+ * In-memory Transfer and stock ledger tables. Both requests below read the
  * transfer before either writes — the stale read a concurrent pair would see.
  */
 function setup(initialStatus: 'DRAFT' | 'SENT') {
+  const ledger = createStockLedgerFake({
+    companyId: 'company-a',
+    products: [{ id: 5, purchasePrice: 1, salePrice: 2 }],
+    stocks: [
+      {
+        productId: 5,
+        shopId: 'shop-a',
+        branchCode: 'A',
+        quantity: 10,
+        purchasePrice: 1,
+        salePrice: 2,
+      },
+    ],
+  });
   const state = {
     status: initialStatus as string,
-    stocks: new Map<string, number>([
-      ['A', 10],
-      ['B', 0],
-    ]),
     arrived: 0,
+    stock: (shopId: string) => ledger.shopQuantity(5, shopId),
   };
   const staleTransfer = {
     id: 'transfer-1',
@@ -54,32 +66,12 @@ function setup(initialStatus: 'DRAFT' | 'SENT') {
     ],
   };
   const tx = {
+    ...ledger.tx,
     transfer: {
       updateMany: jest.fn(async ({ where, data }: any) => {
         if (state.status !== where.status) return { count: 0 };
         state.status = data.status;
         return { count: 1 };
-      }),
-    },
-    productStock: {
-      updateMany: jest.fn(async ({ where, data }: any) => {
-        const quantity = state.stocks.get(where.branchCode) ?? 0;
-        if (quantity < where.quantity.gte) return { count: 0 };
-        state.stocks.set(where.branchCode, quantity - data.quantity.decrement);
-        return { count: 1 };
-      }),
-      findFirstOrThrow: jest.fn(async ({ where }: any) => ({
-        quantity: state.stocks.get(where.branchCode),
-        purchasePrice: 1,
-        salePrice: 2,
-      })),
-      findFirst: jest.fn(async () => ({ purchasePrice: 1, salePrice: 2 })),
-      upsert: jest.fn(async ({ where, update }: any) => {
-        const branchCode = where.productId_branchCode.branchCode;
-        const quantity =
-          (state.stocks.get(branchCode) ?? 0) + update.quantity.increment;
-        state.stocks.set(branchCode, quantity);
-        return { quantity };
       }),
     },
     transferItem: {
@@ -113,7 +105,7 @@ describe('ProductsService transfer status claims', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
 
     expect(state.status).toBe('SENT');
-    expect(state.stocks.get('A')).toBe(6);
+    expect(state.stock('shop-a')).toBe(6);
   });
 
   it('adds arrival stock only once when a transfer is accepted twice', async () => {
@@ -125,7 +117,7 @@ describe('ProductsService transfer status claims', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
 
     expect(state.status).toBe('ACCEPTED');
-    expect(state.stocks.get('B')).toBe(4);
+    expect(state.stock('shop-b')).toBe(4);
   });
 
   it('does not accept more than was sent', async () => {
@@ -137,7 +129,7 @@ describe('ProductsService transfer status claims', () => {
       context as any,
     );
 
-    expect(state.stocks.get('B')).toBe(4);
+    expect(state.stock('shop-b')).toBe(4);
     expect(state.arrived).toBe(4);
   });
 
@@ -150,6 +142,6 @@ describe('ProductsService transfer status claims', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
 
     expect(state.status).toBe('ACCEPTED');
-    expect(state.stocks.get('A')).toBe(10);
+    expect(state.stock('shop-a')).toBe(10);
   });
 });

@@ -13,6 +13,7 @@ describe('Import matching', () => {
         findFirst: jest.fn().mockResolvedValue(null),
         findMany: jest.fn().mockResolvedValue([]),
       },
+      productVariant: { findFirst: jest.fn().mockResolvedValue(null) },
       supplierProductAlias: {
         findMany: jest.fn().mockResolvedValue([]),
         update: jest.fn(),
@@ -40,6 +41,32 @@ describe('Import matching', () => {
       else expect(result).toMatchObject({ confidence, method: 'FUZZY_NAME' });
     },
   );
+  it('matches a colour/size by its own barcode', async () => {
+    db.productVariant.findFirst.mockResolvedValue({
+      id: 'v-red-m',
+      product: { id: 7, name: 'Shirt' },
+    });
+
+    const result = await matcher.match('company', 1, {
+      rawName: 'Shirt red M',
+      rawBarcode: '4600000000017',
+    });
+
+    expect(db.productVariant.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          companyId: 'company',
+          barcode: '4600000000017',
+        }),
+      }),
+    );
+    expect(result).toMatchObject({
+      product: { id: 7 },
+      variantId: 'v-red-m',
+      method: 'VARIANT_BARCODE',
+      confidence: 100,
+    });
+  });
   it('returns null for an empty catalog', async () => {
     expect(await matcher.match('company', 1, { rawName: 'alpha' })).toBeNull();
   });

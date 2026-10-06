@@ -42,15 +42,36 @@ export async function fixture(db: PrismaClient, quantity = 1) {
     data: {
       companyId: company.id,
       name: 'Test product',
-      quantity,
+      // Stock reaches Product.quantity through the ledger trigger.
+      quantity: quantity < 0 ? quantity : 0,
       salePrice: 10,
       purchasePrice: 4,
     },
   });
-  if (quantity >= 0)
+  const variant = await db.productVariant.create({
+    data: {
+      companyId: company.id,
+      productId: product.id,
+      isDefault: true,
+      salePrice: 10,
+      purchasePrice: 4,
+    },
+  });
+  if (quantity >= 0) {
     await db.productStock.create({
       data: {
         productId: product.id,
+        shopId: shop.id,
+        branchCode: shop.branchCode,
+        quantity: 0,
+        salePrice: 10,
+        purchasePrice: 4,
+      },
+    });
+    await db.productVariantStock.create({
+      data: {
+        companyId: company.id,
+        variantId: variant.id,
         shopId: shop.id,
         branchCode: shop.branchCode,
         quantity,
@@ -58,6 +79,7 @@ export async function fixture(db: PrismaClient, quantity = 1) {
         purchasePrice: 4,
       },
     });
+  }
   const paymentType = await db.paymentType.create({
     data: { companyId: company.id, name: 'Cash', isCash: true },
   });
@@ -77,7 +99,16 @@ export async function fixture(db: PrismaClient, quantity = 1) {
     allowedShopIds: [shop.id],
     allowedBranchCodes: [shop.branchCode],
   });
-  return { company, shop, user, product, paymentType, customer, context };
+  return {
+    company,
+    shop,
+    user,
+    product,
+    variant,
+    paymentType,
+    customer,
+    context,
+  };
 }
 
 export async function order(

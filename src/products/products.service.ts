@@ -18,6 +18,10 @@ import {
   resolveProductPhotoUrl,
 } from '../common/product-photo.util';
 import { runSerializableTransaction } from '../common/serializable-transaction';
+import {
+  moveVariantStock,
+  setVariantStock,
+} from '../common/stock-ledger';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { DEFAULT_PRODUCT_COLORS, SIZE_GRID_PRESETS } from './size-grid-presets';
@@ -2345,12 +2349,21 @@ export class ProductsService {
     }
 
     const revertByProduct = new Map<number, number>();
+    // The import added stock to specific variants; it is taken back from them.
+    const revertByVariant = new Map<number, Map<string | null, number>>();
     for (const movement of movements) {
       revertByProduct.set(
         movement.productId,
         (revertByProduct.get(movement.productId) ?? 0) +
           Number(movement.quantity),
       );
+      const variants =
+        revertByVariant.get(movement.productId) ?? new Map<string | null, number>();
+      variants.set(
+        movement.variantId,
+        (variants.get(movement.variantId) ?? 0) + Number(movement.quantity),
+      );
+      revertByVariant.set(movement.productId, variants);
     }
 
     const productIds = [...revertByProduct.keys()];
@@ -2422,23 +2435,26 @@ export class ProductsService {
     try {
       await this.prisma.$transaction(async (tx) => {
         for (const item of items) {
-          const stock = stockByProduct.get(item.product_id);
-          if (stock) {
-            await tx.productStock.update({
-              where: { id: stock.id },
-              data: { quantity: item.quantity_after },
+          // Atomic decrements: a sale made after the preview is never
+          // overwritten; if it used up the imported stock the rollback fails.
+          let afterQuantity = item.quantity_after;
+          for (const [variantId, quantity] of revertByVariant.get(
+            item.product_id,
+          ) ?? []) {
+            const move = await moveVariantStock(tx, {
+              companyId: session.companyId,
+              shopId: session.shopId,
+              branchCode: session.branchCode,
+              productId: item.product_id,
+              variantId,
+              delta: -quantity,
+              insufficientStock: () =>
+                new ConflictException(
+                  `Остаток товара «${item.product_name}» уже израсходован — откат увёл бы его в минус`,
+                ),
             });
+            afterQuantity = move.afterQuantity;
           }
-
-          const allStocks = await tx.productStock.findMany({
-            where: { productId: item.product_id },
-          });
-          await tx.product.update({
-            where: { id: item.product_id },
-            data: {
-              quantity: allStocks.reduce((sum, s) => sum + s.quantity, 0),
-            },
-          });
 
           await this.createStockMovementRecord(tx, {
             companyId: session.companyId,
@@ -2446,8 +2462,8 @@ export class ProductsService {
             productId: item.product_id,
             type: 'ADJUSTMENT',
             quantity: -item.quantity_to_revert,
-            beforeQuantity: item.current_quantity,
-            afterQuantity: item.quantity_after,
+            beforeQuantity: afterQuantity + item.quantity_to_revert,
+            afterQuantity,
             createdById: writeContext.userId,
             externalId: session.id,
             fromShopId: '',
@@ -4015,7 +4031,8 @@ export class ProductsService {
         season,
         seasonYear,
         collection,
-        quantity: totalQuantityFromStocks || quantity,
+        // Shop stocks reach Product.quantity through the ledger trigger.
+        quantity: stocks.length ? 0 : totalQuantityFromStocks || quantity,
         metadata: metadataInput,
         category: categoryName
           ? {
@@ -4081,17 +4098,6 @@ export class ProductsService {
               })),
             }
           : undefined,
-        stocks: stocks.length
-          ? {
-              create: stocks.map((stock) => ({
-                shopId: stock.shopId,
-                branchCode: stock.branchCode,
-                quantity: stock.quantity,
-                purchasePrice: stock.supplyPrice,
-                salePrice: stock.retailPrice,
-              })),
-            }
-          : undefined,
         variants: {
           create: {
             companyId: productCompanyId,
@@ -4116,6 +4122,17 @@ export class ProductsService {
         },
       },
     });
+
+    await this.upsertShopStockPrices(
+      this.prisma,
+      createdProduct.id,
+      stocks.map((stock) => ({
+        shopId: stock.shopId,
+        branchCode: stock.branchCode,
+        purchasePrice: stock.supplyPrice,
+        salePrice: stock.retailPrice,
+      })),
+    );
 
     const product = await this.prisma.product.findUniqueOrThrow({
       where: { id: createdProduct.id },
@@ -4237,7 +4254,7 @@ export class ProductsService {
       measurementUnit?.short_name,
     );
 
-    const createdProduct = await this.prisma.product.create({
+    const created = await this.prisma.product.create({
       data: {
         company: {
           connect: {
@@ -4261,7 +4278,9 @@ export class ProductsService {
         collection,
         productGroupId: this.optionalString(body.product_group_id),
         tier: this.resolveProductTier(body.tier),
-        quantity: totalQuantity,
+        // Shop stocks reach Product.quantity through the ledger trigger.
+        quantity:
+          supportsStock && shipmentsWithBranchCodes.length ? 0 : totalQuantity,
         metadata: this.buildCatalogMetadata(
           body,
           description,
@@ -4324,18 +4343,6 @@ export class ProductsService {
                 },
               }
             : undefined,
-        stocks:
-          supportsStock && shipmentsWithBranchCodes.length
-            ? {
-                create: shipmentsWithBranchCodes.map((shipment) => ({
-                  shopId: shipment.shopId,
-                  branchCode: shipment.branchCode,
-                  quantity: shipment.quantity,
-                  purchasePrice: shipment.supplyPrice,
-                  salePrice: shipment.retailPrice,
-                })),
-              }
-            : undefined,
         variants: {
           create: {
             companyId: productCompanyId,
@@ -4351,7 +4358,8 @@ export class ProductsService {
                       companyId: productCompanyId,
                       shopId: shipment.shopId,
                       branchCode: shipment.branchCode,
-                      quantity: shipment.quantity,
+                      // Colour/size goods keep their stock on those variants.
+                      quantity: isVariative ? 0 : shipment.quantity,
                       purchasePrice: shipment.supplyPrice,
                       salePrice: shipment.retailPrice,
                     })),
@@ -4371,6 +4379,24 @@ export class ProductsService {
         stocks: true,
       },
     });
+    if (supportsStock) {
+      await this.upsertShopStockPrices(
+        this.prisma,
+        created.id,
+        shipmentsWithBranchCodes.map((shipment) => ({
+          shopId: shipment.shopId,
+          branchCode: shipment.branchCode,
+          purchasePrice: shipment.supplyPrice,
+          salePrice: shipment.retailPrice,
+        })),
+      );
+    }
+    const createdProduct = {
+      ...created,
+      stocks: await this.prisma.productStock.findMany({
+        where: { productId: created.id },
+      }),
+    };
     const shopLookup = await this.buildShopLookupByBranchCodes(
       shipmentsWithBranchCodes.map((shipment) => shipment.branchCode),
       writeContext.companyId,
@@ -4794,6 +4820,13 @@ export class ProductsService {
       },
     });
 
+    if (!supportsStock && stockPayloadSent) {
+      // Services hold no stock: clear the variant ledger as well.
+      await this.prisma.productVariantStock.deleteMany({
+        where: { variant: { productId: updatedProduct.id } },
+      });
+    }
+
     // Variative goods: ProductStock is derived from variant stocks, so the
     // product-level shop quantities in the payload are ignored.
     let previousStocks = existingProduct.stocks;
@@ -4801,6 +4834,7 @@ export class ProductsService {
     if (supportsStock && stockPayloadSent && !isVariative) {
       const applied = await this.applySimpleProductStockEdits(
         updatedProduct.id,
+        writeContext.companyId,
         shipmentsWithBranchCodes,
       );
       previousStocks = applied.previous;
@@ -4811,10 +4845,10 @@ export class ProductsService {
       const freshStocks = await this.prisma.productStock.findMany({
         where: { productId: updatedProduct.id },
       });
-      await this.syncDefaultVariantFromLegacyProduct(
-        { ...updatedProduct, stocks: freshStocks },
-        { replaceStocks: stockPayloadSent },
-      );
+      await this.syncDefaultVariantFromLegacyProduct({
+        ...updatedProduct,
+        stocks: freshStocks,
+      });
     } else if (body.variants !== undefined) {
       await this.syncCatalogVariants(
         updatedProduct.id,
@@ -5940,43 +5974,24 @@ export class ProductsService {
 
       for (const item of transfer.items) {
         const quantity = Number(item.quantity ?? 0);
-        if (item.variantId) {
-          const claimed = await tx.productVariantStock.updateMany({
-            where: {
-              variantId: item.variantId,
-              shopId: transfer.departureShopId,
-              quantity: { gte: quantity },
-            },
-            data: { quantity: { decrement: quantity } },
-          });
-          if (claimed.count !== 1) {
-            throw new BadRequestException(
-              `Not enough variant stock for product ${item.product.name}`,
-            );
-          }
-        }
         // Atomic decrement so a concurrent sale's write is never overwritten.
-        const decremented = await tx.productStock.updateMany({
-          where: {
-            productId: item.productId,
-            branchCode: transfer.departureShop.branchCode,
-            quantity: { gte: quantity },
-          },
-          data: { quantity: { decrement: quantity } },
+        const move = await moveVariantStock(tx, {
+          companyId: transfer.companyId,
+          shopId: transfer.departureShopId,
+          branchCode: transfer.departureShop.branchCode,
+          productId: item.productId,
+          variantId: item.variantId,
+          delta: -quantity,
+          insufficientStock: () =>
+            new BadRequestException(
+              `Not enough stock for product ${item.product.name}`,
+            ),
         });
-        if (decremented.count !== 1) {
-          throw new BadRequestException(
-            `Not enough stock for product ${item.product.name}`,
-          );
-        }
-        const departureStock = await tx.productStock.findFirstOrThrow({
-          where: {
-            productId: item.productId,
-            branchCode: transfer.departureShop.branchCode,
-          },
-        });
-        const afterQuantity = departureStock.quantity;
-        const beforeQuantity = afterQuantity + quantity;
+        const departureStock = {
+          purchasePrice: move.stock?.purchasePrice ?? null,
+          salePrice: move.stock?.salePrice ?? null,
+        };
+        const { beforeQuantity, afterQuantity } = move;
 
         await this.syncProductTotalQuantity(tx, item.productId);
         await this.createStockMovementRecord(tx, {
@@ -6104,33 +6119,18 @@ export class ProductsService {
       if (transfer.status === 'SENT') {
         for (const item of transfer.items) {
           const quantity = Number(item.quantity ?? 0);
-          if (item.variantId) {
-            await tx.productVariantStock.updateMany({
-              where: {
-                variantId: item.variantId,
-                shopId: transfer.departureShopId,
-              },
-              data: { quantity: { increment: quantity } },
-            });
-          }
-          await tx.productStock.upsert({
-            where: {
-              productId_branchCode: {
-                productId: item.productId,
-                branchCode: transfer.departureShop.branchCode,
-              },
-            },
-            create: {
-              productId: item.productId,
-              shopId: transfer.departureShop.id,
-              branchCode: transfer.departureShop.branchCode,
-              quantity,
+          await moveVariantStock(tx, {
+            companyId: transfer.companyId,
+            shopId: transfer.departureShop.id,
+            branchCode: transfer.departureShop.branchCode,
+            productId: item.productId,
+            variantId: item.variantId,
+            delta: quantity,
+            prices: {
               purchasePrice: item.product.purchasePrice ?? 0,
               salePrice: item.product.salePrice ?? 0,
             },
-            update: { quantity: { increment: quantity } },
           });
-          await this.syncProductTotalQuantity(tx, item.productId);
         }
       }
     });
@@ -6163,34 +6163,6 @@ export class ProductsService {
     quantity: number,
     context: CompanyRequestContext,
   ) {
-    if (item.variantId && quantity > 0) {
-      const sourceVariantStock = item.variant?.stocks?.find(
-        (stock: any) => stock.shopId === transfer.departureShopId,
-      );
-      await tx.productVariantStock.upsert({
-        where: {
-          variantId_shopId: {
-            variantId: item.variantId,
-            shopId: transfer.arrivalShopId,
-          },
-        },
-        create: {
-          companyId: transfer.companyId,
-          variantId: item.variantId,
-          shopId: transfer.arrivalShopId,
-          branchCode: transfer.arrivalShop.branchCode,
-          quantity,
-          purchasePrice:
-            sourceVariantStock?.purchasePrice ??
-            item.variant?.purchasePrice ??
-            0,
-          salePrice:
-            sourceVariantStock?.salePrice ?? item.variant?.salePrice ?? 0,
-        },
-        update: { quantity: { increment: quantity } },
-      });
-    }
-
     // Prices only: the quantity itself is incremented atomically below.
     const arrivalStock = await tx.productStock.findFirst({
       where: {
@@ -6213,29 +6185,34 @@ export class ProductsService {
       item.product.salePrice ??
       0;
 
-    const updatedStock = await tx.productStock.upsert({
-      where: {
-        productId_branchCode: {
-          productId: item.productId,
-          branchCode: transfer.arrivalShop.branchCode,
-        },
-      },
-      create: {
-        productId: item.productId,
-        shopId: transfer.arrivalShop.id,
-        branchCode: transfer.arrivalShop.branchCode,
-        quantity,
-        purchasePrice: supplyPrice,
-        salePrice: retailPrice,
-      },
-      update: {
-        quantity: { increment: quantity },
-        purchasePrice: supplyPrice,
-        salePrice: retailPrice,
+    const sourceVariantStock = item.variantId
+      ? item.variant?.stocks?.find(
+          (stock: any) => stock.shopId === transfer.departureShopId,
+        )
+      : null;
+    const move = await moveVariantStock(tx, {
+      companyId: transfer.companyId,
+      shopId: transfer.arrivalShop.id,
+      branchCode: transfer.arrivalShop.branchCode,
+      productId: item.productId,
+      variantId: item.variantId,
+      delta: quantity,
+      prices: {
+        purchasePrice:
+          sourceVariantStock?.purchasePrice ??
+          item.variant?.purchasePrice ??
+          supplyPrice,
+        salePrice:
+          sourceVariantStock?.salePrice ?? item.variant?.salePrice ?? retailPrice,
       },
     });
-    const afterQuantity = updatedStock.quantity;
-    const beforeQuantity = afterQuantity - quantity;
+    if (move.stock) {
+      await tx.productStock.update({
+        where: { id: move.stock.id },
+        data: { purchasePrice: supplyPrice, salePrice: retailPrice },
+      });
+    }
+    const { beforeQuantity, afterQuantity } = move;
 
     await tx.transferItem.update({
       where: { id: item.id },
@@ -6874,6 +6851,39 @@ export class ProductsService {
    * so for a variative product ProductStock in every shop must equal the sum
    * of its active colour/size variant stocks in that shop.
    */
+  /**
+   * Per-shop prices of a product. The shop row is created with zero quantity
+   * when missing (its quantity follows the variant stocks via the ledger).
+   */
+  private async upsertShopStockPrices(
+    tx: Prisma.TransactionClient | PrismaService,
+    productId: number,
+    rows: Array<{
+      shopId: string;
+      branchCode: string;
+      purchasePrice: number | null;
+      salePrice: number | null;
+    }>,
+  ) {
+    for (const row of rows) {
+      const prices = {
+        purchasePrice: row.purchasePrice,
+        salePrice: row.salePrice,
+      };
+      await tx.productStock.upsert({
+        where: { productId_shopId: { productId, shopId: row.shopId } },
+        create: {
+          productId,
+          shopId: row.shopId,
+          branchCode: row.branchCode,
+          quantity: 0,
+          ...prices,
+        },
+        update: prices,
+      });
+    }
+  }
+
   private async syncVariativeProductStocks(
     tx: Prisma.TransactionClient,
     productId: number,
@@ -6911,20 +6921,19 @@ export class ProductsService {
       byShop.set(stock.shopId, entry);
     }
 
+    // Quantities follow the variant stocks through the ledger trigger; shop
+    // rows it created only need the variant prices.
     for (const stock of productStocks) {
-      const quantity = byShop.get(stock.shopId)?.quantity ?? 0;
-      if (stock.quantity !== quantity) {
+      const entry = byShop.get(stock.shopId);
+      if (entry && stock.purchasePrice === null && stock.salePrice === null) {
         await tx.productStock.update({
           where: { id: stock.id },
-          data: { quantity },
+          data: {
+            purchasePrice: entry.purchasePrice,
+            salePrice: entry.salePrice,
+          },
         });
       }
-      byShop.delete(stock.shopId);
-    }
-    for (const [shopId, entry] of byShop) {
-      await tx.productStock.create({
-        data: { productId, shopId, ...entry },
-      });
     }
 
     await this.syncProductTotalQuantity(tx, productId);
@@ -6944,46 +6953,48 @@ export class ProductsService {
       supplyPrice: number;
       retailPrice: number;
     },
-  >(productId: number, shipments: T[]) {
+  >(productId: number, companyId: string, shipments: T[]) {
     return this.prisma.$transaction(async (tx) => {
       const previous = await tx.productStock.findMany({ where: { productId } });
       const applied: T[] = [];
       for (const shipment of shipments) {
-        const current = previous.find(
-          (stock) => stock.shopId === shipment.shopId,
-        );
         const prices = {
           purchasePrice: shipment.supplyPrice,
           salePrice: shipment.retailPrice,
         };
-        let after = shipment.quantity;
-        if (current) {
-          const delta =
-            shipment.originalQuantity !== undefined
-              ? shipment.quantity - shipment.originalQuantity
-              : shipment.quantity - current.quantity;
-          const updated = await tx.productStock.update({
-            where: { id: current.id },
-            data: { ...prices, quantity: { increment: delta } },
-          });
-          after = updated.quantity;
-        } else {
-          await tx.productStock.create({
-            data: {
-              ...prices,
-              productId,
-              shopId: shipment.shopId,
-              branchCode: shipment.branchCode,
-              quantity: shipment.quantity,
-            },
-          });
-        }
-        if (after < 0) {
-          throw new ConflictException(
-            'Пока форма была открыта, часть товара уже продали — остаток стал бы отрицательным. Обновите страницу и повторите.',
-          );
-        }
-        applied.push({ ...shipment, quantity: after });
+        const target = {
+          companyId,
+          shopId: shipment.shopId,
+          branchCode: shipment.branchCode,
+          productId,
+          prices,
+        };
+        // With the quantity the form was opened with, the edit is a delta, so
+        // sales made meanwhile survive; legacy clients send an absolute value.
+        const move =
+          shipment.originalQuantity !== undefined
+            ? await moveVariantStock(tx, {
+                ...target,
+                delta: shipment.quantity - shipment.originalQuantity,
+                insufficientStock: () =>
+                  new ConflictException(
+                    'Пока форма была открыта, часть товара уже продали — остаток стал бы отрицательным. Обновите страницу и повторите.',
+                  ),
+              })
+            : await setVariantStock(tx, {
+                ...target,
+                quantity: shipment.quantity,
+              });
+        // Per-shop prices live on the shop row and the default variant stock.
+        await tx.productStock.updateMany({
+          where: { productId, shopId: shipment.shopId },
+          data: prices,
+        });
+        await tx.productVariantStock.updateMany({
+          where: { variantId: move.variantId, shopId: shipment.shopId },
+          data: prices,
+        });
+        applied.push({ ...shipment, quantity: move.afterQuantity });
       }
       await this.syncProductTotalQuantity(tx, productId);
       return { previous, applied };
@@ -7006,7 +7017,6 @@ export class ProductsService {
         salePrice: number | null;
       }>;
     },
-    options: { replaceStocks?: boolean } = {},
   ) {
     if (!product.companyId) {
       return;
@@ -7052,27 +7062,6 @@ export class ProductsService {
           },
           select: { id: true },
         });
-
-    if (options.replaceStocks && product.stocks) {
-      await this.prisma.$transaction([
-        this.prisma.productVariantStock.deleteMany({
-          where: { variantId: variant.id },
-        }),
-        ...product.stocks.map((stock) =>
-          this.prisma.productVariantStock.create({
-            data: {
-              companyId: product.companyId!,
-              variantId: variant.id,
-              shopId: stock.shopId,
-              branchCode: stock.branchCode,
-              quantity: stock.quantity,
-              purchasePrice: stock.purchasePrice ?? product.purchasePrice ?? 0,
-              salePrice: stock.salePrice ?? product.salePrice ?? 0,
-            },
-          }),
-        ),
-      ]);
-    }
   }
 
   private async syncCatalogVariants(
@@ -7347,20 +7336,14 @@ export class ProductsService {
             );
           }
 
-          // Variants without colour/size are the legacy mirror of the
-          // product-level stock; for a variative product it is meaningless.
-          await tx.productVariantStock.deleteMany({
-            where: {
-              variant: { productId, colorId: null, sizeId: null },
-            },
-          });
-
+          // The default variant stays the product's ledger fallback; its stock
+          // (units sold or counted without a colour/size) is kept, not erased.
           await tx.productVariant.updateMany({
             where: {
               productId,
               id: { notIn: [...retainedIds] },
             },
-            data: { isActive: false, isDefault: false },
+            data: { isActive: false },
           });
 
           await tx.product.update({
@@ -9807,7 +9790,8 @@ export class ProductsService {
           variantType: hasVariantDimensions ? 'variative' : 'simple',
           purchasePrice: row.supplyPrice,
           salePrice: row.retailPrice,
-          quantity: row.quantity,
+          // Shop stock reaches Product.quantity through the ledger trigger.
+          quantity: 0,
           unit: row.measurementUnit,
           metadata: this.buildImportMetadata(
             companyId,
@@ -9868,15 +9852,6 @@ export class ProductsService {
                 ],
               }
             : undefined,
-          stocks: {
-            create: {
-              shopId,
-              branchCode,
-              quantity: row.quantity,
-              purchasePrice: row.supplyPrice,
-              salePrice: row.retailPrice,
-            },
-          },
           variants: {
             create: {
               companyId,
@@ -9900,7 +9875,17 @@ export class ProductsService {
             },
           },
         },
+        include: { variants: { select: { id: true } } },
       });
+
+      await this.upsertShopStockPrices(tx, product.id, [
+        {
+          shopId,
+          branchCode,
+          purchasePrice: row.supplyPrice,
+          salePrice: row.retailPrice,
+        },
+      ]);
 
       await this.recordSupplyPriceHistory(tx, {
         productId: product.id,
@@ -9914,6 +9899,7 @@ export class ProductsService {
         companyId,
         shopId,
         productId: product.id,
+        variantId: product.variants[0]?.id ?? null,
         type: 'PURCHASE',
         quantity: row.quantity,
         beforeQuantity: 0,
@@ -10029,8 +10015,6 @@ export class ProductsService {
         existingStock?.purchasePrice ?? existingProduct.purchasePrice ?? 0;
       const previousRetailPrice =
         existingStock?.salePrice ?? existingProduct.salePrice ?? 0;
-      const beforeQuantity = existingStock?.quantity ?? 0;
-      const afterQuantity = beforeQuantity + row.quantity;
       const appliedSupplyPrice = this.shouldUseFileValue(
         onMatchPolicy.supplyPrice,
       )
@@ -10047,6 +10031,7 @@ export class ProductsService {
         row,
         companyId,
       );
+      let importVariantId: string | null = null;
       if (dimensions.colorId || dimensions.sizeId) {
         let variant = await tx.productVariant.findFirst({
           where: {
@@ -10082,23 +10067,7 @@ export class ProductsService {
         const variantStock = await tx.productVariantStock.findUnique({
           where: { variantId_shopId: { variantId: variant.id, shopId } },
         });
-        await tx.productVariantStock.upsert({
-          where: { variantId_shopId: { variantId: variant.id, shopId } },
-          create: {
-            companyId,
-            variantId: variant.id,
-            shopId,
-            branchCode,
-            quantity: row.quantity,
-            purchasePrice: appliedSupplyPrice,
-            salePrice: appliedRetailPrice,
-          },
-          update: {
-            quantity: { increment: row.quantity },
-            purchasePrice: appliedSupplyPrice,
-            salePrice: appliedRetailPrice,
-          },
-        });
+        importVariantId = variant.id;
         await tx.productVariant.update({
           where: { id: variant.id },
           data: {
@@ -10117,37 +10086,35 @@ export class ProductsService {
         });
       }
 
-      if (existingStock) {
-        await tx.productStock.update({
-          where: {
-            id: existingStock.id,
-          },
-          data: {
-            quantity: afterQuantity,
-            purchasePrice: appliedSupplyPrice,
-            salePrice: appliedRetailPrice,
-          },
-        });
-        changedFields.push({
-          field: 'quantity',
-          reason: 'existing_stock_incremented',
-        });
-      } else {
-        await tx.productStock.create({
-          data: {
-            productId,
-            shopId,
-            branchCode,
-            quantity: afterQuantity,
-            purchasePrice: appliedSupplyPrice,
-            salePrice: appliedRetailPrice,
-          },
-        });
-        changedFields.push({
-          field: 'quantity',
-          reason: 'new_stock_row_created',
-        });
-      }
+      // Atomic increment of the variant (default for simple goods); the
+      // shop row follows through the ledger trigger.
+      const prices = {
+        purchasePrice: appliedSupplyPrice,
+        salePrice: appliedRetailPrice,
+      };
+      const move = await moveVariantStock(tx, {
+        companyId,
+        shopId,
+        branchCode,
+        productId,
+        variantId: importVariantId,
+        delta: row.quantity,
+        prices,
+      });
+      const { beforeQuantity, afterQuantity } = move;
+      await this.upsertShopStockPrices(tx, productId, [
+        { shopId, branchCode, ...prices },
+      ]);
+      await tx.productVariantStock.updateMany({
+        where: { variantId: move.variantId, shopId },
+        data: prices,
+      });
+      changedFields.push({
+        field: 'quantity',
+        reason: existingStock
+          ? 'existing_stock_incremented'
+          : 'new_stock_row_created',
+      });
 
       if (this.shouldUseFileValue(onMatchPolicy.supplyPrice)) {
         changedFields.push({
@@ -10289,6 +10256,7 @@ export class ProductsService {
         companyId,
         shopId,
         productId,
+        variantId: move.variantId,
         type: 'PURCHASE',
         quantity: row.quantity,
         beforeQuantity,

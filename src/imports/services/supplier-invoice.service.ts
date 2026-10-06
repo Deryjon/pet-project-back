@@ -12,6 +12,7 @@ import {
   CompanyRequestContext,
   requireCompanyContext,
 } from '../../auth/request-context';
+import { moveVariantStock } from '../../common/stock-ledger';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ImportMatcherService } from './import-matcher.service';
 import { ImportNormalizerService } from './import-normalizer.service';
@@ -446,6 +447,7 @@ export class SupplierInvoiceService {
         invoiceItemId: item.id,
         rawName: item.rawName,
         product: found?.product ?? null,
+        variantId: found?.variantId ?? null,
         matchMethod: found?.method ?? null,
         confidence: found?.confidence ?? null,
         conflict: found?.conflict ?? false,
@@ -476,11 +478,26 @@ export class SupplierInvoiceService {
       where: { id: productId, companyId: ctx.companyId },
     });
     if (!product) throw new NotFoundException('Product not found');
+    // Optional exact colour/size; without it the stock goes to the default
+    // variant (simple goods).
+    const variantId =
+      body.variantId === undefined || body.variantId === null || body.variantId === ''
+        ? null
+        : String(body.variantId);
+    if (
+      variantId &&
+      !(await this.prisma.productVariant.findFirst({
+        where: { id: variantId, productId, companyId: ctx.companyId },
+        select: { id: true },
+      }))
+    )
+      throw new NotFoundException('Product variant not found');
     return this.prisma.$transaction(async (tx: any) => {
       const updated = await tx.supplierInvoiceItem.update({
         where: { id: itemId },
         data: {
           matchedProductId: productId,
+          matchedVariantId: variantId,
           matchMethod: 'USER_CONFIRMED',
           matchConfidence: 100,
           status: 'MATCHED',
@@ -501,6 +518,7 @@ export class SupplierInvoiceService {
             companyId: ctx.companyId,
             supplierId: invoice.supplierId,
             productId,
+            variantId,
             supplierName: name,
             normalizedName: this.normalizer.normalize(name),
             supplierSku: item.correctedSku || item.rawSku || null,
@@ -510,6 +528,7 @@ export class SupplierInvoiceService {
           },
           update: {
             productId,
+            variantId,
             supplierName: name,
             normalizedName: this.normalizer.normalize(name),
             lastSupplyPrice: item.supplyPrice,
@@ -522,6 +541,7 @@ export class SupplierInvoiceService {
               companyId: ctx.companyId,
               supplierId: invoice.supplierId,
               productId,
+              variantId,
               supplierName: name,
               normalizedName: this.normalizer.normalize(name),
               supplierBarcode: item.correctedBarcode || item.rawBarcode || null,
@@ -530,7 +550,11 @@ export class SupplierInvoiceService {
             },
           }),
         );
-      await this.audit(tx, ctx, 'PRODUCT_MATCHED', id, { itemId, productId });
+      await this.audit(tx, ctx, 'PRODUCT_MATCHED', id, {
+        itemId,
+        productId,
+        variantId,
+      });
       return updated;
     });
   }
@@ -735,37 +759,38 @@ export class SupplierInvoiceService {
                       stock?.purchasePrice ?? product.purchasePrice ?? price,
                     )
                   : price;
-            if (stock)
-              await tx.productStock.update({
-                where: { id: stock.id },
-                data: {
-                  quantity: { increment: incoming },
-                  purchasePrice: nextPrice,
-                },
-              });
-            else
-              await tx.productStock.create({
-                data: {
-                  productId: product.id,
-                  shopId: allocation.shopId,
-                  branchCode: allocation.shop.branchCode,
-                  quantity: incoming,
-                  purchasePrice: nextPrice,
-                  salePrice: product.salePrice,
-                },
-              });
+            // The matched variant (default for simple goods) receives the
+            // stock; the shop row follows through the ledger trigger.
+            const move = await moveVariantStock(tx, {
+              companyId: ctx.companyId,
+              shopId: allocation.shopId,
+              branchCode: allocation.shop.branchCode,
+              productId: product.id,
+              variantId: item.matchedVariantId,
+              delta: incoming,
+              prices: { purchasePrice: nextPrice, salePrice: product.salePrice },
+            });
+            await tx.productStock.updateMany({
+              where: { productId: product.id, shopId: allocation.shopId },
+              data: { purchasePrice: nextPrice },
+            });
+            await tx.productVariantStock.updateMany({
+              where: { variantId: move.variantId, shopId: allocation.shopId },
+              data: { purchasePrice: nextPrice },
+            });
             await tx.stockMovement.create({
               data: {
                 companyId: ctx.companyId,
                 shopId: allocation.shopId,
                 productId: product.id,
+                variantId: move.variantId,
                 type: 'PURCHASE',
                 displayTypeCode: 'supplier_invoice',
                 displayTypeLabel: 'Приход от поставщика',
                 externalId: invoice.id,
                 quantity: incoming,
-                beforeQuantity: before,
-                afterQuantity: before + incoming,
+                beforeQuantity: move.beforeQuantity,
+                afterQuantity: move.afterQuantity,
                 fromShopId: allocation.shopId,
                 toShopId: allocation.shopId,
                 supplyPrice: price,
@@ -779,6 +804,7 @@ export class SupplierInvoiceService {
             await tx.productSupplyPriceHistory.create({
               data: {
                 productId: product.id,
+                variantId: move.variantId,
                 shopId: allocation.shopId,
                 supplyPrice: nextPrice,
                 oldSupplyPrice: Number(
@@ -848,7 +874,7 @@ export class SupplierInvoiceService {
           throw new ConflictException('Invoice stock movements not found');
         const grouped = new Map<string, any>();
         for (const movement of movements) {
-          const key = `${movement.productId}:${movement.shopId}`;
+          const key = `${movement.productId}:${movement.shopId}:${movement.variantId ?? ''}`;
           const current = grouped.get(key);
           if (current) current.quantity += Number(movement.quantity);
           else
@@ -863,36 +889,34 @@ export class SupplierInvoiceService {
             where: { id: movement.shopId },
           });
           if (!shop) throw new NotFoundException('Movement shop not found');
-          const stock = await tx.productStock.findFirst({
-            where: {
-              productId: movement.productId,
-              branchCode: shop.branchCode,
-            },
-          });
-          const quantity = Number(movement.quantity);
-          if (!stock || Number(stock.quantity) + 0.0001 < quantity)
-            throw new BadRequestException('Rollback would make stock negative');
-          prepared.push({ movement, stock, quantity });
+          prepared.push({ movement, shop, quantity: Number(movement.quantity) });
         }
         const affectedProductIds = new Set<number>();
-        for (const { movement, stock, quantity } of prepared) {
-          const before = Number(stock.quantity);
-          await tx.productStock.update({
-            where: { id: stock.id },
-            data: { quantity: { decrement: quantity } },
+        for (const { movement, shop, quantity } of prepared) {
+          // Atomic: stock sold after the receipt cannot be taken back twice.
+          const move = await moveVariantStock(tx, {
+            companyId: ctx.companyId,
+            shopId: movement.shopId,
+            branchCode: shop.branchCode,
+            productId: movement.productId,
+            variantId: movement.variantId,
+            delta: -quantity,
+            insufficientStock: () =>
+              new BadRequestException('Rollback would make stock negative'),
           });
           await tx.stockMovement.create({
             data: {
               companyId: ctx.companyId,
               shopId: movement.shopId,
               productId: movement.productId,
+              variantId: move.variantId,
               type: 'ADJUSTMENT',
               displayTypeCode: 'supplier_invoice_rollback',
               displayTypeLabel: 'Отмена прихода',
               externalId: id,
               quantity: -quantity,
-              beforeQuantity: before,
-              afterQuantity: before - quantity,
+              beforeQuantity: move.beforeQuantity,
+              afterQuantity: move.afterQuantity,
               fromShopId: movement.shopId,
               toShopId: movement.shopId,
               supplyPrice: movement.supplyPrice,

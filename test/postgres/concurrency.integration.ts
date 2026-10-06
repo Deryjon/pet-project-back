@@ -236,15 +236,17 @@ describe('real PostgreSQL transaction invariants', () => {
 
   it('prevents duplicate stock rows under concurrent upsert', async () => {
     const f = await fixture(db, 0);
+    await db.productVariantStock.deleteMany({ where: { variantId: f.variant.id } });
     await db.productStock.deleteMany({ where: { productId: f.product.id } });
     await Promise.all(
       [1, 2].map(() =>
-        db.productStock.upsert({
+        db.productVariantStock.upsert({
           where: {
-            productId_shopId: { productId: f.product.id, shopId: f.shop.id },
+            variantId_shopId: { variantId: f.variant.id, shopId: f.shop.id },
           },
           create: {
-            productId: f.product.id,
+            companyId: f.company.id,
+            variantId: f.variant.id,
             shopId: f.shop.id,
             branchCode: '001',
             quantity: 1,
@@ -256,6 +258,7 @@ describe('real PostgreSQL transaction invariants', () => {
     const stocks = await db.productStock.findMany({
       where: { productId: f.product.id },
     });
+    // One shop row, maintained by the ledger trigger from both upserts.
     expect(stocks).toHaveLength(1);
     expect(stocks[0].quantity).toBe(2);
   });

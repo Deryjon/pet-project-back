@@ -30,6 +30,7 @@ export type VariantReadinessReport = {
   axisStockAboveVariants: number;
   productTotalMismatches: number;
   legacyAxesWithoutAttributes: number;
+  ledgerMismatches: number;
   rowsWithoutVariant: Record<string, number>;
 };
 
@@ -194,6 +195,16 @@ export async function auditVariantReadiness(
                WHERE vav."variantId" = v.id AND o."legacySizeId" = v."sizeId")))`,
       companyId,
     ),
+    // Stage 2 invariant: ProductStock equals the sum of all variant stocks.
+    ledgerMismatches: await count(
+      sql,
+      `SELECT 1 FROM "ProductStock" ps JOIN "Product" p ON p.id = ps."productId"
+       WHERE ${COMPANY_FILTER} AND ps.quantity <> COALESCE((
+         SELECT sum(vs.quantity) FROM "ProductVariantStock" vs
+         JOIN "ProductVariant" v ON v.id = vs."variantId"
+         WHERE v."productId" = ps."productId" AND vs."shopId" = ps."shopId"), 0)`,
+      companyId,
+    ),
     rowsWithoutVariant,
   };
 }
@@ -217,6 +228,9 @@ export async function repairVariantReadiness(
     `LOCK TABLE "ProductStock", "ProductVariantStock", "ProductVariant", "Product"
      IN SHARE ROW EXCLUSIVE MODE`,
   );
+  // The repair writes both stock tables itself: the ledger trigger (stage 2)
+  // must not mirror these writes. Transaction-local.
+  await sql(`SELECT set_config('konkurent.stock_ledger', 'bypass', true)`);
 
   // 1. Every product gets a default variant. A barcode/SKU already used by
   // another variant of the company is not copied (unique per company).

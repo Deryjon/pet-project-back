@@ -1,147 +1,126 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
+import { createStockLedgerFake } from '../../test/fixtures/stock-ledger-fake';
 import { SalesService } from '../sales/sales.service';
 import { ProductsService } from './products.service';
 
-type StockRow = {
-  id: number;
-  productId: number;
-  shopId: string;
-  branchCode: string;
-  quantity: number;
-  purchasePrice: number | null;
-  salePrice: number | null;
-};
-
-/** Minimal in-memory ProductStock table supporting the calls under test. */
-function createStockDb(rows: StockRow[]) {
-  let nextId = 1000;
-  const productStock = {
-    findMany: jest.fn(async ({ where }: any) =>
-      rows.filter((row) => row.productId === where.productId).map((row) => ({ ...row })),
-    ),
-    update: jest.fn(async ({ where, data }: any) => {
-      const row = rows.find((candidate) => candidate.id === where.id)!;
-      const { quantity, ...rest } = data;
-      Object.assign(row, rest);
-      row.quantity =
-        typeof quantity === 'object' ? row.quantity + quantity.increment : quantity;
-      return { ...row };
-    }),
-    create: jest.fn(async ({ data }: any) => {
-      const row = { id: nextId++, purchasePrice: null, salePrice: null, ...data };
-      rows.push(row);
-      return { ...row };
-    }),
-  };
-  const product = { update: jest.fn() };
-  const tx = { productStock, product, productVariantStock: { findMany: jest.fn() } };
-  const prisma = { ...tx, $transaction: jest.fn((fn: any) => fn(tx)) };
-  return { rows, tx, prisma };
+function serviceOn(ledger: ReturnType<typeof createStockLedgerFake>) {
+  const prisma = { ...ledger.tx, $transaction: jest.fn((fn: any) => fn(ledger.tx)) };
+  return new ProductsService(prisma as any, {} as any);
 }
 
 describe('ProductsService variative product stock', () => {
-  it('derives per-shop ProductStock from active colour/size variant stocks', async () => {
-    const { rows, tx, prisma } = createStockDb([
-      // Created by the catalog form with quantity 0 — the "unsellable" bug.
-      { id: 1, productId: 5, shopId: 'shop-a', branchCode: 'A', quantity: 0, purchasePrice: 10, salePrice: 20 },
-    ]);
-    tx.productVariantStock.findMany.mockResolvedValue([
-      { shopId: 'shop-a', branchCode: 'A', quantity: 3, purchasePrice: 10, salePrice: 20 },
-      { shopId: 'shop-a', branchCode: 'A', quantity: 2, purchasePrice: 10, salePrice: 20 },
-      { shopId: 'shop-b', branchCode: 'B', quantity: 4, purchasePrice: 11, salePrice: 21 },
-    ]);
-    const service = new ProductsService(prisma as any, {} as any);
-
-    await (service as any).syncVariativeProductStocks(tx, 5);
-
-    const where = tx.productVariantStock.findMany.mock.calls[0][0].where;
-    expect(where.variant).toMatchObject({ productId: 5, isActive: true });
-    expect(where.variant.OR).toEqual([
-      { colorId: { not: null } },
-      { sizeId: { not: null } },
-    ]);
-    expect(rows.map((row) => [row.shopId, row.quantity])).toEqual([
-      ['shop-a', 5],
-      ['shop-b', 4],
-    ]);
-    expect(tx.product.update).toHaveBeenCalledWith({
-      where: { id: 5 },
-      data: { quantity: 9 },
+  it('keeps ProductStock at the colour/size sum and prices shop rows created for them', async () => {
+    const ledger = createStockLedgerFake({
+      products: [{ id: 5 }],
+      variants: [
+        { id: 'red', productId: 5, colorId: 'c-red' },
+        { id: 'blue', productId: 5, colorId: 'c-blue' },
+      ],
+      stocks: [
+        { productId: 5, variantId: 'red', shopId: 'shop-a', branchCode: 'A', quantity: 3 },
+        { productId: 5, variantId: 'blue', shopId: 'shop-a', branchCode: 'A', quantity: 2 },
+        { productId: 5, variantId: 'blue', shopId: 'shop-b', branchCode: 'B', quantity: 4 },
+      ],
     });
-  });
+    for (const stock of ledger.variantStocks) {
+      Object.assign(stock, { purchasePrice: 11, salePrice: 21 });
+    }
 
-  it('zeroes ProductStock in a shop that no longer has variant stock', async () => {
-    const { rows, tx, prisma } = createStockDb([
-      { id: 1, productId: 5, shopId: 'shop-a', branchCode: 'A', quantity: 7, purchasePrice: 1, salePrice: 2 },
+    await (serviceOn(ledger) as any).syncVariativeProductStocks(ledger.tx, 5);
+
+    expect(
+      ledger.shopStocks.map((s) => [s.shopId, s.quantity, s.purchasePrice, s.salePrice]),
+    ).toEqual([
+      ['shop-a', 5, 11, 21],
+      ['shop-b', 4, 11, 21],
     ]);
-    tx.productVariantStock.findMany.mockResolvedValue([]);
-    const service = new ProductsService(prisma as any, {} as any);
-
-    await (service as any).syncVariativeProductStocks(tx, 5);
-
-    expect(rows[0].quantity).toBe(0);
+    expect(ledger.products[0].quantity).toBe(9);
   });
 });
 
 describe('ProductsService simple product stock edits', () => {
-  const shipment = (quantity: number, originalQuantity?: number) => ({
-    shopId: 'shop-a',
-    branchCode: 'A',
+  const shipment = (quantity: number, originalQuantity?: number, shopId = 'shop-a') => ({
+    shopId,
+    branchCode: shopId === 'shop-a' ? 'A' : shopId === 'shop-b' ? 'B' : 'C',
     quantity,
     originalQuantity,
     supplyPrice: 10,
     retailPrice: 20,
   });
+  const simpleProduct = (...stocks: Array<[string, string, number]>) =>
+    createStockLedgerFake({
+      products: [{ id: 5 }],
+      stocks: stocks.map(([shopId, branchCode, quantity]) => ({
+        productId: 5,
+        shopId,
+        branchCode,
+        quantity,
+        purchasePrice: 10,
+        salePrice: 20,
+      })),
+    });
 
   it('applies the edit as a delta so sales made while the form was open survive', async () => {
     // Form opened at 13; 3 were sold meanwhile (row is now 10); user typed 15.
-    const { rows, prisma } = createStockDb([
-      { id: 1, productId: 5, shopId: 'shop-a', branchCode: 'A', quantity: 10, purchasePrice: 10, salePrice: 20 },
-    ]);
-    const service = new ProductsService(prisma as any, {} as any);
+    const ledger = simpleProduct(['shop-a', 'A', 10]);
 
-    const result = await (service as any).applySimpleProductStockEdits(5, [
-      shipment(15, 13),
-    ]);
+    const result = await (serviceOn(ledger) as any).applySimpleProductStockEdits(
+      5,
+      'company-1',
+      [shipment(15, 13)],
+    );
 
-    expect(rows[0].quantity).toBe(12);
+    expect(ledger.shopQuantity(5, 'shop-a')).toBe(12);
+    expect(ledger.variantQuantity('default-5', 'shop-a')).toBe(12);
     expect(result.applied[0].quantity).toBe(12);
     expect(result.previous[0].quantity).toBe(10);
   });
 
   it('sets the quantity absolutely when no original is sent (legacy clients)', async () => {
-    const { rows, prisma } = createStockDb([
-      { id: 1, productId: 5, shopId: 'shop-a', branchCode: 'A', quantity: 10, purchasePrice: 10, salePrice: 20 },
+    const ledger = simpleProduct(['shop-a', 'A', 10]);
+
+    await (serviceOn(ledger) as any).applySimpleProductStockEdits(5, 'company-1', [
+      shipment(15),
     ]);
-    const service = new ProductsService(prisma as any, {} as any);
 
-    await (service as any).applySimpleProductStockEdits(5, [shipment(15)]);
+    expect(ledger.shopQuantity(5, 'shop-a')).toBe(15);
+  });
 
-    expect(rows[0].quantity).toBe(15);
+  it('creates the stock of a shop that had none, with its prices', async () => {
+    const ledger = simpleProduct(['shop-a', 'A', 10]);
+
+    await (serviceOn(ledger) as any).applySimpleProductStockEdits(5, 'company-1', [
+      shipment(3, undefined, 'shop-c'),
+    ]);
+
+    expect(ledger.shopQuantity(5, 'shop-c')).toBe(3);
+    expect(ledger.shopStocks.find((s) => s.shopId === 'shop-c')).toMatchObject({
+      purchasePrice: 10,
+      salePrice: 20,
+    });
+    expect(ledger.products[0].quantity).toBe(13);
   });
 
   it('leaves shops missing from the payload untouched', async () => {
-    const { rows, prisma } = createStockDb([
-      { id: 1, productId: 5, shopId: 'shop-a', branchCode: 'A', quantity: 10, purchasePrice: 10, salePrice: 20 },
-      { id: 2, productId: 5, shopId: 'shop-b', branchCode: 'B', quantity: 8, purchasePrice: 10, salePrice: 20 },
+    const ledger = simpleProduct(['shop-a', 'A', 10], ['shop-b', 'B', 8]);
+
+    await (serviceOn(ledger) as any).applySimpleProductStockEdits(5, 'company-1', [
+      shipment(11, 10),
     ]);
-    const service = new ProductsService(prisma as any, {} as any);
 
-    await (service as any).applySimpleProductStockEdits(5, [shipment(11, 10)]);
-
-    expect(rows.find((row) => row.shopId === 'shop-b')!.quantity).toBe(8);
+    expect(ledger.shopQuantity(5, 'shop-b')).toBe(8);
   });
 
   it('rejects an edit that would make stock negative', async () => {
     // Form opened at 5; all 5 sold meanwhile; user reduced to 2 (delta -3).
-    const { prisma } = createStockDb([
-      { id: 1, productId: 5, shopId: 'shop-a', branchCode: 'A', quantity: 0, purchasePrice: 10, salePrice: 20 },
-    ]);
-    const service = new ProductsService(prisma as any, {} as any);
+    const ledger = simpleProduct(['shop-a', 'A', 0]);
 
     await expect(
-      (service as any).applySimpleProductStockEdits(5, [shipment(2, 5)]),
+      (serviceOn(ledger) as any).applySimpleProductStockEdits(5, 'company-1', [
+        shipment(2, 5),
+      ]),
     ).rejects.toBeInstanceOf(ConflictException);
+    expect(ledger.shopQuantity(5, 'shop-a')).toBe(0);
   });
 });
 
