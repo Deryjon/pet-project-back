@@ -1,3 +1,4 @@
+import { localDateKey } from '../common/local-date';
 import { Injectable } from '@nestjs/common';
 import { ReportFilterDto } from './dto/report-filter.dto';
 
@@ -47,7 +48,7 @@ export class ReportsMapper {
       if (!source) {
         continue;
       }
-      const date = new Date(source).toISOString().slice(0, 10);
+      const date = localDateKey(new Date(source));
       grouped.set(date, (grouped.get(date) ?? 0) + Number(row.value ?? 0));
     }
 

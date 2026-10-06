@@ -1,3 +1,4 @@
+import { parseLocalDate } from '../common/local-date';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { CompanyRequestContext } from '../auth/request-context';
 import { PrismaService } from '../prisma/prisma.service';
@@ -211,12 +212,12 @@ export class ReportsRepository {
 
     if (filter.from) {
       clauses.push(
-        `COALESCE(s."paidAt", s."createdAt") >= ${this.pushParam(params, new Date(filter.from))}`,
+        `COALESCE(s."paidAt", s."createdAt") >= ${this.pushParam(params, parseLocalDate(filter.from))}`,
       );
     }
 
     if (filter.to) {
-      const to = new Date(filter.to);
+      const to = parseLocalDate(filter.to);
       to.setHours(23, 59, 59, 999);
       clauses.push(
         `COALESCE(s."paidAt", s."createdAt") <= ${this.pushParam(params, to)}`,

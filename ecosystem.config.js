@@ -5,7 +5,8 @@ module.exports = {
       script: "dist/main.js",
       cwd: "/home/deryjon/pet-project-back",
       env: {
-        NODE_ENV: "production"
+        NODE_ENV: "production",
+        TZ: "Asia/Tashkent"
       }
     }
   ]

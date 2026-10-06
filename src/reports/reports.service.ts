@@ -1,3 +1,4 @@
+import { parseLocalDate } from '../common/local-date';
 import {
   BadRequestException,
   Injectable,
@@ -3849,7 +3850,7 @@ export class ReportsService {
     if (!value) {
       return undefined;
     }
-    const parsed = new Date(value);
+    const parsed = parseLocalDate(value);
     return Number.isNaN(parsed.getTime()) ? undefined : parsed;
   }
 

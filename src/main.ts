@@ -1,3 +1,5 @@
+// Must stay the first import: sets TZ before anything creates a Date.
+import './timezone';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import * as express from 'express';
