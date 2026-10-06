@@ -2290,10 +2290,6 @@ export class SalesService {
       );
     }
 
-    if (!sale.isDraft) {
-      await this.restoreSaleStock(sale);
-    }
-
     if (sale.isDraft) {
       await this.prisma.sale.delete({
         where: { id: sale.id },
@@ -2306,31 +2302,31 @@ export class SalesService {
       };
     }
 
-    await this.prisma.sale.update({
-      where: { id: sale.id },
-      data: {
-        status: 'cancelled',
-        isDraft: false,
-        cancelledAt: new Date(),
-        cancelledById: context?.userId ?? null,
-        cancelReason: cancelReason ?? 'Cancelled sale document',
-      },
-    });
-    await this.undoSaleCashback(
-      this.prisma as unknown as Prisma.TransactionClient,
-      sale,
-    );
-    await this.refreshClientSalesAggregates(
-      this.prisma as unknown as Prisma.TransactionClient,
-      sale.companyId,
-      sale.clientId,
-    );
-    await this.createSaleAuditLog(
-      this.prisma,
-      context,
-      'sale.cancelled',
-      sale,
-      {
+    // One serializable transaction: the claim makes a concurrent second cancel
+    // fail before it could restore the stock again, and a failure in any step
+    // leaves the sale paid with its stock untouched.
+    await runSerializableTransaction(this.prisma, async (tx) => {
+      const claimed = await tx.sale.updateMany({
+        where: { id: sale.id, isDraft: false, status: { not: 'cancelled' } },
+        data: {
+          status: 'cancelled',
+          isDraft: false,
+          cancelledAt: new Date(),
+          cancelledById: context?.userId ?? null,
+          cancelReason: cancelReason ?? 'Cancelled sale document',
+        },
+      });
+      if (claimed.count !== 1) {
+        throw new BadRequestException('Документ уже отменён');
+      }
+      await this.restoreSaleStock(sale, tx);
+      await this.undoSaleCashback(tx, sale);
+      await this.refreshClientSalesAggregates(
+        tx,
+        sale.companyId,
+        sale.clientId,
+      );
+      await this.createSaleAuditLog(tx, context, 'sale.cancelled', sale, {
         reason: cancelReason ?? 'Cancelled sale document',
         total: this.getSalePayableAmount(sale),
         items: sale.items.map((item: any) => ({
@@ -2340,8 +2336,8 @@ export class SalesService {
           quantity: Number(item.quantity),
           salePrice: Number(item.salePrice),
         })),
-      },
-    );
+      });
+    });
 
     return {
       success: true,
@@ -3802,23 +3798,26 @@ export class SalesService {
     );
   }
 
-  private async restoreSaleStock(saleInput: {
-    id?: number;
-    number?: string;
-    companyId?: string | null;
-    userId?: number | null;
-    branchCode: string | null;
-    items: Array<{
-      productId: number | null;
-      variantId?: string | null;
-      quantity: Prisma.Decimal | number;
-      salePrice: Prisma.Decimal | number;
-      stockComposition?: unknown;
-      product?: {
-        purchasePrice: number | null;
-      } | null;
-    }>;
-  }) {
+  private async restoreSaleStock(
+    saleInput: {
+      id?: number;
+      number?: string;
+      companyId?: string | null;
+      userId?: number | null;
+      branchCode: string | null;
+      items: Array<{
+        productId: number | null;
+        variantId?: string | null;
+        quantity: Prisma.Decimal | number;
+        salePrice: Prisma.Decimal | number;
+        stockComposition?: unknown;
+        product?: {
+          purchasePrice: number | null;
+        } | null;
+      }>;
+    },
+    outerTx?: Prisma.TransactionClient,
+  ) {
     const sale = {
       ...saleInput,
       items: this.expandStockComposition(saleInput.items).map((item) => ({
@@ -3853,7 +3852,7 @@ export class SalesService {
       return;
     }
 
-    await this.prisma.$transaction(async (tx) => {
+    const restore = async (tx: Prisma.TransactionClient) => {
       for (const item of sale.items) {
         if (!item.productId) {
           continue;
@@ -3909,7 +3908,13 @@ export class SalesService {
           },
         });
       }
-    });
+    };
+
+    if (outerTx) {
+      await restore(outerTx);
+    } else {
+      await this.prisma.$transaction(restore);
+    }
   }
 
   private async getOrCreateOpenSale(context: any, shopId?: string) {

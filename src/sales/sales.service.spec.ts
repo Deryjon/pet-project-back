@@ -939,17 +939,24 @@ describe('SalesService money calculations', () => {
         items: [{ productId: 1, quantity: 1, salePrice: 100 }],
       };
       const saleDelete = jest.fn();
-      const saleUpdate = jest.fn();
+      const saleUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
       const { service, prisma } = createService({
         sale: {
           findUnique: jest.fn().mockResolvedValue(sale),
           count: jest.fn().mockResolvedValue(0),
-          update: saleUpdate,
+          updateMany: saleUpdateMany,
           delete: saleDelete,
         },
       });
+      (prisma as any).$transaction = jest.fn((fn: any) => fn(prisma));
       jest
         .spyOn(service as any, 'restoreSaleStock')
+        .mockResolvedValue(undefined);
+      jest
+        .spyOn(service as any, 'undoSaleCashback')
+        .mockResolvedValue(undefined);
+      jest
+        .spyOn(service as any, 'refreshClientSalesAggregates')
         .mockResolvedValue(undefined);
 
       await service.removeOrder(String(sale.id), testContext());
@@ -960,8 +967,8 @@ describe('SalesService money calculations', () => {
           status: { not: 'cancelled' },
         },
       });
-      expect(saleUpdate).toHaveBeenCalledWith({
-        where: { id: sale.id },
+      expect(saleUpdateMany).toHaveBeenCalledWith({
+        where: { id: sale.id, isDraft: false, status: { not: 'cancelled' } },
         data: expect.objectContaining({
           status: 'cancelled',
           isDraft: false,
@@ -971,6 +978,38 @@ describe('SalesService money calculations', () => {
         }),
       });
       expect(saleDelete).not.toHaveBeenCalled();
+    });
+
+    it('refuses a second, concurrent cancel without restoring stock again', async () => {
+      const sale = {
+        id: 103,
+        number: 'S-103',
+        companyId: 'company-1',
+        branchCode: 'B1',
+        userId: 7,
+        isDraft: false,
+        saleType: 'sale',
+        status: 'paid',
+        items: [{ productId: 1, quantity: 1, salePrice: 100 }],
+      };
+      const { service, prisma } = createService({
+        sale: {
+          findUnique: jest.fn().mockResolvedValue(sale),
+          count: jest.fn().mockResolvedValue(0),
+          // The other request already claimed and cancelled it.
+          updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+          delete: jest.fn(),
+        },
+      });
+      (prisma as any).$transaction = jest.fn((fn: any) => fn(prisma));
+      const restore = jest
+        .spyOn(service as any, 'restoreSaleStock')
+        .mockResolvedValue(undefined);
+
+      await expect(
+        service.removeOrder(String(sale.id), testContext()),
+      ).rejects.toThrow('Документ уже отменён');
+      expect(restore).not.toHaveBeenCalled();
     });
 
     it('writes an audit log with cancellation reason for paid sales', async () => {
@@ -990,19 +1029,26 @@ describe('SalesService money calculations', () => {
         items: [{ productId: 1, name: 'Cable', quantity: 2, salePrice: 600 }],
       };
       const auditCreate = jest.fn();
-      const { service } = createService({
+      const { service, prisma } = createService({
         sale: {
           findUnique: jest.fn().mockResolvedValue(sale),
           count: jest.fn().mockResolvedValue(0),
-          update: jest.fn(),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           delete: jest.fn(),
         },
         auditLog: {
           create: auditCreate,
         },
       });
+      (prisma as any).$transaction = jest.fn((fn: any) => fn(prisma));
       jest
         .spyOn(service as any, 'restoreSaleStock')
+        .mockResolvedValue(undefined);
+      jest
+        .spyOn(service as any, 'undoSaleCashback')
+        .mockResolvedValue(undefined);
+      jest
+        .spyOn(service as any, 'refreshClientSalesAggregates')
         .mockResolvedValue(undefined);
       jest.spyOn(service as any, 'getRequestContext').mockResolvedValue({
         userId: 44,
