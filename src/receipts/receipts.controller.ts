@@ -32,6 +32,9 @@ const RECEIPT_PERMISSIONS = [
   'all-sales',
   'orders',
   'show-all-sales',
+  'show_deleted_orders',
+  'orders-other-shops',
+  'cash-shifts',
   'all-clients',
   'clients',
 ];
