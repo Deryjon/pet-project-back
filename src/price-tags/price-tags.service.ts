@@ -64,6 +64,7 @@ export class PriceTagsService {
         },
         include: {
           stocks: true,
+          brand: { select: { name: true } },
           // Clothing/shoes: every colour/size has its own barcode, so it
           // needs its own price tag.
           variants: {
@@ -147,6 +148,12 @@ export class PriceTagsService {
             discount_percent: discountPercent,
             unit: p.unit ?? '',
             shop_name: shopName,
+            // Separate fields for clothing templates (brand + name, size, colour).
+            base_name: p.name,
+            brand: p.brand?.name ?? '',
+            size: '',
+            color: '',
+            variant_id: null as string | null,
             quantity: stock?.quantity ?? p.quantity ?? 0,
             copies: copiesMap.get(rawId) ?? 1,
           };
@@ -171,6 +178,9 @@ export class PriceTagsService {
             return {
               ...productTag,
               tag_key: `${p.id}:${variant.id}`,
+              variant_id: variant.id,
+              size: variant.size?.name ?? '',
+              color: variant.color?.name ?? '',
               name: label ? `${p.name} ${label}` : p.name,
               sku: variant.sku ?? productTag.sku,
               barcode: variant.barcode ?? productTag.barcode,

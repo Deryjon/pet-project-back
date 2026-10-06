@@ -172,6 +172,16 @@ export class ProductsController {
     return this.productsService.listProductVariants(id, requestContext);
   }
 
+  @Post('products/variant-barcodes')
+  @HttpCode(200)
+  @Permissions('catalog-operations')
+  ensureVariantBarcodes(
+    @Body() body: Record<string, unknown>,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.productsService.ensureVariantBarcodes(body, requestContext);
+  }
+
   @Get('products/:id/variant-matrix')
   @Permissions('catalog-operations')
   getVariantMatrix(

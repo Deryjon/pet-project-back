@@ -14,7 +14,11 @@ export type PriceTagElementName =
   | 'sku'
   | 'shop_name'
   | 'discount'
-  | 'barcode';
+  | 'barcode'
+  // Clothing variants: brand + model name, size and colour on their own lines.
+  | 'brand_name'
+  | 'size'
+  | 'color';
 
 export interface PriceTagElement {
   id: string;
@@ -42,6 +46,9 @@ export const PRICE_TAG_ELEMENT_PRESETS: PriceTagElement[] = [
   { id: 'barcode', name: 'barcode', type: 'barcode', fontFamily: '', fontSize: 6, isBold: false, isItalic: false, isUnderlined: false, isLineThrough: false, alignmentType: 'LEFT', width: 36, length: 10, xAxis: 2, yAxis: 22, rotation: 0 },
   { id: 'sku', name: 'sku', type: 'text', fontFamily: 'Arial', fontSize: 6, isBold: false, isItalic: false, isUnderlined: false, isLineThrough: false, alignmentType: 'LEFT', width: 36, length: 4, xAxis: 2, yAxis: 36, rotation: 0 },
   { id: 'shop_name', name: 'shop_name', type: 'text', fontFamily: 'Arial', fontSize: 6, isBold: false, isItalic: false, isUnderlined: false, isLineThrough: false, alignmentType: 'LEFT', width: 36, length: 4, xAxis: 2, yAxis: 42, rotation: 0 },
+  { id: 'brand_name', name: 'brand_name', type: 'text', fontFamily: 'Arial', fontSize: 8, isBold: true, isItalic: false, isUnderlined: false, isLineThrough: false, alignmentType: 'LEFT', width: 36, length: 6, xAxis: 2, yAxis: 2, rotation: 0 },
+  { id: 'size', name: 'size', type: 'text', fontFamily: 'Arial', fontSize: 8, isBold: true, isItalic: false, isUnderlined: false, isLineThrough: false, alignmentType: 'LEFT', width: 18, length: 5, xAxis: 2, yAxis: 9, rotation: 0 },
+  { id: 'color', name: 'color', type: 'text', fontFamily: 'Arial', fontSize: 7, isBold: false, isItalic: false, isUnderlined: false, isLineThrough: false, alignmentType: 'LEFT', width: 18, length: 5, xAxis: 20, yAxis: 9, rotation: 0 },
   { id: 'discount', name: 'discount', type: 'text', fontFamily: 'Arial', fontSize: 7, isBold: true, isItalic: false, isUnderlined: false, isLineThrough: false, alignmentType: 'LEFT', width: 30, length: 5, xAxis: 2, yAxis: 48, rotation: 0 },
 ];
 

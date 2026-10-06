@@ -1,4 +1,11 @@
 import {
+  INTERNAL_EAN13_MAX,
+  INTERNAL_EAN13_MIN,
+  allocateInternalBarcodes,
+  formatInternalEan13,
+  internalEan13Payload,
+} from '../common/ean13';
+import {
   BadRequestException,
   ConflictException,
   Injectable,
@@ -18,10 +25,7 @@ import {
   resolveProductPhotoUrl,
 } from '../common/product-photo.util';
 import { runSerializableTransaction } from '../common/serializable-transaction';
-import {
-  moveVariantStock,
-  setVariantStock,
-} from '../common/stock-ledger';
+import { moveVariantStock, setVariantStock } from '../common/stock-ledger';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import {
   VARIANT_ATTRIBUTES_INCLUDE,
@@ -514,8 +518,8 @@ const PRODUCT_TYPE_IDS = {
 } as const;
 const SKU_PREFIX_LENGTH = 3;
 const SKU_NUMBER_LENGTH = 5;
-const BARCODE_PAYLOAD_BASE = 200000000000;
-const BARCODE_PAYLOAD_MAX = 299999999999;
+const BARCODE_PAYLOAD_BASE = INTERNAL_EAN13_MIN;
+const BARCODE_PAYLOAD_MAX = INTERNAL_EAN13_MAX;
 const DEFAULT_MEASUREMENT_UNIT = {
   id: '12a69bc0-c575-4586-9f0f-76e8295d4139',
   name: 'Штука',
@@ -1036,9 +1040,80 @@ export class ProductsService {
     if (!product) throw new NotFoundException('Product not found');
     return this.prisma.productVariant.findMany({
       where: { companyId: context.companyId, productId: product.id },
-      include: { ...VARIANT_ATTRIBUTES_INCLUDE, color: true, size: true, stocks: { include: { shop: true } } },
+      include: {
+        ...VARIANT_ATTRIBUTES_INCLUDE,
+        color: true,
+        size: true,
+        stocks: { include: { shop: true } },
+      },
       orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
     });
+  }
+
+  /**
+   * Gives every active colour/size variant of the given products an in-store
+   * EAN-13 barcode when it has none (variants from imports or older versions),
+   * so each variant can get its own price tag.
+   */
+  async ensureVariantBarcodes(
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = this.requireCatalogWriteContext(
+      await this.getRequestContext(requestContext),
+    );
+    const ids = this.toStringArrayValue(body.product_ids);
+    if (!ids.length) return { generated: 0 };
+
+    const products = await this.prisma.product.findMany({
+      where: this.applyProductScope(
+        { OR: ids.map((id) => this.buildProductIdentifierWhere(id)) },
+        context,
+      ),
+      select: { id: true },
+    });
+    const where: Prisma.ProductVariantWhereInput = {
+      companyId: context.companyId,
+      productId: { in: products.map((product) => product.id) },
+      isActive: true,
+      OR: [{ barcode: null }, { barcode: '' }],
+      AND: [{ OR: [{ colorId: { not: null } }, { sizeId: { not: null } }] }],
+    };
+
+    // A concurrent allocation may take the same code: the unique
+    // (companyId, barcode) index rejects it and the batch is retried.
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          const variants = await tx.productVariant.findMany({
+            where,
+            select: { id: true },
+            orderBy: { createdAt: 'asc' },
+          });
+          if (!variants.length) return { generated: 0 };
+          const codes = await allocateInternalBarcodes(
+            tx,
+            context.companyId,
+            variants.length,
+          );
+          for (const [index, variant] of variants.entries()) {
+            await tx.productVariant.update({
+              where: { id: variant.id },
+              data: { barcode: codes[index] },
+            });
+          }
+          return { generated: variants.length };
+        });
+      } catch (error) {
+        if (error instanceof RangeError) {
+          throw new BadRequestException('Barcode range exceeded');
+        }
+        const conflict =
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === 'P2002';
+        if (!conflict || attempt >= 3) throw error;
+      }
+    }
   }
 
   // Colour × size stock of one product for the catalog availability matrix.
@@ -1060,13 +1135,19 @@ export class ProductsService {
     const shopIds = context.allowedShopIds;
     const [variants, shops, productStocks] = await Promise.all([
       this.prisma.productVariant.findMany({
-        where: { companyId: context.companyId, productId: product.id, isActive: true },
+        where: {
+          companyId: context.companyId,
+          productId: product.id,
+          isActive: true,
+        },
         select: {
           id: true,
           isDefault: true,
           salePrice: true,
           color: { select: { id: true, name: true, code: true } },
-          size: { select: { id: true, name: true, type: true, sortOrder: true } },
+          size: {
+            select: { id: true, name: true, type: true, sortOrder: true },
+          },
           stocks: {
             where: { shopId: { in: shopIds } },
             select: { shopId: true, quantity: true, salePrice: true },
@@ -1088,7 +1169,10 @@ export class ProductsService {
     const shopPrice = new Map(
       productStocks.map((stock) => [stock.shopId, stock.salePrice]),
     );
-    const colors = new Map<string, { id: string; name: string; code: string | null }>();
+    const colors = new Map<
+      string,
+      { id: string; name: string; code: string | null }
+    >();
     const sizes = new Map<
       string,
       { id: string; name: string; type: string; sort_order: number }
@@ -1106,7 +1190,8 @@ export class ProductsService {
       if (variant.isDefault || (!variant.color && !variant.size)) {
         for (const stock of variant.stocks) {
           if (stock.quantity !== 0) {
-            unassigned[stock.shopId] = (unassigned[stock.shopId] ?? 0) + stock.quantity;
+            unassigned[stock.shopId] =
+              (unassigned[stock.shopId] ?? 0) + stock.quantity;
           }
         }
         continue;
@@ -1142,7 +1227,9 @@ export class ProductsService {
         name: shop.name,
         base_sale_price: shopPrice.get(shop.id) ?? null,
       })),
-      colors: [...colors.values()].sort((a, b) => a.name.localeCompare(b.name, 'ru')),
+      colors: [...colors.values()].sort((a, b) =>
+        a.name.localeCompare(b.name, 'ru'),
+      ),
       sizes: [...sizes.values()],
       variants: rows,
       unassigned,
@@ -2472,7 +2559,8 @@ export class ProductsService {
           Number(movement.quantity),
       );
       const variants =
-        revertByVariant.get(movement.productId) ?? new Map<string | null, number>();
+        revertByVariant.get(movement.productId) ??
+        new Map<string | null, number>();
       variants.set(
         movement.variantId,
         (variants.get(movement.variantId) ?? 0) + Number(movement.quantity),
@@ -4261,7 +4349,12 @@ export class ProductsService {
         stocks: true,
         variants: {
           where: { isActive: true, isDefault: false },
-          include: { ...VARIANT_ATTRIBUTES_INCLUDE, color: true, size: true, stocks: true },
+          include: {
+            ...VARIANT_ATTRIBUTES_INCLUDE,
+            color: true,
+            size: true,
+            stocks: true,
+          },
           orderBy: { createdAt: 'asc' },
         },
       },
@@ -4590,13 +4683,24 @@ export class ProductsService {
         stocks: true,
         variants: {
           where: { isActive: true, isDefault: false },
-          include: { ...VARIANT_ATTRIBUTES_INCLUDE, color: true, size: true, stocks: true },
+          include: {
+            ...VARIANT_ATTRIBUTES_INCLUDE,
+            color: true,
+            size: true,
+            stocks: true,
+          },
           orderBy: { createdAt: 'asc' },
         },
         bundleComponents: {
           include: {
             componentProduct: true,
-            componentVariant: { include: { ...VARIANT_ATTRIBUTES_INCLUDE, color: true, size: true } },
+            componentVariant: {
+              include: {
+                ...VARIANT_ATTRIBUTES_INCLUDE,
+                color: true,
+                size: true,
+              },
+            },
           },
           orderBy: { createdAt: 'asc' },
         },
@@ -5842,7 +5946,12 @@ export class ProductsService {
       },
       variants: {
         where: { isActive: true, isDefault: false },
-        include: { ...VARIANT_ATTRIBUTES_INCLUDE, color: true, size: true, stocks: true },
+        include: {
+          ...VARIANT_ATTRIBUTES_INCLUDE,
+          color: true,
+          size: true,
+          stocks: true,
+        },
       },
     } satisfies Prisma.ProductInclude;
 
@@ -6318,7 +6427,9 @@ export class ProductsService {
           item.variant?.purchasePrice ??
           supplyPrice,
         salePrice:
-          sourceVariantStock?.salePrice ?? item.variant?.salePrice ?? retailPrice,
+          sourceVariantStock?.salePrice ??
+          item.variant?.salePrice ??
+          retailPrice,
       },
     });
     if (move.stock) {
@@ -6401,7 +6512,12 @@ export class ProductsService {
       items: {
         include: {
           variant: {
-            include: { ...VARIANT_ATTRIBUTES_INCLUDE, color: true, size: true, stocks: true },
+            include: {
+              ...VARIANT_ATTRIBUTES_INCLUDE,
+              color: true,
+              size: true,
+              stocks: true,
+            },
           },
           product: {
             include: {
@@ -6869,38 +6985,14 @@ export class ProductsService {
     count: number,
     exclude: string[] = [],
   ) {
-    const [productCodes, variantCodes] = await Promise.all([
-      this.prisma.product.findMany({
-        where: { companyId, barcode: { startsWith: '2' } },
-        select: { barcode: true },
-      }),
-      this.prisma.productVariant.findMany({
-        where: { companyId, barcode: { startsWith: '2' } },
-        select: { barcode: true },
-      }),
-    ]);
-    const taken = new Set<string>([
-      ...exclude,
-      ...productCodes.map((row) => row.barcode ?? ''),
-      ...variantCodes.map((row) => row.barcode ?? ''),
-    ]);
-    let payload = [...taken].reduce<number>(
-      (max, code) => Math.max(max, this.extractEan13Payload(code) ?? 0),
-      BARCODE_PAYLOAD_BASE - 1,
-    );
-    const result: string[] = [];
-    while (result.length < count) {
-      payload += 1;
-      if (payload > BARCODE_PAYLOAD_MAX) {
+    try {
+      return await allocateInternalBarcodes(this.prisma, companyId, count, exclude);
+    } catch (error) {
+      if (error instanceof RangeError) {
         throw new BadRequestException('Barcode range exceeded');
       }
-      const barcode = this.formatEan13Barcode(payload);
-      if (!taken.has(barcode)) {
-        taken.add(barcode);
-        result.push(barcode);
-      }
+      throw error;
     }
-    return result;
   }
 
   /**
@@ -7116,23 +7208,21 @@ export class ProductsService {
     });
   }
 
-  private async syncDefaultVariantFromLegacyProduct(
-    product: {
-      id: number;
-      companyId: string | null;
-      sku: string | null;
-      barcode: string | null;
+  private async syncDefaultVariantFromLegacyProduct(product: {
+    id: number;
+    companyId: string | null;
+    sku: string | null;
+    barcode: string | null;
+    purchasePrice: number | null;
+    salePrice: number | null;
+    stocks?: Array<{
+      shopId: string;
+      branchCode: string;
+      quantity: number;
       purchasePrice: number | null;
       salePrice: number | null;
-      stocks?: Array<{
-        shopId: string;
-        branchCode: string;
-        quantity: number;
-        purchasePrice: number | null;
-        salePrice: number | null;
-      }>;
-    },
-  ) {
+    }>;
+  }) {
     if (!product.companyId) {
       return;
     }
@@ -7437,7 +7527,15 @@ export class ProductsService {
                 OR: [{ colorId: { not: null } }, { sizeId: { not: null } }],
               },
             },
-            include: { variant: { include: { ...VARIANT_ATTRIBUTES_INCLUDE, color: true, size: true } } },
+            include: {
+              variant: {
+                include: {
+                  ...VARIANT_ATTRIBUTES_INCLUDE,
+                  color: true,
+                  size: true,
+                },
+              },
+            },
           });
           if (removedWithStock) {
             const label = variantLabel(removedWithStock.variant);
@@ -11800,37 +11898,11 @@ export class ProductsService {
   }
 
   private extractEan13Payload(barcode: string | null) {
-    if (!barcode || !/^\d{13}$/.test(barcode) || !barcode.startsWith('2')) {
-      return null;
-    }
-
-    if (!this.isValidEan13Barcode(barcode)) {
-      return null;
-    }
-
-    const payload = Number(barcode.slice(0, 12));
-    return Number.isInteger(payload) ? payload : null;
+    return internalEan13Payload(barcode);
   }
 
   private formatEan13Barcode(payload: number) {
-    const payloadString = String(payload).padStart(12, '0');
-    return `${payloadString}${this.calculateEan13CheckDigit(payloadString)}`;
-  }
-
-  private isValidEan13Barcode(barcode: string) {
-    return (
-      this.calculateEan13CheckDigit(barcode.slice(0, 12)) ===
-      Number(barcode[12])
-    );
-  }
-
-  private calculateEan13CheckDigit(payload: string) {
-    const sum = payload.split('').reduce((total, digit, index) => {
-      const value = Number(digit);
-      return total + value * (index % 2 === 0 ? 1 : 3);
-    }, 0);
-
-    return (10 - (sum % 10)) % 10;
+    return formatInternalEan13(payload);
   }
 
   private escapeRegExp(value: string) {
