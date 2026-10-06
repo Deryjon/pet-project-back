@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../../prisma/prisma.service';
-import { PERMISSIONS_KEY } from '../permissions.decorator';
+import { ANY_PERMISSIONS_KEY, PERMISSIONS_KEY } from '../permissions.decorator';
 import { loadRoleAccess, roleAccessAllows } from '../role-permissions';
 
 @Injectable()
@@ -23,7 +23,13 @@ export class PermissionsGuard implements CanActivate {
         context.getClass(),
       ]) ?? [];
 
-    if (!requiredPermissions.length) {
+    const anyPermissions =
+      this.reflector.getAllAndOverride<string[]>(ANY_PERMISSIONS_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]) ?? [];
+
+    if (!requiredPermissions.length && !anyPermissions.length) {
       return true;
     }
 
@@ -39,7 +45,13 @@ export class PermissionsGuard implements CanActivate {
 
     if (!access) throw new ForbiddenException('Role is not available');
 
-    if (!roleAccessAllows(access, requiredPermissions)) {
+    const allowed =
+      roleAccessAllows(access, requiredPermissions) &&
+      (!anyPermissions.length ||
+        anyPermissions.some((permission) =>
+          roleAccessAllows(access, [permission]),
+        ));
+    if (!allowed) {
       throw new ForbiddenException('Insufficient permissions');
     }
 

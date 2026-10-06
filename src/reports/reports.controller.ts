@@ -14,7 +14,7 @@ import {
 import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
-import { Permissions } from '../auth/permissions.decorator';
+import { AnyPermission } from '../auth/permissions.decorator';
 import { CompanyRequestContext, RequestContext } from '../auth/request-context';
 import { ReportsService } from './reports.service';
 
@@ -131,12 +131,57 @@ const SALES_BY_ATTRIBUTE_REPORT_ROUTES = versioned([
   'reports/products/sales-by-attribute',
 ]);
 
+// Report rights, mirroring the frontend ROUTE_PERMISSION_MAP: a role needs at
+// least one right of the report's section. Overview reports used by the
+// /reports landing page accept any report right.
+const SHOP_REPORT_PERMISSIONS = [
+  'reports-shop',
+  'reports-shop-summary',
+  'reports-shop-transactions',
+  'summary-report',
+  'report-finance',
+  'reports-finances-summary',
+  'reports-finances-movements',
+  'finance-report',
+];
+const PRODUCT_REPORT_PERMISSIONS = [
+  'report-products',
+  'reports-products-summary',
+  'reports-products-supplier',
+  'reports-products-efficiency',
+  'reports-products-leftover',
+  'reports-products-import',
+  'report-product',
+  'report-abc-segmentation',
+  'report-write-off',
+  'report-stocktaking',
+  'report-supplier-order-return',
+];
+const SELLER_REPORT_PERMISSIONS = [
+  'report-sellers',
+  'report-seller',
+  'report-seller-products',
+];
+const CLIENT_REPORT_PERMISSIONS = [
+  'report-clients',
+  'reports-clients-summary',
+  'reports-clients-purchases',
+  'report-client',
+];
+const ANY_REPORT_PERMISSIONS = [
+  ...SHOP_REPORT_PERMISSIONS,
+  ...PRODUCT_REPORT_PERMISSIONS,
+  ...SELLER_REPORT_PERMISSIONS,
+  ...CLIENT_REPORT_PERMISSIONS,
+];
+
 @UseGuards(JwtAuthGuard)
 @Controller()
 export class ReportsController {
   constructor(private readonly reportsService: ReportsService) {}
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...ANY_REPORT_PERMISSIONS)
   @Get(SUMMARY_REPORT_ROUTES)
   getSummary(
     @Query() query: Record<string, string | undefined>,
@@ -145,7 +190,8 @@ export class ReportsController {
     return this.reportsService.getSummary(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...SHOP_REPORT_PERMISSIONS)
   @Get(GENERAL_REPORT_ROUTES)
   getGeneralReport(
     @Query() query: Record<string, string | undefined>,
@@ -154,7 +200,8 @@ export class ReportsController {
     return this.reportsService.getGeneralReport(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...SHOP_REPORT_PERMISSIONS)
   @Get(GENERAL_REPORT_TABLE_ROUTES)
   getGeneralReportTable(
     @Query() query: Record<string, string | undefined>,
@@ -163,7 +210,8 @@ export class ReportsController {
     return this.reportsService.getGeneralReportTable(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...SHOP_REPORT_PERMISSIONS)
   @Get(GENERAL_SALES_REPORT_ROUTES)
   getGeneralSalesReport(
     @Query() query: Record<string, string | undefined>,
@@ -172,7 +220,8 @@ export class ReportsController {
     return this.reportsService.getGeneralSalesReport(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...[...SHOP_REPORT_PERMISSIONS, ...PRODUCT_REPORT_PERMISSIONS])
   @Get(GENERAL_PRODUCT_REPORT_ROUTES)
   getGeneralProductReport(
     @Query() query: Record<string, string | undefined>,
@@ -181,7 +230,8 @@ export class ReportsController {
     return this.reportsService.getGeneralProductReport(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...[...SHOP_REPORT_PERMISSIONS, ...SELLER_REPORT_PERMISSIONS])
   @Get(GENERAL_SELLER_REPORT_ROUTES)
   getGeneralSellerReport(
     @Query() query: Record<string, string | undefined>,
@@ -190,7 +240,8 @@ export class ReportsController {
     return this.reportsService.getGeneralSellerReport(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...[...SHOP_REPORT_PERMISSIONS, ...CLIENT_REPORT_PERMISSIONS])
   @Get(GENERAL_CUSTOMER_REPORT_ROUTES)
   getGeneralCustomerReport(
     @Query() query: Record<string, string | undefined>,
@@ -199,7 +250,8 @@ export class ReportsController {
     return this.reportsService.getGeneralCustomerReport(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...ANY_REPORT_PERMISSIONS)
   @Get(SHOP_REPORT_ROUTES)
   getShops(
     @Query() query: Record<string, string | undefined>,
@@ -208,7 +260,8 @@ export class ReportsController {
     return this.reportsService.getShops(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...SHOP_REPORT_PERMISSIONS)
   @Get(SHOP_DETAIL_REPORT_ROUTES)
   getShopDetail(
     @Param('shopId') shopId: string,
@@ -218,7 +271,8 @@ export class ReportsController {
     return this.reportsService.getShopDetail(shopId, query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...ANY_REPORT_PERMISSIONS)
   @Get(PRODUCT_REPORT_ROUTES)
   getProducts(
     @Query() query: Record<string, string | undefined>,
@@ -228,7 +282,7 @@ export class ReportsController {
   }
 
   @UseGuards(CompanyAccessGuard, PermissionsGuard)
-  @Permissions('reports-products-summary')
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(SALES_BY_ATTRIBUTE_REPORT_ROUTES)
   getSalesByAttribute(
     @Query() query: Record<string, string | undefined>,
@@ -237,7 +291,8 @@ export class ReportsController {
     return this.reportsService.getSalesByAttribute(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(PRODUCT_SALES_REPORT_ROUTES)
   getProductSales(
     @Query() query: Record<string, string | undefined>,
@@ -246,7 +301,8 @@ export class ReportsController {
     return this.reportsService.getProductSales(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(PRODUCT_SALES_REPORT_API_ROUTES)
   getProductSalesReportApi(
     @Query() query: Record<string, string | undefined>,
@@ -255,7 +311,8 @@ export class ReportsController {
     return this.reportsService.getProductSalesReportApi(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(PRODUCT_EFFECTIVENESS_REPORT_ROUTES)
   getProductEffectiveness(
     @Query() query: Record<string, string | undefined>,
@@ -264,7 +321,8 @@ export class ReportsController {
     return this.reportsService.getProductEffectiveness(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(PRODUCT_GENERAL_REPORT_API_ROUTES)
   getProductGeneralReportApi(
     @Query() query: Record<string, string | undefined>,
@@ -276,7 +334,8 @@ export class ReportsController {
     );
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(PRODUCT_GENERAL_TABLE_API_ROUTES)
   getProductGeneralTableApi(
     @Query() query: Record<string, string | undefined>,
@@ -285,7 +344,8 @@ export class ReportsController {
     return this.reportsService.getProductGeneralTableApi(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(PRODUCT_PERFORMANCE_REPORT_API_ROUTES)
   getProductPerformanceReportApi(
     @Query() query: Record<string, string | undefined>,
@@ -297,7 +357,8 @@ export class ReportsController {
     );
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(REPORT_PRODUCT_PERFORMANCE_TABLE_API_ROUTES)
   getReportProductPerformanceTableApi(
     @Query() query: Record<string, string | undefined>,
@@ -309,7 +370,8 @@ export class ReportsController {
     );
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(REPORT_PRODUCT_PERFORMANCE_TOTALS_API_ROUTES)
   getReportProductPerformanceTotalsApi(
     @Query() query: Record<string, string | undefined>,
@@ -321,7 +383,8 @@ export class ReportsController {
     );
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(PRODUCT_IMPORT_REPORT_ROUTES)
   getProductImports(
     @Query() query: Record<string, string | undefined>,
@@ -330,7 +393,8 @@ export class ReportsController {
     return this.reportsService.getProductImports(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(IMPORT_REPORT_TABLE_API_ROUTES)
   getImportReportTableApi(
     @Query() query: Record<string, string | undefined>,
@@ -339,7 +403,8 @@ export class ReportsController {
     return this.reportsService.getImportReportTableApi(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(IMPORT_REPORT_TOTALS_API_ROUTES)
   getImportReportTotalsApi(
     @Query() query: Record<string, string | undefined>,
@@ -348,7 +413,8 @@ export class ReportsController {
     return this.reportsService.getImportReportTotalsApi(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(PRODUCT_SUPPLIER_REPORT_ROUTES)
   getProductSuppliers(
     @Query() query: Record<string, string | undefined>,
@@ -357,7 +423,8 @@ export class ReportsController {
     return this.reportsService.getProductSuppliers(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(PRODUCT_SELLS_BY_SUPPLIERS_TABLE_API_ROUTES)
   getProductSellsBySuppliersTableApi(
     @Query() query: Record<string, string | undefined>,
@@ -369,7 +436,8 @@ export class ReportsController {
     );
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(PRODUCT_STOCK_REPORT_ROUTES)
   getProductStocks(
     @Query() query: Record<string, string | undefined>,
@@ -378,7 +446,8 @@ export class ReportsController {
     return this.reportsService.getProductStocks(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(STOCK_REPORT_TABLE_API_ROUTES)
   getStockReportTableApi(
     @Query() query: Record<string, string | undefined>,
@@ -387,7 +456,8 @@ export class ReportsController {
     return this.reportsService.getStockReportTableApi(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(INVENTORY_RESULT_REPORT_ROUTES)
   getInventoryResults(
     @Query() query: Record<string, string | undefined>,
@@ -396,7 +466,8 @@ export class ReportsController {
     return this.reportsService.getInventoryResults(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(ORDER_RETURN_REPORT_ROUTES)
   getOrderReturns(
     @Query() query: Record<string, string | undefined>,
@@ -405,7 +476,8 @@ export class ReportsController {
     return this.reportsService.getOrderReturns(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(WRITE_OFF_REPORT_ROUTES)
   getWriteOffs(
     @Query() query: Record<string, string | undefined>,
@@ -414,7 +486,8 @@ export class ReportsController {
     return this.reportsService.getWriteOffs(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(ABC_ANALYSIS_REPORT_ROUTES)
   getAbcAnalysis(
     @Query() query: Record<string, string | undefined>,
@@ -423,7 +496,8 @@ export class ReportsController {
     return this.reportsService.getAbcAnalysis(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...PRODUCT_REPORT_PERMISSIONS)
   @Get(TRANSFER_REPORT_ROUTES)
   getTransfers(
     @Query() query: Record<string, string | undefined>,
@@ -432,7 +506,8 @@ export class ReportsController {
     return this.reportsService.getTransfers(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...ANY_REPORT_PERMISSIONS)
   @Get(SELLER_REPORT_ROUTES)
   getSellers(
     @Query() query: Record<string, string | undefined>,
@@ -441,7 +516,8 @@ export class ReportsController {
     return this.reportsService.getSellers(query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...SELLER_REPORT_PERMISSIONS)
   @Get(SELLER_SALES_REPORT_ROUTES)
   getSellerSales(
     @Param('sellerId') sellerId: string,
@@ -451,7 +527,8 @@ export class ReportsController {
     return this.reportsService.getSellerSales(sellerId, query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...SELLER_REPORT_PERMISSIONS)
   @Get(SELLER_DETAIL_REPORT_ROUTES)
   getSellerDetail(
     @Param('sellerId') sellerId: string,
@@ -461,7 +538,8 @@ export class ReportsController {
     return this.reportsService.getSellerDetail(sellerId, query, requestContext);
   }
 
-  @UseGuards(CompanyAccessGuard)
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @AnyPermission(...CLIENT_REPORT_PERMISSIONS)
   @Get(CUSTOMER_REPORT_ROUTES)
   getCustomers(
     @Query() query: Record<string, string | undefined>,
