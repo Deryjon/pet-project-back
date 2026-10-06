@@ -1126,6 +1126,7 @@ model ClientDebt {
   @@index([saleId])
   @@index([shopId])
   @@index([status])
+  @@index([companyId, status])
 }
 
 model ClientDebtRepayment {
@@ -1272,6 +1273,7 @@ model StockMovement {
   @@index([orderId])
   @@index([variantId])
   @@index([referenceType, referenceId])
+  @@index([companyId, shopId, createdAt])
 }
 
 model SupplierInvoice {
@@ -1635,6 +1637,8 @@ model Sale {
   @@index([saleType])
   @@index([adjustmentGroupId])
   @@index([cancelledAt])
+  @@index([companyId, branchCode, paidAt])
+  @@index([companyId, status, createdAt])
 }
 
 model SaleItem {

@@ -134,6 +134,17 @@
   - В ответах API есть заголовки `X-Content-Type-Options` и `Strict-Transport-Security`.
 - **Важно:** лимит пока 100 запросов в минуту на IP. Решение D2 ниже меняет учёт и значение.
 
+### 8. Составные индексы под отчёты (топ-10 №6, часть)
+- **Коммит:** `perf(db): add composite indexes for report and dashboard filters`.
+- **Что изменено:** четыре отдельные миграции, каждая с одним `CREATE INDEX CONCURRENTLY IF NOT EXISTS`, без блокировки записи; в транзакции этот оператор не работает:
+  - `Sale(companyId, branchCode, paidAt)`;
+  - `Sale(companyId, status, createdAt)`;
+  - `StockMovement(companyId, shopId, createdAt)`;
+  - `ClientDebt(companyId, status)`.
+
+  Те же индексы добавлены в `schema.prisma`, `test:postgres` подтверждает: «Migrated schema matches schema.prisma».
+- **Перед выкладкой:** миграции применять через `prisma migrate deploy`. На больших таблицах создание займёт время, но запись не блокируется. Я применял их только к временной базе.
+
 ## 🧭 Решения
 
 ### D1. Долг при отмене продажи
@@ -165,4 +176,4 @@ _заполняется по ходу_
 
 ## ▶ Следующий пункт
 
-Топ-10 №6: пагинация и агрегаты в SQL (клиенты, продажи, статистика заказов, дашборд) и составные индексы (отдельные миграции `CREATE INDEX CONCURRENTLY`).
+Срочная доработка D2 по итогам security-review: маршруты входа считать по IP (иначе случайный Authorization обходит лимит 5/мин), затем права чеков (`show_deleted_orders`, `orders-other-shops`, `cash-shifts`), затем пагинация и агрегаты в SQL (топ-10 №6).
