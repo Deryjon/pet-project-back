@@ -222,7 +222,7 @@ describe('SalesService money calculations', () => {
       const { service } = createService();
       jest
         .spyOn(service as any, 'getReturnableQuantities')
-        .mockResolvedValue(new Map([[10, 2]]));
+        .mockResolvedValue(new Map([['product:10', 2]]));
 
       const items = await (service as any).prepareAdjustmentItems(
         {
@@ -245,6 +245,7 @@ describe('SalesService money calculations', () => {
         },
         [{ product_id: 10, quantity: 1 }],
         'items',
+        { $queryRaw: jest.fn() },
       );
 
       expect(items[0]).toEqual(

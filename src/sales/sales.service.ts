@@ -1223,13 +1223,13 @@ export class SalesService {
       body,
       context,
     );
-    const returnItems = await this.prepareAdjustmentItems(
-      originalSale,
-      body.items,
-      'items',
-    );
-
     const returnSale = await this.prisma.$transaction(async (tx) => {
+      const returnItems = await this.prepareAdjustmentItems(
+        originalSale,
+        body.items,
+        'items',
+        tx,
+      );
       const createdReturnSale = await this.createAdjustmentSale(
         {
           originalSale,
@@ -1297,21 +1297,22 @@ export class SalesService {
       body,
       context,
     );
-    const returnItems = await this.prepareAdjustmentItems(
-      originalSale,
-      body.return_items,
-      'return_items',
-    );
-    const exchangeItems = await this.prepareNewExchangeItems(
-      originalSale,
-      body.new_items,
-      returnItems,
-      context,
-    );
     const exchangeGroup = randomUUID();
 
     const { returnSale, exchangeSale } = await this.prisma.$transaction(
       async (tx) => {
+        const returnItems = await this.prepareAdjustmentItems(
+          originalSale,
+          body.return_items,
+          'return_items',
+          tx,
+        );
+        const exchangeItems = await this.prepareNewExchangeItems(
+          originalSale,
+          body.new_items,
+          returnItems,
+          context,
+        );
         const createdReturnSale = await this.createAdjustmentSale(
           {
             originalSale,
@@ -2590,6 +2591,7 @@ export class SalesService {
     },
     rawItems: unknown,
     fieldName: string,
+    tx: Prisma.TransactionClient,
   ) {
     if (!Array.isArray(rawItems) || rawItems.length === 0) {
       throw new BadRequestException(
@@ -2597,8 +2599,13 @@ export class SalesService {
       );
     }
 
-    const returnableQuantities =
-      await this.getReturnableQuantities(originalSale);
+    // Concurrent returns of one sale queue up on this row lock, so each one
+    // counts the returns already committed before it.
+    await tx.$queryRaw`SELECT id FROM "Sale" WHERE id = ${originalSale.id} FOR UPDATE`;
+    const returnableQuantities = await this.getReturnableQuantities(
+      originalSale,
+      tx,
+    );
     const normalizedItems: Array<{
       productId: number;
       variantId?: string | null;
@@ -2621,7 +2628,6 @@ export class SalesService {
 
       const record = rawItem as Record<string, unknown>;
       const productId = this.toInt(record.product_id) ?? this.toInt(record.id);
-      const variantId = this.optionalString(record.variant_id);
       const requestedVariantId = this.optionalString(record.variant_id);
       const quantity = this.toNumber(record.quantity);
 
@@ -2631,31 +2637,31 @@ export class SalesService {
         );
       }
 
-      const originalItem = originalSale.items.find(
+      const candidates = originalSale.items.filter(
         (item) =>
           item.productId === productId &&
           (!requestedVariantId || item.variantId === requestedVariantId),
       );
+      const originalItem = candidates[0];
 
       if (!originalItem) {
         throw new BadRequestException(
           `Product ${productId} is not present in the original sale`,
         );
       }
+      if (
+        new Set(candidates.map((item) => this.returnKey(item))).size > 1
+      ) {
+        throw new BadRequestException(
+          `Product ${productId} was sold in several variants: specify variant_id`,
+        );
+      }
 
-      const returnKey = requestedVariantId ?? `product:${productId}`;
-      const availableQuantity =
-        returnableQuantities.get(returnKey) ??
-        (returnableQuantities as unknown as Map<number, number>).get(
-          productId,
-        ) ??
-        0;
-      const alreadyRequestedQuantity =
-        normalizedItems.find(
-          (item) =>
-            item.productId === productId &&
-            item.variantId === requestedVariantId,
-        )?.quantity ?? 0;
+      const returnKey = this.returnKey(originalItem);
+      const availableQuantity = returnableQuantities.get(returnKey) ?? 0;
+      const alreadyRequestedQuantity = normalizedItems
+        .filter((item) => this.returnKey(item) === returnKey)
+        .reduce((sum, item) => sum + item.quantity, 0);
 
       if (alreadyRequestedQuantity + quantity > availableQuantity) {
         throw new BadRequestException(
@@ -2881,8 +2887,8 @@ export class SalesService {
       variantId?: string | null;
       quantity: number;
     }>;
-  }) {
-    const returns = await this.prisma.sale.findMany({
+  }, tx: Prisma.TransactionClient) {
+    const returns = await tx.sale.findMany({
       where: {
         parentSaleId: originalSale.id,
         saleType: 'return',
@@ -2899,7 +2905,7 @@ export class SalesService {
           continue;
         }
 
-        const key = item.variantId ?? `product:${item.productId}`;
+        const key = this.returnKey(item);
         returnedMap.set(
           key,
           (returnedMap.get(key) ?? 0) + Number(item.quantity),
@@ -2913,14 +2919,24 @@ export class SalesService {
         continue;
       }
 
-      const key = item.variantId ?? `product:${item.productId}`;
+      // A sale may list the same product twice: sum the lines.
+      const key = this.returnKey(item);
       returnableMap.set(
         key,
-        Number(item.quantity) - (returnedMap.get(key) ?? 0),
+        (returnableMap.get(key) ?? 0) + Number(item.quantity),
       );
+    }
+    for (const [key, returned] of returnedMap) {
+      if (returnableMap.has(key)) {
+        returnableMap.set(key, returnableMap.get(key)! - returned);
+      }
     }
 
     return returnableMap;
+  }
+
+  private returnKey(item: { productId: number | null; variantId?: string | null }) {
+    return item.variantId ?? `product:${item.productId}`;
   }
 
   private async createAdjustmentSale(
