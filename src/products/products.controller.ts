@@ -24,13 +24,12 @@ import { Permissions } from '../auth/permissions.decorator';
 import { CompanyRequestContext } from '../auth/request-context';
 import { ProductsService } from './products.service';
 
-@UseGuards(JwtAuthGuard, CompanyAccessGuard)
+@UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
 @Controller()
 export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
   @Get('products/search')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   searchForPos(
     @Query('q') q: string | undefined,
@@ -49,7 +48,6 @@ export class ProductsController {
   }
 
   @Get('products')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   findAll(
     @Query('page') page: string | undefined,
@@ -68,7 +66,6 @@ export class ProductsController {
   }
 
   @Post('products')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   create(
     @Body() body: Record<string, unknown>,
@@ -78,7 +75,6 @@ export class ProductsController {
   }
 
   @Get('product-colors')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   listProductColors(
     @Query('include_inactive') includeInactive: string | undefined,
@@ -91,7 +87,6 @@ export class ProductsController {
   }
 
   @Post('product-colors')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   createProductColor(
     @Body() body: Record<string, unknown>,
@@ -101,7 +96,6 @@ export class ProductsController {
   }
 
   @Patch('product-colors/:id')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   updateProductColor(
     @Param('id') id: string,
@@ -112,7 +106,6 @@ export class ProductsController {
   }
 
   @Delete('product-colors/:id')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   deleteProductColor(
     @Param('id') id: string,
@@ -122,7 +115,6 @@ export class ProductsController {
   }
 
   @Get('product-size-grids')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   getSizeGridPresets(
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
@@ -131,7 +123,6 @@ export class ProductsController {
   }
 
   @Get('product-sizes')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   listProductSizes(
     @Query('type') type: string | undefined,
@@ -145,7 +136,6 @@ export class ProductsController {
   }
 
   @Post('product-sizes')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   createProductSize(
     @Body() body: Record<string, unknown>,
@@ -155,7 +145,6 @@ export class ProductsController {
   }
 
   @Patch('product-sizes/:id')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   updateProductSize(
     @Param('id') id: string,
@@ -166,7 +155,6 @@ export class ProductsController {
   }
 
   @Delete('product-sizes/:id')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   deleteProductSize(
     @Param('id') id: string,
@@ -176,7 +164,6 @@ export class ProductsController {
   }
 
   @Get('products/:id/variants')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   listProductVariants(
     @Param('id') id: string,
@@ -186,7 +173,6 @@ export class ProductsController {
   }
 
   @Post('products/:id/variants')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   createProductVariant(
     @Param('id') id: string,
@@ -197,7 +183,6 @@ export class ProductsController {
   }
 
   @Patch('product-variants/:id')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   updateProductVariant(
     @Param('id') id: string,
@@ -208,16 +193,19 @@ export class ProductsController {
   }
 
   @Get('v2/product-characteristic')
+  @Permissions('catalog-operations')
   getProductCharacteristics(@Query('limit') limit?: string) {
     return this.productsService.getProductCharacteristics(limit);
   }
 
   @Get('v2/excel/import-properties')
+  @Permissions('imports.read')
   getExcelImportProperties(@Query('limit') limit?: string) {
     return this.productsService.getExcelImportProperties(limit);
   }
 
   @Post('v2/imports')
+  @Permissions('imports.write')
   createImportDraft(
     @Body() body: Record<string, unknown>,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
@@ -226,6 +214,7 @@ export class ProductsController {
   }
 
   @Get('v2/imports')
+  @Permissions('imports.read')
   @Header(
     'Cache-Control',
     'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -248,6 +237,7 @@ export class ProductsController {
   }
 
   @Get('v2/imports/:id')
+  @Permissions('imports.read')
   @Header(
     'Cache-Control',
     'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -263,6 +253,7 @@ export class ProductsController {
   }
 
   @Post('v2/imports/:id/validate')
+  @Permissions('imports.write')
   validateImportDraft(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -278,6 +269,7 @@ export class ProductsController {
   }
 
   @Post('v2/excel/validate-import')
+  @Permissions('imports.write')
   validateExcelImport(
     @Body() body: Record<string, unknown>,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
@@ -286,6 +278,7 @@ export class ProductsController {
   }
 
   @Get('v2/import-progress/:id')
+  @Permissions('imports.read')
   getImportProgress(
     @Param('id') id: string,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
@@ -294,6 +287,7 @@ export class ProductsController {
   }
 
   @Get('v2/import-search/:id')
+  @Permissions('imports.read')
   async getImportSearch(
     @Param('id') id: string,
     @Query('limit') limit: string | undefined,
@@ -313,6 +307,7 @@ export class ProductsController {
   }
 
   @Get('v2/import-items-dp/:id')
+  @Permissions('imports.read')
   async getImportItemsDp(
     @Param('id') id: string,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
@@ -321,6 +316,7 @@ export class ProductsController {
   }
 
   @Post('v2/import-commit/:id')
+  @Permissions('import-check')
   importCommit(
     @Param('id') id: string,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
@@ -329,6 +325,7 @@ export class ProductsController {
   }
 
   @Post('v2/imports/:id/commit')
+  @Permissions('import-check')
   commitImportDraft(
     @Param('id') id: string,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
@@ -339,6 +336,7 @@ export class ProductsController {
   }
 
   @Post('v2/imports/:id/cancel')
+  @Permissions('imports.write')
   cancelImportDraft(
     @Param('id') id: string,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
@@ -347,6 +345,7 @@ export class ProductsController {
   }
 
   @Post('v2/imports/:id/rollback')
+  @Permissions('import-delete')
   rollbackImport(
     @Param('id') id: string,
     @Query('dry_run') dryRun: string | undefined,
@@ -358,6 +357,7 @@ export class ProductsController {
   }
 
   @Post('v2/excel/import-without-check')
+  @Permissions('import-create', 'import-check')
   importWithoutCheck(
     @Body() body: Record<string, unknown>,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
@@ -366,6 +366,7 @@ export class ProductsController {
   }
 
   @Post('v2/import/inventory')
+  @Permissions('imports.write')
   createImportInventory(
     @Body() body: Record<string, unknown>,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
@@ -374,6 +375,7 @@ export class ProductsController {
   }
 
   @Get('v2/stocktaking/:id')
+  @Permissions('imports.read')
   getStocktakingById(
     @Param('id') id: string,
     @Query('page') page: string | undefined,
@@ -393,6 +395,7 @@ export class ProductsController {
   }
 
   @Get('v2/stocktaking-logs/:id')
+  @Permissions('imports.read')
   getStocktakingLogs(
     @Param('id') id: string,
     @Query('page') page: string | undefined,
@@ -410,6 +413,7 @@ export class ProductsController {
   }
 
   @Patch('v2/stocktaking/:id/set-product-by-barcode')
+  @Permissions('imports.write')
   setStocktakingProductByBarcode(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -423,6 +427,7 @@ export class ProductsController {
   }
 
   @Post('v2/stocktaking/:id/accept')
+  @Permissions('import-check')
   acceptStocktakingImport(
     @Param('id') id: string,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
@@ -431,7 +436,6 @@ export class ProductsController {
   }
 
   @Get('v2/product')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   findAllV2(
     @Query('page') page: string | undefined,
@@ -504,7 +508,6 @@ export class ProductsController {
   }
 
   @Get('v2/product-stats')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   getProductStats(
     @Query('search') search: string | undefined,
@@ -569,7 +572,6 @@ export class ProductsController {
   }
 
   @Get('v2/catalog/filter-options')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   getCatalogFilterOptions(
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
@@ -578,7 +580,6 @@ export class ProductsController {
   }
 
   @Get('v2/product/:id')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   getProductById(
     @Param('id') id: string,
@@ -589,7 +590,6 @@ export class ProductsController {
 
   @Post('v2/product')
   @HttpCode(200)
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   findAllV2Post(
     @Body() body: Record<string, unknown>,
@@ -648,7 +648,6 @@ export class ProductsController {
   }
 
   @Post('v2/product/create')
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   createCatalogProduct(
     @Body() body: Record<string, unknown>,
@@ -658,7 +657,6 @@ export class ProductsController {
   }
 
   @Post('v2/product/photo')
-  @UseGuards(PermissionsGuard)
   @Permissions('product-photo')
   @UseInterceptors(FileInterceptor('photo'))
   uploadProductPhoto(
@@ -675,7 +673,6 @@ export class ProductsController {
   }
 
   @Put('v2/product/:id')
-  @UseGuards(PermissionsGuard)
   @Permissions('product-edit')
   updateCatalogProduct(
     @Param('id') id: string,
@@ -686,7 +683,6 @@ export class ProductsController {
   }
 
   @Patch('v2/product/:id/identifiers')
-  @UseGuards(PermissionsGuard)
   @Permissions('product-edit')
   patchProductIdentifiers(
     @Param('id') id: string,
@@ -701,7 +697,6 @@ export class ProductsController {
   }
 
   @Put('v2/products/bulk/archive')
-  @UseGuards(PermissionsGuard)
   @Permissions('product-edit')
   bulkArchiveProducts(
     @Body() body: Record<string, unknown>,
@@ -711,7 +706,6 @@ export class ProductsController {
   }
 
   @Delete('v2/products/archived')
-  @UseGuards(PermissionsGuard)
   @Permissions('product-edit')
   clearAllArchivedProducts(
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
@@ -720,7 +714,6 @@ export class ProductsController {
   }
 
   @Delete('v2/products/bulk/delete')
-  @UseGuards(PermissionsGuard)
   @Permissions('product-edit')
   bulkDeleteProducts(
     @Body() body: Record<string, unknown>,
@@ -730,7 +723,6 @@ export class ProductsController {
   }
 
   @Post('v2/product/generate-sku')
-  @UseGuards(PermissionsGuard)
   @Permissions('product-create')
   generateSku(
     @Body() body: Record<string, unknown>,
@@ -740,7 +732,6 @@ export class ProductsController {
   }
 
   @Post('v2/product/generate-barcode')
-  @UseGuards(PermissionsGuard)
   @Permissions('product-create')
   generateBarcode(
     @Body() body: Record<string, unknown>,
@@ -750,6 +741,7 @@ export class ProductsController {
   }
 
   @Get('v2/product-movement/:id')
+  @Permissions('catalog-operations')
   getProductMovement(
     @Param('id') id: string,
     @Query('limit') limit: string | undefined,
@@ -779,6 +771,7 @@ export class ProductsController {
   }
 
   @Get('v2/stock-movements')
+  @Permissions('catalog-operations')
   listStockMovements(
     @Query('limit') limit: string | undefined,
     @Query('page') page: string | undefined,
@@ -805,7 +798,6 @@ export class ProductsController {
 
   @Post('v2/product-search-with-filters')
   @HttpCode(200)
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   findAllV2Catalog(
     @Body() body: Record<string, unknown>,
@@ -853,7 +845,6 @@ export class ProductsController {
 
   @Post('v2/product-search-stats-with-filters')
   @HttpCode(200)
-  @UseGuards(PermissionsGuard)
   @Permissions('catalog-operations')
   getProductStatsWithFilters(
     @Body() body: Record<string, unknown>,
@@ -896,6 +887,7 @@ export class ProductsController {
   }
 
   @Get('v2/transfer')
+  @Permissions('transfers.read')
   listTransfers(
     @Query('page') page: string | undefined,
     @Query('limit') limit: string | undefined,
@@ -911,6 +903,7 @@ export class ProductsController {
   }
 
   @Get('v2/transfer/:id')
+  @Permissions('transfers.read')
   getTransferById(
     @Param('id') id: string,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
@@ -919,6 +912,7 @@ export class ProductsController {
   }
 
   @Post('v2/transfer')
+  @Permissions('transfer-create')
   createTransfer(
     @Body() body: Record<string, unknown>,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
@@ -927,6 +921,7 @@ export class ProductsController {
   }
 
   @Get('v2/transfer-products/:id')
+  @Permissions('transfers.read')
   getTransferProducts(
     @Param('id') id: string,
     @Query('search') search: string | undefined,
@@ -952,6 +947,7 @@ export class ProductsController {
   }
 
   @Get('v2/transfer-items/:id')
+  @Permissions('transfers.read')
   getTransferItems(
     @Param('id') id: string,
     @Query('search') search: string | undefined,
@@ -971,6 +967,7 @@ export class ProductsController {
   }
 
   @Post('v2/transfer/:id/items')
+  @Permissions('transfer-create')
   upsertTransferItem(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -980,6 +977,7 @@ export class ProductsController {
   }
 
   @Post('v2/transfer/:id/send')
+  @Permissions('transfer-create')
   @HttpCode(200)
   sendTransfer(
     @Param('id') id: string,
@@ -989,6 +987,7 @@ export class ProductsController {
   }
 
   @Post('v2/transfer/:id/accept')
+  @Permissions('transfer-check')
   @HttpCode(200)
   acceptTransfer(
     @Param('id') id: string,
@@ -998,6 +997,7 @@ export class ProductsController {
   }
 
   @Post('v2/transfer/:id/accept-verified')
+  @Permissions('transfer-check')
   @HttpCode(200)
   acceptTransferVerified(
     @Param('id') id: string,
@@ -1012,6 +1012,7 @@ export class ProductsController {
   }
 
   @Post('v2/transfer/:id/cancel')
+  @Permissions('transfer-create')
   @HttpCode(200)
   cancelTransfer(
     @Param('id') id: string,

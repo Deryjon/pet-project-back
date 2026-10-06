@@ -5,21 +5,9 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { getPermissionIdsBySlug } from '../../roles/roles.permissions';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PERMISSIONS_KEY } from '../permissions.decorator';
-
-const LEGACY_PERMISSION_ALIASES: Record<string, string[]> = {
-  'sales.read': ['all-sales', 'orders', 'show-all-sales', 'show_deleted_orders', 'orders-other-shops'],
-  'orders.read': ['new-sale', 'order-new', 'all-sales', 'orders', 'show-all-sales', 'show_deleted_orders', 'orders-other-shops'],
-  'orders.create': ['new-sale', 'order-new'],
-  'orders.cancel': ['new-sale', 'order-new', 'all-sales'],
-  'orders.complete': ['new-sale', 'order-new'],
-  'payments.create': ['new-sale', 'order-new'],
-  'payment-types.read': ['payment-types', 'new-sale', 'order-new'],
-  'cashboxes.read': ['cashbox-list', 'new-sale', 'order-new'],
-  'cashboxes.manage': ['cashbox-list', 'cashbox-create'],
-};
+import { loadRoleAccess, roleAccessAllows } from '../role-permissions';
 
 @Injectable()
 export class PermissionsGuard implements CanActivate {
@@ -47,67 +35,14 @@ export class PermissionsGuard implements CanActivate {
       throw new ForbiddenException('Missing role permissions');
     }
 
-    const role = await this.prisma.role.findFirst({
-      where: {
-        id: roleId,
-        companyId: user.companyId,
-        deletedAt: 0,
-      },
-      select: {
-        isAdmin: true,
-      },
-    });
+    const access = await loadRoleAccess(this.prisma, roleId, user.companyId);
 
-    if (!role) throw new ForbiddenException('Role is not available');
+    if (!access) throw new ForbiddenException('Role is not available');
 
-    if (role.isAdmin) {
-      return true;
-    }
-
-    const resolvedPermissions = requiredPermissions.map((permission) => ({
-      key: permission,
-      permissionIds: this.resolvePermissionIds(permission),
-    }));
-
-    const activePermissions = await this.prisma.rolePermission.findMany({
-      where: {
-        roleId,
-        isActive: true,
-      },
-      select: {
-        permissionId: true,
-      },
-    });
-    const activePermissionIds = new Set(
-      activePermissions.map((item) => item.permissionId),
-    );
-
-    const hasAllPermissions = resolvedPermissions.every((permission) =>
-      permission.permissionIds.some((permissionId) =>
-        activePermissionIds.has(permissionId),
-      ),
-    );
-
-    if (!hasAllPermissions) {
+    if (!roleAccessAllows(access, requiredPermissions)) {
       throw new ForbiddenException('Insufficient permissions');
     }
 
     return true;
-  }
-
-  private resolvePermissionIds(permission: string) {
-    const normalizedPermission = permission.trim().toLowerCase();
-    const aliasPermissions = LEGACY_PERMISSION_ALIASES[
-      normalizedPermission
-    ] ?? [normalizedPermission];
-    const resolvedPermissionIds = aliasPermissions.flatMap((item) =>
-      getPermissionIdsBySlug(item),
-    );
-
-    if (resolvedPermissionIds.length > 0) {
-      return [...new Set(resolvedPermissionIds)];
-    }
-
-    return [permission.trim()];
   }
 }

@@ -5,7 +5,7 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { Prisma, ProductSeason } from '@prisma/client';
+import { Prisma, ProductSeason, TransferStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import { extname, join } from 'path';
@@ -17,6 +17,7 @@ import {
   normalizeProductPhotoForStorage,
   resolveProductPhotoUrl,
 } from '../common/product-photo.util';
+import { runSerializableTransaction } from '../common/serializable-transaction';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { DEFAULT_PRODUCT_COLORS, SIZE_GRID_PRESETS } from './size-grid-presets';
@@ -832,7 +833,9 @@ export class ProductsService {
       ),
       skipDuplicates: true,
     });
-    if ((await this.prisma.productColor.count({ where: { companyId } })) === 0) {
+    if (
+      (await this.prisma.productColor.count({ where: { companyId } })) === 0
+    ) {
       await this.prisma.productColor.createMany({
         data: DEFAULT_PRODUCT_COLORS.map((color) => ({ companyId, ...color })),
         skipDuplicates: true,
@@ -855,7 +858,9 @@ export class ProductsService {
       key: grid.key,
       name: grid.name,
       sizes: grid.sizes.flatMap((name) => {
-        const size = sizes.find((row) => row.type === grid.type && row.name === name);
+        const size = sizes.find(
+          (row) => row.type === grid.type && row.name === name,
+        );
         if (!size) return [];
         presetSizeKeys.add(size.id);
         return [{ id: size.id, name: size.name }];
@@ -5926,8 +5931,12 @@ export class ProductsService {
       throw new BadRequestException('Transfer does not contain any items');
     }
 
-    await this.prisma.$transaction(async (tx) => {
-      const db = tx as any;
+    await runSerializableTransaction(this.prisma, async (tx) => {
+      // Claim the status first: of two concurrent sends only one may move stock.
+      await this.claimTransferStatus(tx, transfer.id, 'DRAFT', {
+        status: 'SENT',
+        sentAt: new Date(),
+      });
 
       for (const item of transfer.items) {
         const quantity = Number(item.quantity ?? 0);
@@ -5946,31 +5955,28 @@ export class ProductsService {
             );
           }
         }
-        const departureStock = await tx.productStock.findFirst({
+        // Atomic decrement so a concurrent sale's write is never overwritten.
+        const decremented = await tx.productStock.updateMany({
+          where: {
+            productId: item.productId,
+            branchCode: transfer.departureShop.branchCode,
+            quantity: { gte: quantity },
+          },
+          data: { quantity: { decrement: quantity } },
+        });
+        if (decremented.count !== 1) {
+          throw new BadRequestException(
+            `Not enough stock for product ${item.product.name}`,
+          );
+        }
+        const departureStock = await tx.productStock.findFirstOrThrow({
           where: {
             productId: item.productId,
             branchCode: transfer.departureShop.branchCode,
           },
         });
-
-        const beforeQuantity = departureStock?.quantity ?? 0;
-
-        if (!departureStock || beforeQuantity < quantity) {
-          throw new BadRequestException(
-            `Not enough stock for product ${item.product.name}`,
-          );
-        }
-
-        const afterQuantity = beforeQuantity - quantity;
-
-        await tx.productStock.update({
-          where: {
-            id: departureStock.id,
-          },
-          data: {
-            quantity: afterQuantity,
-          },
-        });
+        const afterQuantity = departureStock.quantity;
+        const beforeQuantity = afterQuantity + quantity;
 
         await this.syncProductTotalQuantity(tx, item.productId);
         await this.createStockMovementRecord(tx, {
@@ -5997,16 +6003,6 @@ export class ProductsService {
             departureStock.purchasePrice ?? item.product.purchasePrice ?? 0,
         });
       }
-
-      await db.transfer.update({
-        where: {
-          id: transfer.id,
-        },
-        data: {
-          status: 'SENT',
-          sentAt: new Date(),
-        },
-      });
     });
 
     return this.getTransferById(id, requestContext);
@@ -6023,126 +6019,17 @@ export class ProductsService {
       throw new BadRequestException('Only sent transfers can be accepted');
     }
 
-    await this.prisma.$transaction(async (tx) => {
-      const db = tx as any;
+    await runSerializableTransaction(this.prisma, async (tx) => {
+      await this.claimTransferStatus(tx, transfer.id, 'SENT', {
+        status: 'ACCEPTED',
+        acceptedAt: new Date(),
+        acceptedById: context.userId,
+      });
 
       for (const item of transfer.items) {
         const quantity = Number(item.quantity ?? 0);
-        if (item.variantId) {
-          const sourceVariantStock = item.variant?.stocks?.find(
-            (stock: any) => stock.shopId === transfer.departureShopId,
-          );
-          await tx.productVariantStock.upsert({
-            where: {
-              variantId_shopId: {
-                variantId: item.variantId,
-                shopId: transfer.arrivalShopId,
-              },
-            },
-            create: {
-              companyId: transfer.companyId,
-              variantId: item.variantId,
-              shopId: transfer.arrivalShopId,
-              branchCode: transfer.arrivalShop.branchCode,
-              quantity,
-              purchasePrice:
-                sourceVariantStock?.purchasePrice ??
-                item.variant?.purchasePrice ??
-                0,
-              salePrice:
-                sourceVariantStock?.salePrice ?? item.variant?.salePrice ?? 0,
-            },
-            update: { quantity: { increment: quantity } },
-          });
-        }
-        const arrivalStock = await tx.productStock.findFirst({
-          where: {
-            productId: item.productId,
-            branchCode: transfer.arrivalShop.branchCode,
-          },
-        });
-        const beforeQuantity = arrivalStock?.quantity ?? 0;
-        const afterQuantity = beforeQuantity + quantity;
-        const departureStock = item.product.stocks.find(
-          (stock: any) =>
-            stock.branchCode === transfer.departureShop.branchCode,
-        );
-        const supplyPrice =
-          arrivalStock?.purchasePrice ??
-          departureStock?.purchasePrice ??
-          item.product.purchasePrice ??
-          0;
-        const retailPrice =
-          arrivalStock?.salePrice ??
-          departureStock?.salePrice ??
-          item.product.salePrice ??
-          0;
-
-        if (arrivalStock) {
-          await tx.productStock.update({
-            where: {
-              id: arrivalStock.id,
-            },
-            data: {
-              quantity: afterQuantity,
-              purchasePrice: supplyPrice,
-              salePrice: retailPrice,
-            },
-          });
-        } else {
-          await tx.productStock.create({
-            data: {
-              productId: item.productId,
-              shopId: transfer.arrivalShop.id,
-              branchCode: transfer.arrivalShop.branchCode,
-              quantity,
-              purchasePrice: supplyPrice,
-              salePrice: retailPrice,
-            },
-          });
-        }
-
-        await db.transferItem.update({
-          where: {
-            id: item.id,
-          },
-          data: {
-            arrivedQuantity: quantity,
-          },
-        });
-
-        await this.syncProductTotalQuantity(tx, item.productId);
-        await this.createStockMovementRecord(tx, {
-          companyId: transfer.companyId,
-          shopId: transfer.arrivalShopId,
-          productId: item.productId,
-          variantId: item.variantId,
-          type: 'TRANSFER',
-          quantity,
-          beforeQuantity,
-          afterQuantity,
-          createdById: context.userId,
-          externalId: String(transfer.externalId ?? ''),
-          fromShopId: transfer.departureShopId,
-          toShopId: transfer.arrivalShopId,
-          supplyPrice,
-          retailPrice,
-          newRetailPrice: retailPrice,
-          fromRetailPrice: retailPrice,
-          fromSupplyPrice: supplyPrice,
-        });
+        await this.receiveTransferItem(tx, transfer, item, quantity, context);
       }
-
-      await db.transfer.update({
-        where: {
-          id: transfer.id,
-        },
-        data: {
-          status: 'ACCEPTED',
-          acceptedAt: new Date(),
-          acceptedById: context.userId,
-        },
-      });
     });
 
     return this.getTransferById(id, requestContext);
@@ -6174,124 +6061,22 @@ export class ProductsService {
       }
     }
 
-    await this.prisma.$transaction(async (tx) => {
-      const db = tx as any;
+    await runSerializableTransaction(this.prisma, async (tx) => {
+      await this.claimTransferStatus(tx, transfer.id, 'SENT', {
+        status: 'ACCEPTED',
+        acceptedAt: new Date(),
+        acceptedById: context.userId,
+      });
 
       for (const item of transfer.items) {
-        // Use provided arrived quantity, fallback to sent quantity
+        const sentQty = Number(item.quantity ?? 0);
+        // Use provided arrived quantity, fallback to sent quantity. More than
+        // was sent cannot arrive — that would create stock out of nothing.
         const arrivedQty = arrivedMap.has(item.id)
-          ? arrivedMap.get(item.id)!
-          : Number(item.quantity ?? 0);
-
-        if (item.variantId && arrivedQty > 0) {
-          const sourceVariantStock = item.variant?.stocks?.find(
-            (stock: any) => stock.shopId === transfer.departureShopId,
-          );
-          await tx.productVariantStock.upsert({
-            where: {
-              variantId_shopId: {
-                variantId: item.variantId,
-                shopId: transfer.arrivalShopId,
-              },
-            },
-            create: {
-              companyId: transfer.companyId,
-              variantId: item.variantId,
-              shopId: transfer.arrivalShopId,
-              branchCode: transfer.arrivalShop.branchCode,
-              quantity: arrivedQty,
-              purchasePrice:
-                sourceVariantStock?.purchasePrice ??
-                item.variant?.purchasePrice ??
-                0,
-              salePrice:
-                sourceVariantStock?.salePrice ?? item.variant?.salePrice ?? 0,
-            },
-            update: { quantity: { increment: arrivedQty } },
-          });
-        }
-
-        const arrivalStock = await tx.productStock.findFirst({
-          where: {
-            productId: item.productId,
-            branchCode: transfer.arrivalShop.branchCode,
-          },
-        });
-        const beforeQuantity = arrivalStock?.quantity ?? 0;
-        const afterQuantity = beforeQuantity + arrivedQty;
-        const departureStock = item.product.stocks?.find(
-          (s: any) => s.branchCode === transfer.departureShop.branchCode,
-        );
-        const supplyPrice =
-          arrivalStock?.purchasePrice ??
-          departureStock?.purchasePrice ??
-          item.product.purchasePrice ??
-          0;
-        const retailPrice =
-          arrivalStock?.salePrice ??
-          departureStock?.salePrice ??
-          item.product.salePrice ??
-          0;
-
-        if (arrivalStock) {
-          await tx.productStock.update({
-            where: { id: arrivalStock.id },
-            data: {
-              quantity: afterQuantity,
-              purchasePrice: supplyPrice,
-              salePrice: retailPrice,
-            },
-          });
-        } else {
-          await tx.productStock.create({
-            data: {
-              productId: item.productId,
-              shopId: transfer.arrivalShop.id,
-              branchCode: transfer.arrivalShop.branchCode,
-              quantity: arrivedQty,
-              purchasePrice: supplyPrice,
-              salePrice: retailPrice,
-            },
-          });
-        }
-
-        await db.transferItem.update({
-          where: { id: item.id },
-          data: { arrivedQuantity: arrivedQty },
-        });
-
-        if (arrivedQty > 0) {
-          await this.syncProductTotalQuantity(tx, item.productId);
-          await this.createStockMovementRecord(tx, {
-            companyId: transfer.companyId,
-            shopId: transfer.arrivalShopId,
-            productId: item.productId,
-            variantId: item.variantId,
-            type: 'TRANSFER',
-            quantity: arrivedQty,
-            beforeQuantity,
-            afterQuantity,
-            createdById: context.userId,
-            externalId: String(transfer.externalId ?? ''),
-            fromShopId: transfer.departureShopId,
-            toShopId: transfer.arrivalShopId,
-            supplyPrice,
-            retailPrice,
-            newRetailPrice: retailPrice,
-            fromRetailPrice: retailPrice,
-            fromSupplyPrice: supplyPrice,
-          });
-        }
+          ? Math.min(arrivedMap.get(item.id)!, sentQty)
+          : sentQty;
+        await this.receiveTransferItem(tx, transfer, item, arrivedQty, context);
       }
-
-      await db.transfer.update({
-        where: { id: transfer.id },
-        data: {
-          status: 'ACCEPTED',
-          acceptedAt: new Date(),
-          acceptedById: context.userId,
-        },
-      });
     });
 
     return this.getTransferById(id, requestContext);
@@ -6308,8 +6093,12 @@ export class ProductsService {
       );
     }
 
-    await this.prisma.$transaction(async (tx) => {
-      const db = tx as any;
+    await runSerializableTransaction(this.prisma, async (tx) => {
+      // Claim from the status we validated: a concurrent send/accept/cancel
+      // changes it, and then the stock must not be restored a second time.
+      await this.claimTransferStatus(tx, transfer.id, transfer.status, {
+        status: 'CANCELLED',
+      });
 
       // If already sent — restore departure shop stock
       if (transfer.status === 'SENT') {
@@ -6324,43 +6113,157 @@ export class ProductsService {
               data: { quantity: { increment: quantity } },
             });
           }
-          const departureStock = await tx.productStock.findFirst({
+          await tx.productStock.upsert({
             where: {
-              productId: item.productId,
-              branchCode: transfer.departureShop.branchCode,
-            },
-          });
-          const beforeQuantity = departureStock?.quantity ?? 0;
-          const afterQuantity = beforeQuantity + quantity;
-
-          if (departureStock) {
-            await tx.productStock.update({
-              where: { id: departureStock.id },
-              data: { quantity: afterQuantity },
-            });
-          } else {
-            await tx.productStock.create({
-              data: {
+              productId_branchCode: {
                 productId: item.productId,
-                shopId: transfer.departureShop.id,
                 branchCode: transfer.departureShop.branchCode,
-                quantity,
-                purchasePrice: item.product.purchasePrice ?? 0,
-                salePrice: item.product.salePrice ?? 0,
               },
-            });
-          }
+            },
+            create: {
+              productId: item.productId,
+              shopId: transfer.departureShop.id,
+              branchCode: transfer.departureShop.branchCode,
+              quantity,
+              purchasePrice: item.product.purchasePrice ?? 0,
+              salePrice: item.product.salePrice ?? 0,
+            },
+            update: { quantity: { increment: quantity } },
+          });
           await this.syncProductTotalQuantity(tx, item.productId);
         }
       }
-
-      await db.transfer.update({
-        where: { id: transfer.id },
-        data: { status: 'CANCELLED' },
-      });
     });
 
     return this.getTransferById(id, requestContext);
+  }
+
+  /** Moves the transfer to its next status only if no concurrent request did. */
+  private async claimTransferStatus(
+    tx: Prisma.TransactionClient,
+    transferId: string,
+    expectedStatus: TransferStatus,
+    data: Prisma.TransferUncheckedUpdateManyInput,
+  ) {
+    const claimed = await tx.transfer.updateMany({
+      where: { id: transferId, status: expectedStatus },
+      data,
+    });
+    if (claimed.count !== 1) {
+      throw new BadRequestException(
+        'Transfer status has already been changed by another request',
+      );
+    }
+  }
+
+  private async receiveTransferItem(
+    tx: Prisma.TransactionClient,
+    transfer: any,
+    item: any,
+    quantity: number,
+    context: CompanyRequestContext,
+  ) {
+    if (item.variantId && quantity > 0) {
+      const sourceVariantStock = item.variant?.stocks?.find(
+        (stock: any) => stock.shopId === transfer.departureShopId,
+      );
+      await tx.productVariantStock.upsert({
+        where: {
+          variantId_shopId: {
+            variantId: item.variantId,
+            shopId: transfer.arrivalShopId,
+          },
+        },
+        create: {
+          companyId: transfer.companyId,
+          variantId: item.variantId,
+          shopId: transfer.arrivalShopId,
+          branchCode: transfer.arrivalShop.branchCode,
+          quantity,
+          purchasePrice:
+            sourceVariantStock?.purchasePrice ??
+            item.variant?.purchasePrice ??
+            0,
+          salePrice:
+            sourceVariantStock?.salePrice ?? item.variant?.salePrice ?? 0,
+        },
+        update: { quantity: { increment: quantity } },
+      });
+    }
+
+    // Prices only: the quantity itself is incremented atomically below.
+    const arrivalStock = await tx.productStock.findFirst({
+      where: {
+        productId: item.productId,
+        branchCode: transfer.arrivalShop.branchCode,
+      },
+      select: { purchasePrice: true, salePrice: true },
+    });
+    const departureStock = item.product.stocks?.find(
+      (stock: any) => stock.branchCode === transfer.departureShop.branchCode,
+    );
+    const supplyPrice =
+      arrivalStock?.purchasePrice ??
+      departureStock?.purchasePrice ??
+      item.product.purchasePrice ??
+      0;
+    const retailPrice =
+      arrivalStock?.salePrice ??
+      departureStock?.salePrice ??
+      item.product.salePrice ??
+      0;
+
+    const updatedStock = await tx.productStock.upsert({
+      where: {
+        productId_branchCode: {
+          productId: item.productId,
+          branchCode: transfer.arrivalShop.branchCode,
+        },
+      },
+      create: {
+        productId: item.productId,
+        shopId: transfer.arrivalShop.id,
+        branchCode: transfer.arrivalShop.branchCode,
+        quantity,
+        purchasePrice: supplyPrice,
+        salePrice: retailPrice,
+      },
+      update: {
+        quantity: { increment: quantity },
+        purchasePrice: supplyPrice,
+        salePrice: retailPrice,
+      },
+    });
+    const afterQuantity = updatedStock.quantity;
+    const beforeQuantity = afterQuantity - quantity;
+
+    await tx.transferItem.update({
+      where: { id: item.id },
+      data: { arrivedQuantity: quantity },
+    });
+
+    if (quantity > 0) {
+      await this.syncProductTotalQuantity(tx, item.productId);
+      await this.createStockMovementRecord(tx, {
+        companyId: transfer.companyId,
+        shopId: transfer.arrivalShopId,
+        productId: item.productId,
+        variantId: item.variantId,
+        type: 'TRANSFER',
+        quantity,
+        beforeQuantity,
+        afterQuantity,
+        createdById: context.userId,
+        externalId: String(transfer.externalId ?? ''),
+        fromShopId: transfer.departureShopId,
+        toShopId: transfer.arrivalShopId,
+        supplyPrice,
+        retailPrice,
+        newRetailPrice: retailPrice,
+        fromRetailPrice: retailPrice,
+        fromSupplyPrice: supplyPrice,
+      });
+    }
   }
 
   private buildTransferScope(context: CompanyRequestContext) {
@@ -6919,7 +6822,9 @@ export class ProductsService {
     existing: Array<{ id: string; barcode: string | null; sku: string | null }>,
   ) {
     for (const item of items) {
-      const current = item.id ? existing.find((row) => row.id === item.id) : undefined;
+      const current = item.id
+        ? existing.find((row) => row.id === item.id)
+        : undefined;
       item.barcode ??= current?.barcode ?? undefined;
       item.sku ??= current?.sku ?? undefined;
     }

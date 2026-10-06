@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -12,6 +13,7 @@ import {
   CompanyRequestContext,
   requireCompanyContext,
 } from '../auth/request-context';
+import { contextHasPermissions } from '../auth/role-permissions';
 import {
   LOYALTY_CASHBACK_PAYMENT_METHOD,
   LOYALTY_CASHBACK_PAYMENT_NAME,
@@ -641,10 +643,34 @@ export class SalesService {
               some: {
                 isActive: true,
                 OR: [
-                  { sku: { contains: args.search, mode: 'insensitive' as const } },
-                  { barcode: { contains: args.search, mode: 'insensitive' as const } },
-                  { color: { name: { contains: args.search, mode: 'insensitive' as const } } },
-                  { size: { name: { contains: args.search, mode: 'insensitive' as const } } },
+                  {
+                    sku: {
+                      contains: args.search,
+                      mode: 'insensitive' as const,
+                    },
+                  },
+                  {
+                    barcode: {
+                      contains: args.search,
+                      mode: 'insensitive' as const,
+                    },
+                  },
+                  {
+                    color: {
+                      name: {
+                        contains: args.search,
+                        mode: 'insensitive' as const,
+                      },
+                    },
+                  },
+                  {
+                    size: {
+                      name: {
+                        contains: args.search,
+                        mode: 'insensitive' as const,
+                      },
+                    },
+                  },
                 ],
               },
             },
@@ -659,7 +685,10 @@ export class SalesService {
         where: { id: context.companyId },
         select: { productFeatureSettings: true },
       });
-      const featureSettings = company?.productFeatureSettings as Record<string, unknown> | null;
+      const featureSettings = company?.productFeatureSettings as Record<
+        string,
+        unknown
+      > | null;
       if (featureSettings?.bundles !== true) {
         // Legacy products may not have productType populated. They are regular
         // goods and must remain searchable when the optional bundles feature is
@@ -785,11 +814,17 @@ export class SalesService {
                 requestedShopId,
               ),
             )
-          : [this.toNewSaleProductResponse(product, branchCode, context, requestedShopId)],
+          : [
+              this.toNewSaleProductResponse(
+                product,
+                branchCode,
+                context,
+                requestedShopId,
+              ),
+            ],
       )
       .filter(
-        (product) =>
-          product.stock === null || Number(product.stock ?? 0) > 0,
+        (product) => product.stock === null || Number(product.stock ?? 0) > 0,
       );
     const totals = normalizedProducts.reduce(
       (acc, product) => {
@@ -1396,7 +1431,11 @@ export class SalesService {
       throw new BadRequestException('product_id is required');
     }
 
-    if (!salePrice) {
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new BadRequestException('quantity must be greater than 0');
+    }
+
+    if (salePrice === undefined) {
       throw new BadRequestException('sale_price is required');
     }
 
@@ -1429,9 +1468,14 @@ export class SalesService {
         where: { id: context.companyId },
         select: { productFeatureSettings: true },
       });
-      const settings = company?.productFeatureSettings as Record<string, unknown> | null;
+      const settings = company?.productFeatureSettings as Record<
+        string,
+        unknown
+      > | null;
       if (settings?.bundles !== true) {
-        throw new BadRequestException('Функция комплектов отключена в настройках компании');
+        throw new BadRequestException(
+          'Функция комплектов отключена в настройках компании',
+        );
       }
     }
 
@@ -1452,7 +1496,15 @@ export class SalesService {
     if (!variant) {
       await this.assertNoColourSizeVariants(productId, context.companyId);
     }
-    const itemPurchasePrice = variant?.purchasePrice ?? product.purchasePrice ?? 0;
+    await this.assertDraftItemSalePrice(
+      salePrice,
+      product,
+      variant,
+      sale.branchCode,
+      context,
+    );
+    const itemPurchasePrice =
+      variant?.purchasePrice ?? product.purchasePrice ?? 0;
     const itemName = variant
       ? `${product.name} — ${[variant.color?.name, variant.size?.name].filter(Boolean).join(' / ')}`
       : product.name;
@@ -1461,7 +1513,10 @@ export class SalesService {
           productId: component.componentProductId,
           variantId: component.componentVariantId,
           quantity: Number(component.quantity),
-          salePrice: component.componentVariant?.salePrice ?? component.componentProduct.salePrice ?? 0,
+          salePrice:
+            component.componentVariant?.salePrice ??
+            component.componentProduct.salePrice ??
+            0,
         }))
       : null;
 
@@ -1486,12 +1541,9 @@ export class SalesService {
           finalPrice: newQuantity * salePrice,
           supplyPriceAtSale: newQuantity * itemPurchasePrice,
           profitAtSale:
-            newQuantity * salePrice -
-            newQuantity * itemPurchasePrice,
+            newQuantity * salePrice - newQuantity * itemPurchasePrice,
           markupAtSale:
-            itemPurchasePrice > 0
-              ? salePrice / itemPurchasePrice
-              : null,
+            itemPurchasePrice > 0 ? salePrice / itemPurchasePrice : null,
           stockComposition: stockComposition ?? undefined,
         },
       });
@@ -1511,12 +1563,9 @@ export class SalesService {
           retailPriceAtSale: quantity * salePrice,
           finalPrice: quantity * salePrice,
           supplyPriceAtSale: quantity * itemPurchasePrice,
-          profitAtSale:
-            quantity * salePrice - quantity * itemPurchasePrice,
+          profitAtSale: quantity * salePrice - quantity * itemPurchasePrice,
           markupAtSale:
-            itemPurchasePrice > 0
-              ? salePrice / itemPurchasePrice
-              : null,
+            itemPurchasePrice > 0 ? salePrice / itemPurchasePrice : null,
           stockComposition: stockComposition ?? undefined,
         },
       });
@@ -1588,7 +1637,8 @@ export class SalesService {
       throw new BadRequestException('quantity must be greater than 0');
     }
 
-    const salePrice = this.toNumber(body.sale_price) ?? Number(item.salePrice);
+    const requestedSalePrice = this.toNumber(body.sale_price);
+    const salePrice = requestedSalePrice ?? Number(item.salePrice);
     const product = item.productId
       ? await this.prisma.product.findFirst({
           where: this.buildProductScope(
@@ -1599,6 +1649,24 @@ export class SalesService {
           ),
         })
       : null;
+    if (
+      requestedSalePrice !== undefined &&
+      requestedSalePrice !== Number(item.salePrice)
+    ) {
+      const variant = item.variantId
+        ? await this.prisma.productVariant.findFirst({
+            where: { id: item.variantId, companyId: context.companyId },
+            select: { id: true, salePrice: true },
+          })
+        : null;
+      await this.assertDraftItemSalePrice(
+        requestedSalePrice,
+        product,
+        variant,
+        sale.branchCode,
+        context,
+      );
+    }
     const purchasePrice = product?.purchasePrice ?? 0;
 
     await this.prisma.saleItem.update({
@@ -1618,6 +1686,85 @@ export class SalesService {
 
     await this.recalculateSale(id);
     return this.findDraft(id, requestContext);
+  }
+
+  // The client sends the unit price, so it is only trusted when it matches the
+  // shop's retail price (or the product is free-price). Any other price is a
+  // manual discount/markup and needs the same right as /discount.
+  private async assertDraftItemSalePrice(
+    salePrice: number,
+    product: {
+      id: number;
+      salePrice: number | null;
+      metadata: Prisma.JsonValue;
+    } | null,
+    variant: { id: string; salePrice: number | null } | null,
+    branchCode: string | null,
+    context: CompanyRequestContext,
+  ) {
+    if (!Number.isFinite(salePrice) || salePrice < 0) {
+      throw new BadRequestException('sale_price must be zero or greater');
+    }
+
+    if (product && salePrice > 0) {
+      const metadata =
+        product.metadata &&
+        typeof product.metadata === 'object' &&
+        !Array.isArray(product.metadata)
+          ? (product.metadata as Record<string, unknown>)
+          : {};
+      if (metadata.free_price === true || metadata.free_price === 'true') {
+        return;
+      }
+
+      const retailPrices = await this.resolveRetailUnitPrices(
+        product,
+        variant,
+        branchCode,
+      );
+      // The POS rounds prices to whole sums before sending them.
+      if (retailPrices.some((price) => Math.abs(price - salePrice) <= 0.5)) {
+        return;
+      }
+    }
+
+    const canChangePrice = await contextHasPermissions(this.prisma, context, [
+      'manual-discount',
+    ]);
+    if (!canChangePrice) {
+      throw new ForbiddenException(
+        'Изменение цены товара в чеке требует права на ручные скидки',
+      );
+    }
+  }
+
+  private async resolveRetailUnitPrices(
+    product: { id: number; salePrice: number | null },
+    variant: { id: string; salePrice: number | null } | null,
+    branchCode: string | null,
+  ) {
+    if (variant) {
+      const variantStock = branchCode
+        ? await this.prisma.productVariantStock.findFirst({
+            where: { variantId: variant.id, branchCode },
+            select: { salePrice: true },
+          })
+        : null;
+      const variantPrices = [variantStock?.salePrice, variant.salePrice].filter(
+        (price): price is number => price !== null && price !== undefined,
+      );
+      if (variantPrices.length) {
+        return variantPrices.map(Number);
+      }
+    }
+
+    const stock = branchCode
+      ? await this.prisma.productStock.findFirst({
+          where: { productId: product.id, branchCode },
+          select: { salePrice: true },
+        })
+      : null;
+    return [Number(stock?.salePrice ?? product.salePrice ?? 0)];
   }
 
   async updateDiscount(
@@ -2099,7 +2246,11 @@ export class SalesService {
           await this.undoSaleCashback(tx, adjustment);
         }
         await this.refreshBaseSaleStatus(sale.parentSaleId, tx);
-        await this.refreshClientSalesAggregates(tx, sale.companyId, sale.clientId);
+        await this.refreshClientSalesAggregates(
+          tx,
+          sale.companyId,
+          sale.clientId,
+        );
       });
 
       return {
@@ -2488,13 +2639,16 @@ export class SalesService {
       const returnKey = requestedVariantId ?? `product:${productId}`;
       const availableQuantity =
         returnableQuantities.get(returnKey) ??
-        (returnableQuantities as unknown as Map<number, number>).get(productId) ??
+        (returnableQuantities as unknown as Map<number, number>).get(
+          productId,
+        ) ??
         0;
       const alreadyRequestedQuantity =
         normalizedItems.find(
-          (item) => item.productId === productId && item.variantId === requestedVariantId,
-        )
-          ?.quantity ?? 0;
+          (item) =>
+            item.productId === productId &&
+            item.variantId === requestedVariantId,
+        )?.quantity ?? 0;
 
       if (alreadyRequestedQuantity + quantity > availableQuantity) {
         throw new BadRequestException(
@@ -2587,7 +2741,12 @@ export class SalesService {
 
       const variant = variantId
         ? await this.prisma.productVariant.findFirst({
-            where: { id: variantId, productId, companyId: context.companyId, isActive: true },
+            where: {
+              id: variantId,
+              productId,
+              companyId: context.companyId,
+              isActive: true,
+            },
             include: { color: true, size: true },
           })
         : null;
@@ -2600,8 +2759,12 @@ export class SalesService {
 
       const stock = originalSale.branchCode
         ? variantId
-          ? await this.prisma.productVariantStock.findFirst({ where: { variantId, branchCode: originalSale.branchCode } })
-          : await this.prisma.productStock.findFirst({ where: { productId, branchCode: originalSale.branchCode } })
+          ? await this.prisma.productVariantStock.findFirst({
+              where: { variantId, branchCode: originalSale.branchCode },
+            })
+          : await this.prisma.productStock.findFirst({
+              where: { productId, branchCode: originalSale.branchCode },
+            })
         : null;
 
       const requestedSalePrice = this.toNumber(record.sale_price);
@@ -2625,14 +2788,26 @@ export class SalesService {
         );
       }
 
-      const bundleAvailability = product.bundleComponents.length && originalSale.branchCode
-        ? Math.min(...product.bundleComponents.map((component) => {
-            const componentStock = (component.componentVariant?.stocks ?? component.componentProduct.stocks)
-              .find((candidate) => candidate.branchCode === originalSale.branchCode);
-            return Math.floor(Number(componentStock?.quantity ?? 0) / Number(component.quantity));
-          }))
-        : null;
-      const availableQuantity = bundleAvailability ?? stock?.quantity ?? product.quantity ?? 0;
+      const bundleAvailability =
+        product.bundleComponents.length && originalSale.branchCode
+          ? Math.min(
+              ...product.bundleComponents.map((component) => {
+                const componentStock = (
+                  component.componentVariant?.stocks ??
+                  component.componentProduct.stocks
+                ).find(
+                  (candidate) =>
+                    candidate.branchCode === originalSale.branchCode,
+                );
+                return Math.floor(
+                  Number(componentStock?.quantity ?? 0) /
+                    Number(component.quantity),
+                );
+              }),
+            )
+          : null;
+      const availableQuantity =
+        bundleAvailability ?? stock?.quantity ?? product.quantity ?? 0;
       const quantityReturnedInSameExchange = returnItems
         .filter((item) => item.productId === productId)
         .reduce((sum, item) => sum + item.quantity, 0);
@@ -2670,7 +2845,10 @@ export class SalesService {
               productId: component.componentProductId,
               variantId: component.componentVariantId,
               quantity: Number(component.quantity),
-              salePrice: component.componentVariant?.salePrice ?? component.componentProduct.salePrice ?? 0,
+              salePrice:
+                component.componentVariant?.salePrice ??
+                component.componentProduct.salePrice ??
+                0,
             }))
           : null,
       });
@@ -2681,7 +2859,11 @@ export class SalesService {
 
   private async getReturnableQuantities(originalSale: {
     id: number;
-    items: Array<{ productId: number | null; variantId?: string | null; quantity: number }>;
+    items: Array<{
+      productId: number | null;
+      variantId?: string | null;
+      quantity: number;
+    }>;
   }) {
     const returns = await this.prisma.sale.findMany({
       where: {
@@ -2701,7 +2883,10 @@ export class SalesService {
         }
 
         const key = item.variantId ?? `product:${item.productId}`;
-        returnedMap.set(key, (returnedMap.get(key) ?? 0) + Number(item.quantity));
+        returnedMap.set(
+          key,
+          (returnedMap.get(key) ?? 0) + Number(item.quantity),
+        );
       }
     }
 
@@ -2712,7 +2897,10 @@ export class SalesService {
       }
 
       const key = item.variantId ?? `product:${item.productId}`;
-      returnableMap.set(key, Number(item.quantity) - (returnedMap.get(key) ?? 0));
+      returnableMap.set(
+        key,
+        Number(item.quantity) - (returnedMap.get(key) ?? 0),
+      );
     }
 
     return returnableMap;
@@ -2791,7 +2979,9 @@ export class SalesService {
             retailPriceAtSale: item.retailPriceAtSale ?? item.lineTotal,
             discountAmount: item.discountAmount ?? 0,
             finalPrice: item.finalPrice ?? item.lineTotal,
-            stockComposition: item.stockComposition as Prisma.InputJsonValue | undefined,
+            stockComposition: item.stockComposition as
+              | Prisma.InputJsonValue
+              | undefined,
           })),
         },
       },
@@ -2842,7 +3032,13 @@ export class SalesService {
 
   private async applyStockDelta(
     branchCode: string | null,
-    items: Array<{ productId: number; variantId?: string | null; quantity: number; salePrice: number; stockComposition?: unknown }>,
+    items: Array<{
+      productId: number;
+      variantId?: string | null;
+      quantity: number;
+      salePrice: number;
+      stockComposition?: unknown;
+    }>,
     multiplier: 1 | -1,
     meta?: {
       companyId?: string | null;
@@ -2878,7 +3074,9 @@ export class SalesService {
             data: { quantity: { decrement: item.quantity } },
           });
           if (claimed.count !== 1) {
-            throw new ConflictException('Недостаточно остатка выбранного варианта');
+            throw new ConflictException(
+              'Недостаточно остатка выбранного варианта',
+            );
           }
         } else if (meta?.companyId) {
           const variant = await tx.productVariant.findUnique({
@@ -3002,13 +3200,29 @@ export class SalesService {
   }
 
   private async syncProductsQuantity(
-    items: Array<{ productId: number; variantId?: string | null; quantity?: Prisma.Decimal | number; salePrice?: Prisma.Decimal | number; stockComposition?: unknown }>,
+    items: Array<{
+      productId: number;
+      variantId?: string | null;
+      quantity?: Prisma.Decimal | number;
+      salePrice?: Prisma.Decimal | number;
+      stockComposition?: unknown;
+    }>,
     tx: Prisma.TransactionClient | PrismaService = this.prisma,
   ) {
     const expandedItems = this.expandStockComposition(
-      items.map((item) => ({ ...item, quantity: item.quantity ?? 0, salePrice: item.salePrice ?? 0 })),
+      items.map((item) => ({
+        ...item,
+        quantity: item.quantity ?? 0,
+        salePrice: item.salePrice ?? 0,
+      })),
     );
-    const uniqueProductIds = [...new Set(expandedItems.map((item) => item.productId).filter((id): id is number => typeof id === 'number'))];
+    const uniqueProductIds = [
+      ...new Set(
+        expandedItems
+          .map((item) => item.productId)
+          .filter((id): id is number => typeof id === 'number'),
+      ),
+    ];
 
     for (const productId of uniqueProductIds) {
       const product = await tx.product.findUnique({
@@ -3288,21 +3502,48 @@ export class SalesService {
       );
 
       let unitSupplyPrice = 0;
-      if (Array.isArray(item.stockComposition) && item.stockComposition.length) {
+      if (
+        Array.isArray(item.stockComposition) &&
+        item.stockComposition.length
+      ) {
         for (const raw of item.stockComposition) {
           const component = raw as Record<string, unknown>;
           const componentProductId = Number(component.productId);
-          const componentVariantId = typeof component.variantId === 'string' ? component.variantId : null;
+          const componentVariantId =
+            typeof component.variantId === 'string'
+              ? component.variantId
+              : null;
           const componentQuantity = Number(component.quantity);
           const componentStock = effectiveBranchCode
             ? componentVariantId
-              ? await tx.productVariantStock.findFirst({ where: { variantId: componentVariantId, branchCode: effectiveBranchCode } })
-              : await tx.productStock.findFirst({ where: { productId: componentProductId, branchCode: effectiveBranchCode } })
+              ? await tx.productVariantStock.findFirst({
+                  where: {
+                    variantId: componentVariantId,
+                    branchCode: effectiveBranchCode,
+                  },
+                })
+              : await tx.productStock.findFirst({
+                  where: {
+                    productId: componentProductId,
+                    branchCode: effectiveBranchCode,
+                  },
+                })
             : null;
           const componentRecord = componentVariantId
-            ? await tx.productVariant.findUnique({ where: { id: componentVariantId }, select: { purchasePrice: true } })
-            : await tx.product.findUnique({ where: { id: componentProductId }, select: { purchasePrice: true } });
-          unitSupplyPrice += Number(componentStock?.purchasePrice ?? componentRecord?.purchasePrice ?? 0) * componentQuantity;
+            ? await tx.productVariant.findUnique({
+                where: { id: componentVariantId },
+                select: { purchasePrice: true },
+              })
+            : await tx.product.findUnique({
+                where: { id: componentProductId },
+                select: { purchasePrice: true },
+              });
+          unitSupplyPrice +=
+            Number(
+              componentStock?.purchasePrice ??
+                componentRecord?.purchasePrice ??
+                0,
+            ) * componentQuantity;
         }
       } else if (typeof item.productId === 'number') {
         const stock = effectiveBranchCode
@@ -3356,15 +3597,20 @@ export class SalesService {
     }
   }
 
-  private expandStockComposition<T extends {
-    productId: number | null;
-    variantId?: string | null;
-    quantity: Prisma.Decimal | number;
-    salePrice: Prisma.Decimal | number;
-    stockComposition?: unknown;
-  }>(items: T[]) {
+  private expandStockComposition<
+    T extends {
+      productId: number | null;
+      variantId?: string | null;
+      quantity: Prisma.Decimal | number;
+      salePrice: Prisma.Decimal | number;
+      stockComposition?: unknown;
+    },
+  >(items: T[]) {
     return items.flatMap((item) => {
-      if (!Array.isArray(item.stockComposition) || item.stockComposition.length === 0) {
+      if (
+        !Array.isArray(item.stockComposition) ||
+        item.stockComposition.length === 0
+      ) {
         return [item];
       }
       return item.stockComposition.map((raw) => {
@@ -3372,7 +3618,10 @@ export class SalesService {
         return {
           ...item,
           productId: Number(component.productId),
-          variantId: typeof component.variantId === 'string' ? component.variantId : null,
+          variantId:
+            typeof component.variantId === 'string'
+              ? component.variantId
+              : null,
           quantity: Number(item.quantity) * Number(component.quantity),
           salePrice: Number(component.salePrice ?? 0),
           stockComposition: null,
@@ -3385,7 +3634,10 @@ export class SalesService {
    * Stock of a colour/size product lives on its variants; selling the bare
    * product would decrement the total but leave every size untouched.
    */
-  private async assertNoColourSizeVariants(productId: number, companyId: string | null) {
+  private async assertNoColourSizeVariants(
+    productId: number,
+    companyId: string | null,
+  ) {
     const colourSizeVariants = await this.prisma.productVariant.count({
       where: {
         productId,
@@ -4715,21 +4967,44 @@ export class SalesService {
     };
   }
 
-  private calculateBundleStocks(components: Array<{
-    quantity: Prisma.Decimal | number;
-    componentProduct: { stocks: Array<{ branchCode: string; quantity: number; purchasePrice: number | null; salePrice: number | null }> };
-    componentVariant: { stocks: Array<{ branchCode: string; quantity: number; purchasePrice: number | null; salePrice: number | null }> } | null;
-  }>) {
+  private calculateBundleStocks(
+    components: Array<{
+      quantity: Prisma.Decimal | number;
+      componentProduct: {
+        stocks: Array<{
+          branchCode: string;
+          quantity: number;
+          purchasePrice: number | null;
+          salePrice: number | null;
+        }>;
+      };
+      componentVariant: {
+        stocks: Array<{
+          branchCode: string;
+          quantity: number;
+          purchasePrice: number | null;
+          salePrice: number | null;
+        }>;
+      } | null;
+    }>,
+  ) {
     const branchCodes = new Set(
       components.flatMap((component) =>
-        (component.componentVariant?.stocks ?? component.componentProduct.stocks).map((stock) => stock.branchCode),
+        (
+          component.componentVariant?.stocks ??
+          component.componentProduct.stocks
+        ).map((stock) => stock.branchCode),
       ),
     );
     return [...branchCodes].map((branchCode) => {
       const quantities = components.map((component) => {
-        const stock = (component.componentVariant?.stocks ?? component.componentProduct.stocks)
-          .find((candidate) => candidate.branchCode === branchCode);
-        return Math.floor(Number(stock?.quantity ?? 0) / Number(component.quantity));
+        const stock = (
+          component.componentVariant?.stocks ??
+          component.componentProduct.stocks
+        ).find((candidate) => candidate.branchCode === branchCode);
+        return Math.floor(
+          Number(stock?.quantity ?? 0) / Number(component.quantity),
+        );
       });
       return {
         branchCode,
@@ -4763,8 +5038,22 @@ export class SalesService {
       }[];
       bundleComponents?: Array<{
         quantity: Prisma.Decimal | number;
-        componentProduct: { stocks: Array<{ branchCode: string; quantity: number; purchasePrice: number | null; salePrice: number | null }> };
-        componentVariant: { stocks: Array<{ branchCode: string; quantity: number; purchasePrice: number | null; salePrice: number | null }> } | null;
+        componentProduct: {
+          stocks: Array<{
+            branchCode: string;
+            quantity: number;
+            purchasePrice: number | null;
+            salePrice: number | null;
+          }>;
+        };
+        componentVariant: {
+          stocks: Array<{
+            branchCode: string;
+            quantity: number;
+            purchasePrice: number | null;
+            salePrice: number | null;
+          }>;
+        } | null;
       }>;
     },
     branchCode?: string,
@@ -4779,13 +5068,14 @@ export class SalesService {
       ? this.calculateBundleStocks(product.bundleComponents)
       : null;
     const effectiveStocks = bundleStocks ?? product.stocks;
-    const relevantStocks = branchCode || shopId
-      ? effectiveStocks.filter(
-          (stock) =>
-            stock.branchCode === branchCode ||
-            ('shopId' in stock && stock.shopId === shopId),
-        )
-      : effectiveStocks;
+    const relevantStocks =
+      branchCode || shopId
+        ? effectiveStocks.filter(
+            (stock) =>
+              stock.branchCode === branchCode ||
+              ('shopId' in stock && stock.shopId === shopId),
+          )
+        : effectiveStocks;
     const selectedStocks = relevantStocks.length
       ? relevantStocks
       : effectiveStocks;
@@ -4796,13 +5086,14 @@ export class SalesService {
     // When the request is scoped to a shop, keep the legacy flat price fields
     // in sync with the selected shop as well. Some POS clients still read
     // `retail_price` instead of `shop_prices[0].retail_price`.
-    const selectedPriceStock = branchCode || shopId
-      ? selectedStocks.find(
-          (stock) =>
-            stock.branchCode === branchCode ||
-            ('shopId' in stock && stock.shopId === shopId),
-        )
-      : selectedStocks[0];
+    const selectedPriceStock =
+      branchCode || shopId
+        ? selectedStocks.find(
+            (stock) =>
+              stock.branchCode === branchCode ||
+              ('shopId' in stock && stock.shopId === shopId),
+          )
+        : selectedStocks[0];
     const selectedRetailPrice =
       selectedPriceStock?.salePrice ?? product.salePrice ?? 0;
     const selectedSupplyPrice =
@@ -5046,14 +5337,23 @@ export class SalesService {
         'Each payment amount must be greater than zero',
       );
     }
-    if (amounts.some((amount) => Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-8)) {
-      throw new BadRequestException('Payment amounts cannot contain fractions smaller than 0.01');
+    if (
+      amounts.some(
+        (amount) => Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-8,
+      )
+    ) {
+      throw new BadRequestException(
+        'Payment amounts cannot contain fractions smaller than 0.01',
+      );
     }
 
     const expectedTotal = Number(Math.max(0, payableTotal).toFixed(2));
     const debt = this.parseDebtPayload(body, expectedTotal);
     const debtAmount = Number(debt?.amount ?? 0);
-    const paidMinor = amounts.reduce((sum, amount) => sum + Math.round(amount * 100), 0);
+    const paidMinor = amounts.reduce(
+      (sum, amount) => sum + Math.round(amount * 100),
+      0,
+    );
     const debtMinor = Math.round(debtAmount * 100);
     const expectedMinor = Math.round(expectedTotal * 100);
 
@@ -5689,11 +5989,16 @@ export class SalesService {
 
   private async applyReturnCreditToDebt(
     tx: Prisma.TransactionClient,
-    originalSale: { id: number; companyId?: string | null; clientId?: string | null },
+    originalSale: {
+      id: number;
+      companyId?: string | null;
+      clientId?: string | null;
+    },
     creditAmount: number,
   ) {
     const creditMinor = Math.max(0, Math.round(creditAmount * 100));
-    if (!creditMinor || !originalSale.clientId || !originalSale.companyId) return 0;
+    if (!creditMinor || !originalSale.clientId || !originalSale.companyId)
+      return 0;
 
     const debts = await tx.clientDebt.findMany({
       where: {
@@ -5732,12 +6037,17 @@ export class SalesService {
     }
 
     const aggregate = await tx.clientDebt.aggregate({
-      where: { companyId: originalSale.companyId, clientId: originalSale.clientId },
+      where: {
+        companyId: originalSale.companyId,
+        clientId: originalSale.clientId,
+      },
       _sum: { remainingAmountUzs: true },
     });
     await tx.client.update({
       where: { id: originalSale.clientId },
-      data: { debtUzs: aggregate._sum.remainingAmountUzs ?? new Prisma.Decimal(0) },
+      data: {
+        debtUzs: aggregate._sum.remainingAmountUzs ?? new Prisma.Decimal(0),
+      },
     });
     return (creditMinor - remainingCredit) / 100;
   }
@@ -5898,7 +6208,10 @@ export class SalesService {
    * payable total to the primary payment method.
    */
   private withCashbackPayment(
-    extraPayments: Array<{ payment_method: string | null; amount: number }> | null,
+    extraPayments: Array<{
+      payment_method: string | null;
+      amount: number;
+    }> | null,
     paymentMethod: string | null,
     moneyDue: number,
     hasDebt: boolean,
@@ -5909,13 +6222,18 @@ export class SalesService {
     }
     const money =
       extraPayments ??
-      (moneyDue > 0 && !hasDebt ? [{ payment_method: paymentMethod, amount: moneyDue }] : []);
+      (moneyDue > 0 && !hasDebt
+        ? [{ payment_method: paymentMethod, amount: moneyDue }]
+        : []);
     return {
       paymentMethod:
         moneyDue <= 0 ? LOYALTY_CASHBACK_PAYMENT_METHOD : paymentMethod,
       extraPayments: [
         ...money,
-        { payment_method: LOYALTY_CASHBACK_PAYMENT_METHOD, amount: cashbackPayment },
+        {
+          payment_method: LOYALTY_CASHBACK_PAYMENT_METHOD,
+          amount: cashbackPayment,
+        },
       ],
     };
   }
@@ -5930,7 +6248,9 @@ export class SalesService {
       return;
     }
     if (!sale.companyId || !sale.clientId) {
-      throw new BadRequestException('Выберите клиента, чтобы оплатить бонусами');
+      throw new BadRequestException(
+        'Выберите клиента, чтобы оплатить бонусами',
+      );
     }
     const loyalty = await tx.loyaltyProgramSetting.findUnique({
       where: { companyId: sale.companyId },
@@ -5991,7 +6311,8 @@ export class SalesService {
     const remaining = paid + Number(alreadyRefunded._sum.cashbackPaid ?? 0);
     const amount =
       Math.round(
-        Math.min(remaining, (paid * returnTotal) / originalTotal, returnTotal) * 100,
+        Math.min(remaining, (paid * returnTotal) / originalTotal, returnTotal) *
+          100,
       ) / 100;
     if (amount <= 0) {
       return 0;
@@ -6003,7 +6324,12 @@ export class SalesService {
         cashbackPaid: -amount,
         extraPayments: [
           ...(moneyRefund > 0
-            ? [{ payment_method: returnSale.paymentMethod, amount: moneyRefund }]
+            ? [
+                {
+                  payment_method: returnSale.paymentMethod,
+                  amount: moneyRefund,
+                },
+              ]
             : []),
           { payment_method: LOYALTY_CASHBACK_PAYMENT_METHOD, amount },
         ],
@@ -6119,8 +6445,12 @@ export class SalesService {
     if (resolvedAmount > saleAmount) {
       throw new BadRequestException('Debt amount cannot exceed sale total');
     }
-    if (Math.abs(resolvedAmount * 100 - Math.round(resolvedAmount * 100)) > 1e-8) {
-      throw new BadRequestException('Debt amount cannot contain fractions smaller than 0.01');
+    if (
+      Math.abs(resolvedAmount * 100 - Math.round(resolvedAmount * 100)) > 1e-8
+    ) {
+      throw new BadRequestException(
+        'Debt amount cannot contain fractions smaller than 0.01',
+      );
     }
 
     return {
