@@ -60,3 +60,10 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 # Private invoice originals
 /private/invoices/
+
+# Stale Prisma output (schema.prisma has no custom output; @prisma/client is used)
+/src/generated
+
+# Editor backups
+*.save
+*.bak
