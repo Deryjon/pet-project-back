@@ -536,7 +536,7 @@ export class CompanySettingsService {
     if (!targetCompanyId) {
       return {
         id: DEFAULT_CURRENCY_CONFIG_ID,
-        company_id: companyId?.trim() || DEFAULT_COMPANY_ID,
+        company_id: companyId?.trim() ?? '',
         currency: {
           id: DEFAULT_CURRENCY_ID,
           name: DEFAULT_CURRENCY_NAME,
@@ -747,10 +747,7 @@ export class CompanySettingsService {
     body: Record<string, unknown>,
     companyId?: string,
   ): Promise<Record<string, unknown>> {
-    const targetCompanyId =
-      (await this.resolveCompanyId(companyId ?? this.optionalString(body.company_id))) ??
-      this.optionalString(body.company_id) ??
-      DEFAULT_COMPANY_ID;
+    const targetCompanyId = this.requireCompanyId(companyId);
 
     await this.ensureCompanySettingsSeeded(targetCompanyId);
 
@@ -854,8 +851,7 @@ export class CompanySettingsService {
   }
 
   async getCompanyTimeZone(companyId?: string) {
-    const targetCompanyId =
-      (await this.resolveCompanyId(companyId)) ?? companyId?.trim() ?? DEFAULT_COMPANY_ID;
+    const targetCompanyId = this.requireCompanyId(companyId);
 
     await this.ensureCompanySettingsSeeded(targetCompanyId);
     await this.ensureReferenceDataSeeded();
@@ -912,7 +908,7 @@ export class CompanySettingsService {
     const safeLimit = this.normalizeLimit(query.limit, 10);
     const safePage = Math.max(1, Number(query.page) || 1);
     const normalizedName = (query.name ?? '').trim().toLowerCase();
-    const companyId = query.companyId?.trim() || DEFAULT_COMPANY_ID;
+    const companyId = this.requireCompanyId(query.companyId);
     await this.ensureShopsSeeded(companyId);
     const dbShops = await this.db.shop.findMany({
       where: {
@@ -967,7 +963,7 @@ export class CompanySettingsService {
 
   async getShopById(id: string, companyId?: string) {
     const shopId = this.requireString(id, 'id');
-    const targetCompanyId = companyId?.trim() || DEFAULT_COMPANY_ID;
+    const targetCompanyId = this.requireCompanyId(companyId);
 
     await this.ensureShopsSeeded(targetCompanyId);
     const dbShop = await this.db.shop.findFirst({
@@ -1013,7 +1009,7 @@ export class CompanySettingsService {
     if (!targetCompanyId) {
       return {
         id: '',
-        company_id: companyId?.trim() || DEFAULT_COMPANY_ID,
+        company_id: companyId?.trim() ?? '',
         is_active: false,
         name: '',
         type: '',
@@ -1073,10 +1069,7 @@ export class CompanySettingsService {
 
   async getMeasurementUnitById(id: string, companyId?: string) {
     const measurementUnitId = this.requireString(id, 'id');
-    const targetCompanyId =
-      (await this.resolveCompanyId(companyId)) ||
-      companyId?.trim() ||
-      DEFAULT_COMPANY_ID;
+    const targetCompanyId = this.requireCompanyId(companyId);
     await this.ensureMeasurementUnitsSeeded(targetCompanyId);
     const matchedUnit = await this.db.measurementUnitSetting.findFirst({
       where: {
@@ -1112,10 +1105,7 @@ export class CompanySettingsService {
     name?: string;
   }) {
     try {
-      const targetCompanyId =
-        (await this.resolveCompanyId(query?.companyId)) ||
-        query?.companyId?.trim() ||
-        DEFAULT_COMPANY_ID;
+      const targetCompanyId = this.requireCompanyId(query?.companyId);
       const safeLimit = this.normalizeLimit(query?.limit, 1000);
       const safePage = Math.max(1, Number(query?.page) || 1);
       const normalizedName = this.optionalString(query?.name)?.toLowerCase();
@@ -1161,10 +1151,7 @@ export class CompanySettingsService {
   }
 
   async createMeasurementUnit(body: Record<string, unknown>) {
-    const companyId =
-      (await this.resolveCompanyId(this.optionalString(body.company_id))) ||
-      this.optionalString(body.company_id) ||
-      DEFAULT_COMPANY_ID;
+    const companyId = this.requireCompanyId(this.optionalString(body.company_id));
     const name = this.requireString(body.name, 'name');
     const shortName = this.requireString(body.short_name, 'short_name');
     const precision = this.normalizeMeasurementPrecision(body.precision);
@@ -1203,10 +1190,7 @@ export class CompanySettingsService {
   }
 
   async getPriceTags(companyId?: string) {
-    const targetCompanyId =
-      (await this.resolveCompanyId(companyId)) ||
-      companyId?.trim() ||
-      DEFAULT_COMPANY_ID;
+    const targetCompanyId = this.requireCompanyId(companyId);
     await this.ensureCompanySettingsSeeded(targetCompanyId);
     const priceTags = await this.db.priceTagSetting.findMany({
       where: { companyId: targetCompanyId },
@@ -1249,8 +1233,7 @@ export class CompanySettingsService {
   }
 
   async createPriceTag(body: Record<string, unknown>, resolvedCompanyId?: string) {
-    const companyId =
-      resolvedCompanyId ?? this.optionalString(body.company_id) ?? DEFAULT_COMPANY_ID;
+    const companyId = this.requireCompanyId(resolvedCompanyId);
     await this.ensureCompanySettingsSeeded(companyId);
     const barcodeType = this.optionalString(body.barcode_type) ?? 'CODE128';
     // The very first template for a company becomes the default automatically
@@ -1404,7 +1387,7 @@ export class CompanySettingsService {
   }
 
   async getCompanyPaymentTypes(limit?: number, companyId?: string) {
-    const targetCompanyId = companyId?.trim() || DEFAULT_COMPANY_ID;
+    const targetCompanyId = this.requireCompanyId(companyId);
     const companyPaymentTypes =
       await this.getPersistedCompanyPaymentTypes(targetCompanyId);
 
@@ -1581,7 +1564,7 @@ export class CompanySettingsService {
     name?: string;
     companyId?: string;
   }) {
-    const targetCompanyId = query.companyId?.trim() || DEFAULT_COMPANY_ID;
+    const targetCompanyId = this.requireCompanyId(query.companyId);
     await this.ensureCompanySettingsSeeded(targetCompanyId);
     await this.ensureShopsSeeded(targetCompanyId);
     await this.ensureCashboxesSeeded(targetCompanyId);
@@ -1811,19 +1794,17 @@ export class CompanySettingsService {
     };
   }
 
-  private async resolveCompanyId(companyId?: string) {
+  // A request without a company must never fall back to another tenant.
+  private async resolveCompanyId(companyId?: string | null) {
+    return Promise.resolve(companyId?.trim() || null);
+  }
+
+  private requireCompanyId(companyId?: string | null): string {
     const normalized = companyId?.trim();
-    if (normalized) {
-      return normalized;
+    if (!normalized) {
+      throw new BadRequestException('Company ID required');
     }
-
-    const company = await this.db.company.findFirst({
-      where: { isActive: true },
-      orderBy: { createdAt: 'asc' },
-      select: { id: true },
-    });
-
-    return company?.id ?? null;
+    return normalized;
   }
 
   private async ensureReferenceDataSeeded() {

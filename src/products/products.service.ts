@@ -517,7 +517,6 @@ const STOCKTAKING_SESSIONS = new Map<string, StocktakingSession>();
 const IMPORT_COMMIT_LOCKS = new Set<string>();
 const PRODUCT_IMPORT_LOCKS = new Set<string>();
 
-const COMPANY_ID = process.env.COMPANY_ID ?? '';
 const DEFAULT_PRODUCT_TYPE_ID =
   process.env.DEFAULT_PRODUCT_TYPE_ID ?? '69e939aa-9b8f-46a9-b605-8b2675475b7b';
 const PRODUCT_TYPE_IDS = {
@@ -6817,7 +6816,7 @@ export class ProductsService {
         : {};
     const measurementUnit = this.buildMeasurementUnitFromMetadata(
       metadata,
-      product.companyId ?? COMPANY_ID,
+      product.companyId ?? '',
       product.unit,
     );
     const departureShop = this.resolveShopByBranchCode(
@@ -6848,7 +6847,7 @@ export class ProductsService {
     return {
       id: this.getProductPublicId(product),
       parent_id: '',
-      company_id: product.companyId ?? COMPANY_ID,
+      company_id: product.companyId ?? '',
       categories: product.category
         ? [
             {
@@ -7858,7 +7857,7 @@ export class ProductsService {
     return {
       id: String(product.id),
       public_id: this.getProductPublicId(product),
-      company_id: COMPANY_ID,
+      company_id: product.companyId ?? '',
       name: product.name,
       sku: product.sku,
       // A colour/size product keeps its codes on the variants; show the first
@@ -8125,7 +8124,7 @@ export class ProductsService {
       internal_id: String(product.id),
       public_id: this.getProductPublicId(product),
       parent_id: '',
-      company_id: product.companyId ?? context?.companyId ?? COMPANY_ID,
+      company_id: product.companyId ?? context?.companyId ?? '',
       product_type_id: product.productType ?? DEFAULT_PRODUCT_TYPE_ID,
       is_variative: isVariative,
       is_marked: false,
@@ -8396,7 +8395,7 @@ export class ProductsService {
       DEFAULT_MEASUREMENT_UNIT.id;
     const measurementUnit = this.buildMeasurementUnitFromMetadata(
       metadata,
-      context.companyId ?? COMPANY_ID,
+      context.companyId ?? '',
     );
     const productType = this.resolveProductType(body.product_type_id);
     const isVariative = this.toBooleanValue(body.is_variative);
@@ -8492,7 +8491,7 @@ export class ProductsService {
       brand_id: this.optionalString(body.brand_id) ?? '',
       brand_name: product.brand?.name ?? '',
       categories: null,
-      company_id: context.companyId ?? COMPANY_ID,
+      company_id: context.companyId ?? '',
       created_at: this.formatDateTime(
         product.createdAt,
         product.companyId ?? context?.companyId ?? undefined,
@@ -9352,7 +9351,7 @@ export class ProductsService {
 
       return {
         comment: '',
-        company_id: companyId ?? COMPANY_ID,
+        company_id: companyId ?? '',
         created_at: this.formatDateTime(new Date()),
         id: randomUUID(),
         items: [
@@ -12251,9 +12250,8 @@ export class ProductsService {
         null,
       company_id:
         context?.companyId ??
-        this.optionalString(body.company_id) ??
         this.optionalString(existingMetadata?.company_id) ??
-        COMPANY_ID,
+        '',
       product_type_id: this.resolveProductType(body.product_type_id) ?? null,
       is_variative: options.isVariative,
       selected_attributes: options.selectedAttributes,
@@ -12428,12 +12426,17 @@ export class ProductsService {
       return shopLookup;
     }
 
+    // Branch codes are only unique per company: never look them up globally.
+    if (!companyId) {
+      return shopLookup;
+    }
+
     const shops = await this.prisma.shop.findMany({
       where: {
         branchCode: {
           in: normalizedBranchCodes,
         },
-        ...(companyId ? { companyId } : {}),
+        companyId,
       },
       select: {
         id: true,

@@ -32,7 +32,6 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
 
-const COMPANY_ID = process.env.COMPANY_ID ?? '';
 const DEFAULT_PRODUCT_TYPE_ID =
   process.env.DEFAULT_PRODUCT_TYPE_ID ?? '69e939aa-9b8f-46a9-b605-8b2675475b7b';
 const SERVICE_PRODUCT_TYPE_ID =
@@ -4239,7 +4238,7 @@ export class SalesService {
                 ),
                 measurement_unit: this.resolveMeasurementUnitFromMetadata(
                   item.product.metadata,
-                  COMPANY_ID,
+                  '',
                 ),
               }
             : item.productId
@@ -4598,7 +4597,7 @@ export class SalesService {
     return {
       id: String(sale.id),
       parent_id: sale.parentSaleId ? String(sale.parentSaleId) : '',
-      company_id: context?.companyId ?? COMPANY_ID,
+      company_id: context?.companyId ?? '',
       order_number: sale.number,
       order_status: sale.status,
       order_type:
@@ -4824,7 +4823,7 @@ export class SalesService {
   }) {
     const measurementUnit = this.resolveMeasurementUnitFromMetadata(
       product.metadata,
-      COMPANY_ID,
+      '',
     );
     return {
       id: String(product.id),
@@ -5009,7 +5008,7 @@ export class SalesService {
 
     return {
       id: String(product.id),
-      company_id: context?.companyId ?? COMPANY_ID,
+      company_id: context?.companyId ?? '',
       name: product.name,
       sku: product.sku,
       barcode: product.barcode,
@@ -5032,7 +5031,7 @@ export class SalesService {
       },
       measurement_unit: this.resolveMeasurementUnitFromMetadata(
         product.metadata,
-        context?.companyId ?? COMPANY_ID,
+        context?.companyId ?? '',
       ),
       shop_measurement_values: selectedStocks.map((stock) => {
         const retailPrice = stock.salePrice ?? product.salePrice ?? 0;
@@ -6419,12 +6418,17 @@ export class SalesService {
       return shopLookup;
     }
 
+    // Branch codes are only unique per company: never look them up globally.
+    if (!companyId) {
+      return shopLookup;
+    }
+
     const shops = await this.prisma.shop.findMany({
       where: {
         branchCode: {
           in: normalizedBranchCodes,
         },
-        ...(companyId ? { companyId } : {}),
+        companyId,
       },
       select: {
         id: true,
