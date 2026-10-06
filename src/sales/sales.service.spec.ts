@@ -1190,7 +1190,7 @@ describe('SalesService money calculations', () => {
         },
       ];
       const saleDeleteMany = jest.fn();
-      const saleUpdateMany = jest.fn();
+      const saleUpdateMany = jest.fn().mockResolvedValue({ count: 2 });
       const transaction = jest.fn(async (callback) =>
         callback({
           sale: {
@@ -1233,7 +1233,7 @@ describe('SalesService money calculations', () => {
       );
 
       expect(saleUpdateMany).toHaveBeenCalledWith({
-        where: { id: { in: [202, 203] } },
+        where: { id: { in: [202, 203] }, status: { not: 'cancelled' } },
         data: expect.objectContaining({
           status: 'cancelled',
           isDraft: false,
@@ -1250,6 +1250,58 @@ describe('SalesService money calculations', () => {
           parent_order_id: '101',
         }),
       );
+    });
+  });
+
+  describe('cancelled returns', () => {
+    it('do not count against the returnable quantity', async () => {
+      const { service } = createService();
+      const findMany = jest.fn().mockResolvedValue([]);
+      await (service as any).getReturnableQuantities(
+        { id: 5, items: [] },
+        { sale: { findMany } },
+      );
+      expect(findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            parentSaleId: 5,
+            saleType: 'return',
+            status: { not: 'cancelled' },
+          }),
+        }),
+      );
+    });
+
+    it('give the debt credit back to the original sale debt', async () => {
+      const { service } = createService();
+      const update = jest.fn();
+      const clientUpdate = jest.fn();
+      const tx = {
+        clientDebt: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: 'debt-1',
+            amountUzs: 700,
+            remainingAmountUzs: 200,
+            repaidAmountUzs: 0,
+          }),
+          update,
+          aggregate: jest
+            .fn()
+            .mockResolvedValue({ _sum: { remainingAmountUzs: 500 } }),
+        },
+        client: { update: clientUpdate },
+      };
+      await (service as any).revertDebtCredit(tx, {
+        parentSaleId: 5,
+        companyId: 'company-1',
+        clientId: 'client-1',
+        debtCredit: 300,
+      });
+      const data = update.mock.calls[0][0].data;
+      expect(Number(data.amountUzs)).toBe(1000);
+      expect(Number(data.remainingAmountUzs)).toBe(500);
+      expect(data.status).toBe('unpaid');
+      expect(clientUpdate).toHaveBeenCalled();
     });
   });
 });

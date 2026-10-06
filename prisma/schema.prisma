@@ -1599,6 +1599,7 @@ model Sale {
   total             Decimal      @default(0) @db.Decimal(12, 2)
   cashbackAmount    Decimal      @default(0) @db.Decimal(12, 2)
   cashbackPaid      Decimal      @default(0) @db.Decimal(12, 2)
+  debtCredit        Decimal      @default(0) @db.Decimal(12, 2)
   paymentMethod     String?
   extraPayments     Json?
   clientId          String?

@@ -1269,11 +1269,12 @@ export class SalesService {
         createdReturnSale,
         originalSale,
       );
-      await this.applyReturnCreditToDebt(
+      const debtCredit = await this.applyReturnCreditToDebt(
         tx,
         originalSale,
         Number(createdReturnSale.payableTotal ?? 0) - refundedToBalance,
       );
+      await this.recordDebtCredit(tx, createdReturnSale.id, debtCredit);
 
       return { createdReturnSale, refundedToBalance };
     });
@@ -1381,7 +1382,7 @@ export class SalesService {
         );
         await this.syncProductsQuantity([...returnItems, ...exchangeItems], tx);
         await this.refreshBaseSaleStatus(originalSale.id, tx);
-        await this.applyReturnCreditToDebt(
+        const debtCredit = await this.applyReturnCreditToDebt(
           tx,
           originalSale,
           Math.max(
@@ -1390,6 +1391,7 @@ export class SalesService {
               Number(createdExchangeSale.payableTotal ?? 0),
           ),
         );
+        await this.recordDebtCredit(tx, createdReturnSale.id, debtCredit);
 
         return {
           returnSale: createdReturnSale,
@@ -2187,8 +2189,24 @@ export class SalesService {
       }
 
       const adjustmentSales = await this.resolveAdjustmentDeletionGroup(sale);
+      const adjustmentIds = adjustmentSales.map((adjustment) => adjustment.id);
 
-      await this.prisma.$transaction(async (tx) => {
+      await runSerializableTransaction(this.prisma, async (tx) => {
+        // Claim every document first so a concurrent cancel cannot move the
+        // stock and money a second time.
+        const claimed = await tx.sale.updateMany({
+          where: { id: { in: adjustmentIds }, status: { not: 'cancelled' } },
+          data: {
+            status: 'cancelled',
+            isDraft: false,
+            cancelledAt: new Date(),
+            cancelledById: context?.userId ?? null,
+            cancelReason: cancelReason ?? 'Cancelled adjustment document',
+          },
+        });
+        if (claimed.count !== adjustmentIds.length) {
+          throw new BadRequestException('Документ уже отменён');
+        }
         for (const adjustment of adjustmentSales) {
           const stockMultiplier: 1 | -1 =
             adjustment.saleType === 'return' ? -1 : 1;
@@ -2221,18 +2239,6 @@ export class SalesService {
           adjustmentSales.flatMap((adjustment) => adjustment.items),
           tx,
         );
-        await tx.sale.updateMany({
-          where: {
-            id: { in: adjustmentSales.map((adjustment) => adjustment.id) },
-          },
-          data: {
-            status: 'cancelled',
-            isDraft: false,
-            cancelledAt: new Date(),
-            cancelledById: context?.userId ?? null,
-            cancelReason: cancelReason ?? 'Cancelled adjustment document',
-          },
-        });
         await this.createSaleAuditLog(
           tx,
           context,
@@ -2257,6 +2263,7 @@ export class SalesService {
         );
         for (const adjustment of adjustmentSales) {
           await this.undoSaleCashback(tx, adjustment);
+          await this.revertDebtCredit(tx, adjustment);
         }
         await this.refreshBaseSaleStatus(sale.parentSaleId, tx);
         await this.refreshClientSalesAggregates(
@@ -2932,6 +2939,7 @@ export class SalesService {
       where: {
         parentSaleId: originalSale.id,
         saleType: 'return',
+        status: { not: 'cancelled' },
       },
       include: {
         items: true,
@@ -5988,6 +5996,76 @@ export class SalesService {
       },
     });
     return (creditMinor - remainingCredit) / 100;
+  }
+
+  private async recordDebtCredit(
+    tx: Prisma.TransactionClient,
+    returnSaleId: number,
+    debtCredit: number,
+  ) {
+    if (debtCredit <= 0) return;
+    await tx.sale.update({
+      where: { id: returnSaleId },
+      data: { debtCredit: new Prisma.Decimal(debtCredit) },
+    });
+  }
+
+  /**
+   * Cancelling a return gives back to the original sale's debt what the
+   * return had credited to it (Sale.debtCredit), then refreshes the client's
+   * debt total. Returns made before debtCredit existed have 0 and are left.
+   */
+  private async revertDebtCredit(
+    tx: Prisma.TransactionClient,
+    adjustment: {
+      parentSaleId?: number | null;
+      companyId?: string | null;
+      clientId?: string | null;
+      debtCredit?: Prisma.Decimal | number | null;
+    },
+  ) {
+    const creditMinor = Math.round(Number(adjustment.debtCredit ?? 0) * 100);
+    if (
+      creditMinor <= 0 ||
+      !adjustment.parentSaleId ||
+      !adjustment.companyId ||
+      !adjustment.clientId
+    ) {
+      return;
+    }
+    const debt = await tx.clientDebt.findFirst({
+      where: {
+        companyId: adjustment.companyId,
+        clientId: adjustment.clientId,
+        saleId: adjustment.parentSaleId,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (!debt) return;
+    const amountMinor = Math.round(Number(debt.amountUzs) * 100) + creditMinor;
+    const remainingMinor =
+      Math.round(Number(debt.remainingAmountUzs) * 100) + creditMinor;
+    await tx.clientDebt.update({
+      where: { id: debt.id },
+      data: {
+        amountUzs: new Prisma.Decimal(amountMinor / 100),
+        remainingAmountUzs: new Prisma.Decimal(remainingMinor / 100),
+        status:
+          Number(debt.repaidAmountUzs) > 0
+            ? ClientDebtStatus.partial
+            : ClientDebtStatus.unpaid,
+      },
+    });
+    const aggregate = await tx.clientDebt.aggregate({
+      where: { companyId: adjustment.companyId, clientId: adjustment.clientId },
+      _sum: { remainingAmountUzs: true },
+    });
+    await tx.client.update({
+      where: { id: adjustment.clientId },
+      data: {
+        debtUzs: aggregate._sum.remainingAmountUzs ?? new Prisma.Decimal(0),
+      },
+    });
   }
 
   /**
