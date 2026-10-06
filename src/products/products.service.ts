@@ -1041,6 +1041,114 @@ export class ProductsService {
     });
   }
 
+  // Colour × size stock of one product for the catalog availability matrix.
+  // Only the caller's shops and sale prices are exposed.
+  async getVariantMatrix(
+    productId: string,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getRequestContext(requestContext);
+    const product = await this.prisma.product.findFirst({
+      where: this.applyProductScope(
+        this.buildProductIdentifierWhere(productId),
+        context,
+      ),
+      select: { id: true, salePrice: true },
+    });
+    if (!product) throw new NotFoundException('Product not found');
+
+    const shopIds = context.allowedShopIds;
+    const [variants, shops, productStocks] = await Promise.all([
+      this.prisma.productVariant.findMany({
+        where: { companyId: context.companyId, productId: product.id, isActive: true },
+        select: {
+          id: true,
+          isDefault: true,
+          salePrice: true,
+          color: { select: { id: true, name: true, code: true } },
+          size: { select: { id: true, name: true, type: true, sortOrder: true } },
+          stocks: {
+            where: { shopId: { in: shopIds } },
+            select: { shopId: true, quantity: true, salePrice: true },
+          },
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.shop.findMany({
+        where: { companyId: context.companyId, id: { in: shopIds } },
+        select: { id: true, name: true },
+        orderBy: { name: 'asc' },
+      }),
+      this.prisma.productStock.findMany({
+        where: { productId: product.id, shopId: { in: shopIds } },
+        select: { shopId: true, salePrice: true },
+      }),
+    ]);
+
+    const shopPrice = new Map(
+      productStocks.map((stock) => [stock.shopId, stock.salePrice]),
+    );
+    const colors = new Map<string, { id: string; name: string; code: string | null }>();
+    const sizes = new Map<
+      string,
+      { id: string; name: string; type: string; sort_order: number }
+    >();
+    const unassigned: Record<string, number> = {};
+    const rows: Array<{
+      id: string;
+      color_id: string | null;
+      size_id: string | null;
+      sale_price: number | null;
+      stocks: Record<string, { quantity: number; sale_price: number | null }>;
+    }> = [];
+
+    for (const variant of variants) {
+      if (variant.isDefault || (!variant.color && !variant.size)) {
+        for (const stock of variant.stocks) {
+          if (stock.quantity !== 0) {
+            unassigned[stock.shopId] = (unassigned[stock.shopId] ?? 0) + stock.quantity;
+          }
+        }
+        continue;
+      }
+      if (variant.color) colors.set(variant.color.id, variant.color);
+      if (variant.size) {
+        sizes.set(variant.size.id, {
+          id: variant.size.id,
+          name: variant.size.name,
+          type: variant.size.type,
+          sort_order: variant.size.sortOrder,
+        });
+      }
+      rows.push({
+        id: variant.id,
+        color_id: variant.color?.id ?? null,
+        size_id: variant.size?.id ?? null,
+        sale_price: variant.salePrice,
+        stocks: Object.fromEntries(
+          variant.stocks.map((stock) => [
+            stock.shopId,
+            { quantity: stock.quantity, sale_price: stock.salePrice },
+          ]),
+        ),
+      });
+    }
+
+    return {
+      product_id: product.id,
+      base_sale_price: product.salePrice,
+      shops: shops.map((shop) => ({
+        id: shop.id,
+        name: shop.name,
+        base_sale_price: shopPrice.get(shop.id) ?? null,
+      })),
+      colors: [...colors.values()].sort((a, b) => a.name.localeCompare(b.name, 'ru')),
+      sizes: [...sizes.values()],
+      variants: rows,
+      unassigned,
+    };
+  }
+
   async createProductVariant(
     productId: string,
     body: Record<string, unknown>,

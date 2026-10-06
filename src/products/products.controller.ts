@@ -172,6 +172,15 @@ export class ProductsController {
     return this.productsService.listProductVariants(id, requestContext);
   }
 
+  @Get('products/:id/variant-matrix')
+  @Permissions('catalog-operations')
+  getVariantMatrix(
+    @Param('id') id: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.productsService.getVariantMatrix(id, requestContext);
+  }
+
   @Post('products/:id/variants')
   @Permissions('catalog-operations')
   createProductVariant(
