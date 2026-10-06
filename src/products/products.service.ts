@@ -4179,7 +4179,7 @@ export class ProductsService {
     const sku = this.optionalString(body.sku);
     const barcode = this.optionalString(body.barcode);
     const productType = this.resolveProductType(body.product_type_id);
-    const isVariative = this.toBooleanValue(body.is_variative);
+    const isVariative = this.resolveIsVariative(body);
     const variantType = isVariative ? 'variative' : 'simple';
     const measurementUnitId = this.optionalString(body.measurement_unit_id);
     const purchasePrice = this.toNumber(body.supply_price) ?? 0;
@@ -4613,11 +4613,12 @@ export class ProductsService {
     const productType = this.resolveProductType(
       body.product_type_id ?? existingProduct.productType,
     );
-    const isVariative = this.toBooleanValue(
-      body.is_variative ??
+    const isVariative = this.resolveIsVariative(
+      body,
+      this.toBooleanValue(
         (existingProduct.metadata as Record<string, unknown> | null)
-          ?.is_variative ??
-        false,
+          ?.is_variative,
+      ) || existingProduct.variantType === 'variative',
     );
     const measurementUnitId = this.optionalString(body.measurement_unit_id);
     const supportsStock = this.isGoodsProductType(productType);
@@ -12281,6 +12282,24 @@ export class ProductsService {
     }
 
     return false;
+  }
+
+  // An explicit is_variative wins; without it, colour/size rows in `variants`
+  // mean a variative product (older clients never sent the flag).
+  private resolveIsVariative(body: Record<string, unknown>, fallback = false) {
+    if (body.is_variative !== undefined && body.is_variative !== null) {
+      return this.toBooleanValue(body.is_variative);
+    }
+    if (Array.isArray(body.variants)) {
+      return body.variants.some(
+        (row) =>
+          !!row &&
+          typeof row === 'object' &&
+          (!!this.optionalString((row as Record<string, unknown>).color_id) ||
+            !!this.optionalString((row as Record<string, unknown>).size_id)),
+      );
+    }
+    return fallback;
   }
 
   private extractFirstImage(value: unknown) {
