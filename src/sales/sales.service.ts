@@ -2319,6 +2319,7 @@ export class SalesService {
       if (claimed.count !== 1) {
         throw new BadRequestException('Документ уже отменён');
       }
+      await this.annulSaleDebts(tx, sale);
       await this.restoreSaleStock(sale, tx);
       await this.undoSaleCashback(tx, sale);
       await this.refreshClientSalesAggregates(
@@ -2344,6 +2345,43 @@ export class SalesService {
       id: sale.id,
       action: 'cancelled',
     };
+  }
+
+  /**
+   * Decision (audit): a cancelled sale takes its unpaid debt with it. A debt
+   * the client already started repaying blocks the cancel, because that money
+   * has to be settled with the client first.
+   */
+  private async annulSaleDebts(
+    tx: Prisma.TransactionClient,
+    sale: { id: number; companyId: string | null; clientId?: string | null },
+  ) {
+    if (!sale.companyId) return;
+    const debts = await tx.clientDebt.findMany({
+      where: { companyId: sale.companyId, saleId: sale.id },
+      select: { id: true, clientId: true, repaidAmountUzs: true },
+    });
+    if (!debts.length) return;
+    if (debts.some((debt) => Number(debt.repaidAmountUzs) > 0)) {
+      throw new BadRequestException(
+        'По долгу этой продажи уже есть оплаты: сначала верните их клиенту',
+      );
+    }
+    await tx.clientDebt.deleteMany({
+      where: { id: { in: debts.map((debt) => debt.id) } },
+    });
+    for (const clientId of new Set(debts.map((debt) => debt.clientId))) {
+      const aggregate = await tx.clientDebt.aggregate({
+        where: { companyId: sale.companyId, clientId },
+        _sum: { remainingAmountUzs: true },
+      });
+      await tx.client.update({
+        where: { id: clientId },
+        data: {
+          debtUzs: aggregate._sum.remainingAmountUzs ?? new Prisma.Decimal(0),
+        },
+      });
+    }
   }
 
   private async createSaleAuditLog(

@@ -35,6 +35,9 @@ describe('SalesService money calculations', () => {
       auditLog: {
         create: jest.fn(),
       },
+      clientDebt: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       ...prismaOverrides,
     } as unknown as PrismaService;
 
@@ -978,6 +981,82 @@ describe('SalesService money calculations', () => {
         }),
       });
       expect(saleDelete).not.toHaveBeenCalled();
+    });
+
+    describe('debt of a cancelled sale (decision)', () => {
+      const sale = {
+        id: 104,
+        number: 'S-104',
+        companyId: 'company-1',
+        clientId: 'client-1',
+        branchCode: 'B1',
+        userId: 7,
+        isDraft: false,
+        saleType: 'sale',
+        status: 'paid',
+        items: [{ productId: 1, quantity: 1, salePrice: 100 }],
+      };
+
+      function setup(debts: Array<{ repaidAmountUzs: number }>) {
+        const clientDebt = {
+          findMany: jest.fn().mockResolvedValue(
+            debts.map((debt, index) => ({
+              id: `debt-${index}`,
+              clientId: 'client-1',
+              ...debt,
+            })),
+          ),
+          deleteMany: jest.fn(),
+          aggregate: jest
+            .fn()
+            .mockResolvedValue({ _sum: { remainingAmountUzs: 0 } }),
+        };
+        const clientUpdate = jest.fn();
+        const { service, prisma } = createService({
+          sale: {
+            findUnique: jest.fn().mockResolvedValue(sale),
+            count: jest.fn().mockResolvedValue(0),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          },
+          clientDebt,
+          client: { update: clientUpdate },
+        });
+        (prisma as any).$transaction = jest.fn((fn: any) => fn(prisma));
+        const restore = jest
+          .spyOn(service as any, 'restoreSaleStock')
+          .mockResolvedValue(undefined);
+        jest
+          .spyOn(service as any, 'undoSaleCashback')
+          .mockResolvedValue(undefined);
+        jest
+          .spyOn(service as any, 'refreshClientSalesAggregates')
+          .mockResolvedValue(undefined);
+        return { service, clientDebt, clientUpdate, restore };
+      }
+
+      it('removes an unpaid debt and refreshes the client total', async () => {
+        const { service, clientDebt, clientUpdate } = setup([
+          { repaidAmountUzs: 0 },
+        ]);
+        await service.removeOrder(String(sale.id), testContext());
+        expect(clientDebt.deleteMany).toHaveBeenCalledWith({
+          where: { id: { in: ['debt-0'] } },
+        });
+        expect(clientUpdate).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { id: 'client-1' } }),
+        );
+      });
+
+      it('refuses to cancel when the debt was partly repaid', async () => {
+        const { service, clientDebt, restore } = setup([
+          { repaidAmountUzs: 50 },
+        ]);
+        await expect(
+          service.removeOrder(String(sale.id), testContext()),
+        ).rejects.toThrow('уже есть оплаты');
+        expect(clientDebt.deleteMany).not.toHaveBeenCalled();
+        expect(restore).not.toHaveBeenCalled();
+      });
     });
 
     it('refuses a second, concurrent cancel without restoring stock again', async () => {
