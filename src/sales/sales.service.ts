@@ -3138,6 +3138,7 @@ export class SalesService {
     const shopId = await this.resolveShopIdForBranchCode(
       branchCode,
       meta?.companyId ?? null,
+      tx,
     );
     if (!shopId) {
       throw new ConflictException(
@@ -3266,14 +3267,19 @@ export class SalesService {
     }
   }
 
+  // Reads through the caller's transaction when there is one, so a cancel or
+  // return does not hold a second pool connection while waiting for the shop.
   private async resolveShopIdForBranchCode(
     branchCode: string,
     companyId?: string | null,
+    db: Pick<Prisma.TransactionClient, 'shop'> = this.prisma,
   ) {
-    const shop = await this.prisma.shop.findFirst({
+    // Branch codes are unique per company only.
+    if (!companyId) return null;
+    const shop = await db.shop.findFirst({
       where: {
         branchCode,
-        ...(companyId ? { companyId } : {}),
+        companyId,
       },
       select: {
         id: true,
@@ -3707,6 +3713,7 @@ export class SalesService {
     const shopId = await this.resolveShopIdForBranchCode(
       branchCode,
       sale.companyId ?? null,
+      txOverride ?? this.prisma,
     );
     if (!shopId || !sale.companyId || !sale.userId) {
       return;
@@ -3879,6 +3886,7 @@ export class SalesService {
     const shopId = await this.resolveShopIdForBranchCode(
       branchCode,
       sale.companyId ?? null,
+      outerTx ?? this.prisma,
     );
     if (!shopId || !sale.companyId || !sale.userId) {
       return;
