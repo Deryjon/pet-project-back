@@ -160,7 +160,6 @@ describe('Cashier new sale access', () => {
     [OrdersController, 'findOne'],
     [OrdersController, 'addItem'],
     [OrdersController, 'addPayment'],
-    [OrdersController, 'complete'],
     [CashboxesController, 'findAll'],
     [PaymentTypesController, 'findAll'],
     [DashboardController, 'getDashboardReport'],

@@ -18,7 +18,6 @@ import { AddOrderItemDto } from './dto/add-order-item.dto';
 import { AddPaymentDto } from './dto/add-payment.dto';
 import { ApplyDiscountDto } from './dto/apply-discount.dto';
 import { AttachCustomerDto } from './dto/attach-customer.dto';
-import { CompleteOrderDto } from './dto/complete-order.dto';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderCommentDto } from './dto/update-order-comment.dto';
 import { UpdateOrderItemDto } from './dto/update-order-item.dto';
@@ -160,13 +159,7 @@ export class OrdersController {
     return this.ordersService.resume(id, requestContext);
   }
 
-  @Post(':id/complete')
-  @Permissions('orders.complete')
-  complete(
-    @Param('id') id: string,
-    @Body() dto: CompleteOrderDto,
-    @CurrentCompanyContext() requestContext: CompanyRequestContext,
-  ) {
-    return this.ordersService.complete(id, dto, requestContext);
-  }
+  // Decision (audit): sales are completed only through POST /new-sale/:id/pay
+  // (SalesService). The old POST /orders/:id/complete posted stock through a
+  // second, diverging code path and had no caller, so it is no longer routed.
 }
