@@ -94,7 +94,9 @@ export class DashboardService {
         },
       },
       include: {
-        user: true,
+        // Only the seller's name is shown; never load password hashes or
+        // other user fields for every sale of the period.
+        user: { select: { firstName: true, lastName: true } },
         items: true,
       },
       orderBy: {

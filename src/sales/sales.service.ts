@@ -176,7 +176,9 @@ export class SalesService {
     const sales = await this.prisma.sale.findMany({
       where,
       include: {
-        user: true,
+        // The list shows the seller only; do not load password hashes and
+        // other user columns for every sale.
+        user: { select: { id: true, firstName: true, lastName: true } },
         items: true,
       },
       orderBy: { createdAt: 'desc' },
