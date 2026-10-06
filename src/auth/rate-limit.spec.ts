@@ -1,6 +1,6 @@
 import { APP_GUARD } from '@nestjs/core';
 import { MODULE_METADATA } from '@nestjs/common/constants';
-import { ThrottlerGuard } from '@nestjs/throttler';
+import { AppThrottlerGuard } from '../common/app-throttler.guard';
 import { THROTTLER_LIMIT } from '@nestjs/throttler/dist/throttler.constants';
 import { AppModule } from '../app.module';
 import { AuthController } from './auth.controller';
@@ -17,7 +17,7 @@ describe('Rate limiting', () => {
       expect.arrayContaining([
         expect.objectContaining({
           provide: APP_GUARD,
-          useClass: ThrottlerGuard,
+          useClass: AppThrottlerGuard,
         }),
       ]),
     );
@@ -31,4 +31,23 @@ describe('Rate limiting', () => {
       ).toBe(5);
     },
   );
+
+  it('tracks signed-in users by token and anonymous calls by IP', async () => {
+    const guard = Object.create(AppThrottlerGuard.prototype) as {
+      getTracker(req: Record<string, unknown>): Promise<string>;
+    };
+    const a = await guard.getTracker({
+      headers: { authorization: 'Bearer a' },
+      ip: '1.1.1.1',
+    });
+    const b = await guard.getTracker({
+      headers: { authorization: 'Bearer b' },
+      ip: '1.1.1.1',
+    });
+    expect(a).toMatch(/^token:/);
+    expect(a).not.toBe(b);
+    await expect(
+      guard.getTracker({ headers: {}, ip: '2.2.2.2' }),
+    ).resolves.toBe('2.2.2.2');
+  });
 });

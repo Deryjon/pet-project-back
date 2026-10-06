@@ -1,6 +1,7 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { AppThrottlerGuard } from './common/app-throttler.guard';
 import { APP_GUARD } from '@nestjs/core';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { AuthModule } from './auth/auth.module';
@@ -37,7 +38,8 @@ import { ImportsModule } from './imports/imports.module';
       {
         name: 'default',
         ttl: 60000,
-        limit: 100,
+        // Per signed-in user (see AppThrottlerGuard); tune without a deploy.
+        limit: Number(process.env.THROTTLE_LIMIT_PER_MINUTE) || 600,
       },
     ]),
     PrismaModule,
@@ -62,7 +64,7 @@ import { ImportsModule } from './imports/imports.module';
     ImportsModule,
   ],
   controllers: [HealthController],
-  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
+  providers: [{ provide: APP_GUARD, useClass: AppThrottlerGuard }],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
