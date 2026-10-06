@@ -58,6 +58,19 @@ type CatalogProductWithRelations = Prisma.ProductGetPayload<{
   };
 }>;
 
+// The first active colour/size variant with a code, for catalog rows.
+const LIST_VARIANT_BARCODE_INCLUDE = {
+  where: {
+    isDefault: false,
+    isActive: true,
+    barcode: { not: null },
+    NOT: { barcode: '' },
+  },
+  select: { barcode: true },
+  orderBy: { createdAt: 'asc' },
+  take: 1,
+} satisfies Prisma.Product$variantsArgs;
+
 type ResolvedShop = {
   id: string;
   shop_id: string;
@@ -3801,6 +3814,7 @@ export class ProductsService {
             },
           },
           stocks: true,
+          variants: LIST_VARIANT_BARCODE_INCLUDE,
         },
         orderBy: {
           id: 'desc',
@@ -3908,6 +3922,7 @@ export class ProductsService {
             },
           },
           stocks: true,
+          variants: LIST_VARIANT_BARCODE_INCLUDE,
         },
         orderBy,
         skip: (safePage - 1) * safeLimit,
@@ -7777,6 +7792,7 @@ export class ProductsService {
         purchasePrice: number | null;
         salePrice: number | null;
       }[];
+      variants?: { barcode: string | null }[];
     },
     shopLookup?: Map<string, ResolvedShop>,
     visibleBranchCodes?: string[],
@@ -7840,7 +7856,12 @@ export class ProductsService {
       company_id: COMPANY_ID,
       name: product.name,
       sku: product.sku,
-      barcode: product.barcode,
+      // A colour/size product keeps its codes on the variants; show the first
+      // one so the catalog row is never blank.
+      barcode:
+        this.optionalString(product.barcode) ??
+        product.variants?.[0]?.barcode ??
+        product.barcode,
       article: product.article,
       gender: product.gender,
       season: product.season,
@@ -8290,6 +8311,9 @@ export class ProductsService {
           }))
         : null,
       variations: variants,
+      // The product form and the catalog sidebar read the colour/size rows
+      // (with their barcodes) from `variants`.
+      variants,
       base_name: product.name,
       variation_id: '',
       free_price: freePrice,
