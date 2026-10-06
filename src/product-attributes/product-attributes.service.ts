@@ -26,6 +26,16 @@ type ValueInput = {
 export class ProductAttributesService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /** The company's product categories, for the product form. */
+  async listCategories(requestContext: CompanyRequestContext) {
+    const { companyId } = requireCompanyContext(requestContext);
+    return this.prisma.category.findMany({
+      where: { companyId },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+  }
+
   async list(requestContext: CompanyRequestContext, includeInactive = false) {
     const { companyId } = requireCompanyContext(requestContext);
     const definitions = await this.prisma.attributeDefinition.findMany({

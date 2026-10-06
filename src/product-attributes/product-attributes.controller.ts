@@ -24,6 +24,13 @@ import { ProductAttributesService } from './product-attributes.service';
 export class ProductAttributesController {
   constructor(private readonly attributes: ProductAttributesService) {}
 
+  @Get('product-categories')
+  listCategories(
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.attributes.listCategories(requestContext);
+  }
+
   @Get('product-attributes')
   list(
     @Query('include_inactive') includeInactive: string | undefined,

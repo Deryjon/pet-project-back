@@ -14,6 +14,9 @@ describe('Import matching', () => {
         findMany: jest.fn().mockResolvedValue([]),
       },
       productVariant: { findFirst: jest.fn().mockResolvedValue(null) },
+      // No stored settings: the legacy profile (device shorthand on).
+      company: { findUnique: jest.fn().mockResolvedValue(null) },
+      attributeDefinition: { findMany: jest.fn().mockResolvedValue([]) },
       supplierProductAlias: {
         findMany: jest.fn().mockResolvedValue([]),
         update: jest.fn(),
@@ -208,6 +211,28 @@ describe('Import matching', () => {
     expect(
       await matcher.match('company', 1, { rawName: 'phone alpha white' }),
     ).toMatchObject({ confidence: 60, conflict: true });
+  });
+  it('flags a colour or size that differs from the product for a clothing store', async () => {
+    db.company.findUnique.mockResolvedValue({
+      productFeatureSettings: { deviceShorthand: false },
+    });
+    db.attributeDefinition.findMany.mockResolvedValue([
+      { code: 'color', legacySource: 'color', options: [{ value: 'Красный' }, { value: 'Синий' }] },
+      { code: 'size_clothing', legacySource: 'size', options: [{ value: 'M' }, { value: 'L' }] },
+    ]);
+    db.product.findMany.mockResolvedValue([{ id: 1, name: 'Футболка поло синий M' }]);
+
+    expect(
+      await matcher.match('company', 1, { rawName: 'Футболка поло красный M' }),
+    ).toMatchObject({ product: { id: 1 }, conflict: true, confidence: 60 });
+    expect(
+      await matcher.match('company', 1, { rawName: 'Футболка поло синий M' }),
+    ).toMatchObject({ conflict: false, confidence: 100 });
+  });
+  it('reads "46p" literally when the company has no device shorthand', () => {
+    const profile = { deviceShorthand: false, vocabularies: [] };
+    expect(normalizer.normalize('Брюки 46p', profile)).toBe('брюки 46 p');
+    expect(normalizer.normalize('Чехол 15pm')).toBe('чехол iphone 15 pro max');
   });
   it('marks unmatched rows NEW_PRODUCT and clears previous match metadata', async () => {
     db.product.findMany.mockResolvedValue([{ id: 1, name: 'alpha beta' }]);

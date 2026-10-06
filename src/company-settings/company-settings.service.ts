@@ -12,6 +12,7 @@ import {
   normalizeProductFeatures,
   parseBusinessType,
 } from './product-feature-settings';
+import { applyBusinessPreset } from './business-presets';
 
 type CurrencyConfig = {
   id: string;
@@ -765,15 +766,30 @@ export class CompanySettingsService {
     const businessType = body.business_type === undefined
       ? parseBusinessType(company.businessType)
       : parseBusinessType(body.business_type);
-    const productFeatures = body.product_features === undefined
-      ? normalizeProductFeatures(businessType, company.productFeatureSettings)
-      : normalizeProductFeatures(businessType, body.product_features);
+    // A partial product_features payload keeps the stored flags it omits.
+    const storedFeatures = normalizeProductFeatures(
+      businessType,
+      company.productFeatureSettings,
+    );
+    const productFeatures =
+      body.product_features === undefined
+        ? storedFeatures
+        : normalizeProductFeatures(businessType, {
+            ...storedFeatures,
+            ...(body.product_features && typeof body.product_features === 'object'
+              ? (body.product_features as Record<string, unknown>)
+              : {}),
+          });
 
     if (body.business_type !== undefined || body.product_features !== undefined) {
       await this.db.company.update({
         where: { id: targetCompanyId },
         data: { businessType, productFeatureSettings: productFeatures },
       });
+    }
+    if (body.business_type !== undefined && businessType !== company.businessType) {
+      // Adds the new type's starting attributes; existing ones are kept.
+      await applyBusinessPreset(this.db, targetCompanyId, businessType);
     }
 
     const existingProfile = await this.db.companyProfileSetting.findUnique({

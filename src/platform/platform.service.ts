@@ -10,6 +10,7 @@ import {
   defaultProductFeatures,
   parseBusinessType,
 } from '../company-settings/product-feature-settings';
+import { applyBusinessPreset } from '../company-settings/business-presets';
 
 const DEFAULT_COMPANY_ROLES = [
   { code: 'owner', name: 'Owner', isSystem: true },
@@ -62,6 +63,8 @@ export class PlatformService {
           productFeatureSettings: defaultProductFeatures(businessType),
         },
       });
+
+      await applyBusinessPreset(tx, createdCompany.id, businessType);
 
       await tx.companyRole.createMany({
         data: DEFAULT_COMPANY_ROLES.map((role) => ({

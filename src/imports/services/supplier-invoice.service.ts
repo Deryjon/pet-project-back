@@ -492,6 +492,8 @@ export class SupplierInvoiceService {
       }))
     )
       throw new NotFoundException('Product variant not found');
+    // Alias keys are normalized the way this company's lines are matched.
+    const profile = await this.matcher.loadProfile(ctx.companyId);
     return this.prisma.$transaction(async (tx: any) => {
       const updated = await tx.supplierInvoiceItem.update({
         where: { id: itemId },
@@ -520,7 +522,7 @@ export class SupplierInvoiceService {
             productId,
             variantId,
             supplierName: name,
-            normalizedName: this.normalizer.normalize(name),
+            normalizedName: this.normalizer.normalize(name, profile),
             supplierSku: item.correctedSku || item.rawSku || null,
             supplierBarcode: item.correctedBarcode || item.rawBarcode || null,
             lastSupplyPrice: item.supplyPrice,
@@ -530,7 +532,7 @@ export class SupplierInvoiceService {
             productId,
             variantId,
             supplierName: name,
-            normalizedName: this.normalizer.normalize(name),
+            normalizedName: this.normalizer.normalize(name, profile),
             lastSupplyPrice: item.supplyPrice,
             lastSeenAt: new Date(),
           },
@@ -543,7 +545,7 @@ export class SupplierInvoiceService {
               productId,
               variantId,
               supplierName: name,
-              normalizedName: this.normalizer.normalize(name),
+              normalizedName: this.normalizer.normalize(name, profile),
               supplierBarcode: item.correctedBarcode || item.rawBarcode || null,
               lastSupplyPrice: item.supplyPrice,
               lastSeenAt: new Date(),

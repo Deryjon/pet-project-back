@@ -112,3 +112,42 @@ describe('ProductAttributesService on PostgreSQL', () => {
     ]);
   });
 });
+
+describe('Business presets on PostgreSQL', () => {
+  const { client, close } = database();
+  afterAll(close);
+
+  it('seeds starting attributes once and keeps tenant changes', async () => {
+    const { applyBusinessPreset } = await import(
+      '../../src/company-settings/business-presets'
+    );
+    const f = await fixture(client, 0);
+
+    await applyBusinessPreset(client as any, f.company.id, 'accessories_store');
+    await client.attributeDefinition.update({
+      where: { companyId_code: { companyId: f.company.id, code: 'power' } },
+      data: { name: 'Мощность' },
+    });
+    await applyBusinessPreset(client as any, f.company.id, 'accessories_store');
+    await applyBusinessPreset(client as any, f.company.id, 'clothing_store');
+
+    const definitions = await client.attributeDefinition.findMany({
+      where: { companyId: f.company.id },
+      include: { options: true },
+      orderBy: { code: 'asc' },
+    });
+    expect(definitions.map((d) => d.code)).toEqual([
+      'color',
+      'connector',
+      'device_model',
+      'material',
+      'power',
+      'size_clothing',
+      'size_shoes',
+    ]);
+    expect(definitions.find((d) => d.code === 'power')?.name).toBe('Мощность');
+    expect(
+      definitions.find((d) => d.code === 'connector')?.options.map((o) => o.value),
+    ).toEqual(['USB-C', 'Lightning', 'Micro-USB', 'AUX 3.5']);
+  });
+});

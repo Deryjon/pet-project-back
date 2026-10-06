@@ -21,8 +21,8 @@ export class CreateCompanyDto {
   subdomain?: string;
 
   @IsOptional()
-  @IsIn(['clothing_store', 'general_store'])
-  business_type?: 'clothing_store' | 'general_store';
+  @IsIn(['clothing_store', 'accessories_store', 'general_store'])
+  business_type?: 'clothing_store' | 'accessories_store' | 'general_store';
 
   @IsOptional()
   @IsString()
