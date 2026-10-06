@@ -69,8 +69,8 @@ describe('SalesService loyalty cashback', () => {
       where: { id: 2 },
       data: { cashbackAmount: -2000 },
     });
-    expect(tx.client.update).toHaveBeenCalledWith({
-      where: { id: 'client-1' },
+    expect(tx.client.updateMany).toHaveBeenCalledWith({
+      where: { id: 'client-1', balanceUzs: { gte: 2000 } },
       data: { balanceUzs: { decrement: 2000 } },
     });
   });
@@ -89,6 +89,23 @@ describe('SalesService loyalty cashback', () => {
     expect(reversed).toBe(500);
   });
 
+  it('never pushes the loyalty balance below zero (decision)', async () => {
+    const tx = createTx(activeCashback);
+    // Balance too small for the whole amount: only what is left is taken.
+    tx.client.updateMany
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 1 });
+    (tx.client as any).findUnique = jest
+      .fn()
+      .mockResolvedValue({ balanceUzs: 700 });
+    const taken = await service.takeBackLoyaltyBalance(tx, 'client-1', 2000);
+    expect(taken).toBe(700);
+    expect(tx.client.updateMany).toHaveBeenLastCalledWith({
+      where: { id: 'client-1', balanceUzs: { gte: 700 } },
+      data: { balanceUzs: { decrement: 700 } },
+    });
+  });
+
   it('undoes the balance movement when a document is cancelled', async () => {
     const tx = createTx(activeCashback);
 
@@ -97,7 +114,7 @@ describe('SalesService loyalty cashback', () => {
     // Cancelling a return gives the taken-back cashback to the client again.
     expect(tx.client.update).toHaveBeenCalledWith({
       where: { id: 'client-1' },
-      data: { balanceUzs: { decrement: -2000 } },
+      data: { balanceUzs: { increment: 2000 } },
     });
   });
 });
@@ -208,7 +225,7 @@ describe('SalesService paying with the loyalty balance', () => {
     // balance -= (3000 earned - 40 000 spent) => +37 000
     expect(tx.client.update).toHaveBeenCalledWith({
       where: { id: 'client-1' },
-      data: { balanceUzs: { decrement: -37_000 } },
+      data: { balanceUzs: { increment: 37_000 } },
     });
   });
 });

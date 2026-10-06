@@ -6171,15 +6171,48 @@ export class SalesService {
     if (amount <= 0) {
       return 0;
     }
+    const takenBack = await this.takeBackLoyaltyBalance(
+      tx,
+      returnSale.clientId,
+      amount,
+    );
+    if (takenBack <= 0) {
+      return 0;
+    }
     await tx.sale.update({
       where: { id: returnSale.id },
-      data: { cashbackAmount: -amount },
+      data: { cashbackAmount: -takenBack },
     });
-    await tx.client.update({
-      where: { id: returnSale.clientId },
+    return takenBack;
+  }
+
+  /**
+   * Decision (audit): taking cashback back never pushes the loyalty balance
+   * below zero. If the client already spent it, only what is left is taken.
+   * Returns the amount actually taken.
+   */
+  private async takeBackLoyaltyBalance(
+    tx: Prisma.TransactionClient,
+    clientId: string,
+    amount: number,
+  ) {
+    if (amount <= 0) return 0;
+    const full = await tx.client.updateMany({
+      where: { id: clientId, balanceUzs: { gte: amount } },
       data: { balanceUzs: { decrement: amount } },
     });
-    return amount;
+    if (full.count === 1) return amount;
+    const client = await tx.client.findUnique({
+      where: { id: clientId },
+      select: { balanceUzs: true },
+    });
+    const available = Math.max(0, Number(client?.balanceUzs ?? 0));
+    if (available <= 0) return 0;
+    const partial = await tx.client.updateMany({
+      where: { id: clientId, balanceUzs: { gte: available } },
+      data: { balanceUzs: { decrement: available } },
+    });
+    return partial.count === 1 ? available : 0;
   }
 
   /**
@@ -6200,9 +6233,13 @@ export class SalesService {
     if (!sale.clientId || amount === 0) {
       return;
     }
+    if (amount > 0) {
+      await this.takeBackLoyaltyBalance(tx, sale.clientId, amount);
+      return;
+    }
     await tx.client.update({
       where: { id: sale.clientId },
-      data: { balanceUzs: { decrement: amount } },
+      data: { balanceUzs: { increment: -amount } },
     });
   }
 
