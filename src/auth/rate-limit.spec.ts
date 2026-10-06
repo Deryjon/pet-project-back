@@ -50,4 +50,23 @@ describe('Rate limiting', () => {
       guard.getTracker({ headers: {}, ip: '2.2.2.2' }),
     ).resolves.toBe('2.2.2.2');
   });
+
+  it('counts login attempts per IP whatever Authorization header is sent', async () => {
+    const guard = Object.create(AppThrottlerGuard.prototype) as {
+      getTracker(req: Record<string, unknown>): Promise<string>;
+    };
+    for (const url of [
+      '/api/auth/company-login',
+      '/api/auth/login',
+      '/api/platform/auth/login',
+    ]) {
+      await expect(
+        guard.getTracker({
+          originalUrl: url,
+          headers: { authorization: `Bearer ${Math.random()}` },
+          ip: '3.3.3.3',
+        }),
+      ).resolves.toBe('3.3.3.3');
+    }
+  });
 });

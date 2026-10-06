@@ -11,6 +11,12 @@ import { createHash } from 'crypto';
 @Injectable()
 export class AppThrottlerGuard extends ThrottlerGuard {
   protected getTracker(req: Record<string, any>): Promise<string> {
+    // Login and token routes are anonymous: a made-up Authorization header
+    // must not buy a fresh bucket there, so they always count per IP.
+    const path = String(req.originalUrl ?? req.url ?? '');
+    if (/\/(platform\/)?auth\//.test(path)) {
+      return super.getTracker(req);
+    }
     const authorization = req.headers?.authorization;
     if (typeof authorization === 'string' && authorization.trim()) {
       const digest = createHash('sha256')
