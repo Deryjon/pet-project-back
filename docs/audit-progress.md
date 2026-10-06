@@ -188,6 +188,34 @@
   - `pnpm-lock.yaml` не тронут: в списке разрешённого его нет.
 - **Как проверить:** `npm run build:typecheck` и тесты проходят.
 
+### 14. Фронт: стабильность стора и POS (🟠)
+Все коммиты в репозитории фронта, ветка `audit-fixes`.
+- **`1322205` fix(auth): share the in-flight fetchMe and survive a corrupted saved shop.**
+  - Параллельный `fetchMe` ждёт текущий запрос, а не возвращает `false`. Раньше middleware в этом случае отправлял пользователя на страницу входа.
+  - Битый `selectedLocation` в `localStorage` удаляется, а не ломает каждую навигацию.
+  - Оба пункта лежат в одном файле, поэтому вышли одним коммитом.
+- **`de7fa5d` fix(pos): keep cart errors visible when the resync after a failure fails.**
+  - `loadSale` в `catch` больше не роняет обработчик.
+  - Сообщение об ошибке выставляется первым.
+  - Отклонённые сервером значения не записываются в позицию.
+- **`b616fb6` fix(pos): ignore a second pay or return submit while one is running.** `paySale` и `submitReturnOrExchange` защищены от повторного входа по `payLoading`.
+- **`0596747` perf(pos): batch cart persistence and survive blocked storage.**
+  - Сохранение корзины работает с debounce 250 мс, сбрасывается на `pagehide` и `beforeunload` и отменяется при смене пользователя или магазина.
+  - `setItem` обёрнут в `try/catch`.
+  - `saleFlowMode` добавлен в источники watcher-а, это совет ревью.
+- **`6753934` fix(pos): register unload listeners before restoring the sale and await leave.** Слушатели выгрузки навешиваются до `await`, уход со страницы ждёт `leave`.
+- **`4de56c3` refactor(pos): drop the unused completeOrder** — вторая часть D5.
+
+**Как проверить руками:**
+- две вкладки, F5 — пользователя не выкидывает на вход;
+- в `localStorage` записать `selectedLocation = "{"` — страница открывается;
+- двойной Enter на оплате — одна продажа;
+- быстрый уход со страницы новой продажи и возврат — корзина на месте.
+
+**Замечания ревью, оставлены на потом:**
+- флаг «права устарели» для перезапроса после неудачного обновления;
+- лишний повторный запрос прав со страницы `/403`, пока бэкенд недоступен.
+
 ## 🧭 Решения
 
 ### D1. Долг при отмене продажи
@@ -283,4 +311,4 @@
 
 ## ▶ Следующий пункт
 
-Остальные 🟠: начать с фронта — `fetchMe` при параллельных вызовах, битый `selectedLocation`, `loadSale` в `catch`, повторная оплата в сторе, слушатели new-order.
+🟠: страница `/settings/shop` (404 на `/branches/:key`), затем UI/a11y-пункты фронта (aria-label в POS, глобальный focus-visible, подписи полей, латиница в плейсхолдерах), затем бэкенд: повторы serializable-транзакций с jitter, тест соответствия ключей `@Permissions`, CI фронта (`generate:mobile`).
