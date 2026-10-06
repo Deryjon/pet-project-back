@@ -677,7 +677,9 @@ export class ProductsController {
 
   @Post('v2/product/photo')
   @Permissions('product-photo')
-  @UseInterceptors(FileInterceptor('photo'))
+  @UseInterceptors(
+    FileInterceptor('photo', { limits: { fileSize: 10 * 1024 * 1024 } }),
+  )
   uploadProductPhoto(
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
     @UploadedFile()

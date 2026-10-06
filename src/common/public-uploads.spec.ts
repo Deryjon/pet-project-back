@@ -12,7 +12,8 @@ describe('Public upload allowlist', () => {
     root = await fs.mkdtemp(join(tmpdir(), 'crm-public-uploads-test-'));
     for (const folder of ['products', 'avatars', 'invoices']) {
       await fs.mkdir(join(root, folder));
-      await fs.writeFile(join(root, folder, 'sample.txt'), folder);
+      await fs.writeFile(join(root, folder, 'sample.png'), folder);
+      await fs.writeFile(join(root, folder, 'page.html'), '<script>x</script>');
     }
     app = express();
     app.use('/uploads', publicUploads(root));
@@ -24,18 +25,27 @@ describe('Public upload allowlist', () => {
     'keeps %s publicly readable',
     async (folder) => {
       await request(app)
-        .get(`/uploads/${folder}/sample.txt`)
-        .expect(200, folder);
+        .get(`/uploads/${folder}/sample.png`)
+        .expect('X-Content-Type-Options', 'nosniff')
+        .expect(200);
     },
   );
   it.each([
-    '/uploads/invoices/sample.txt',
-    '/uploads/%69nvoices/sample.txt',
-    '/uploads/products/../invoices/sample.txt',
-    '/uploads/products/%2e%2e%2finvoices/sample.txt',
+    '/uploads/invoices/sample.png',
+    '/uploads/%69nvoices/sample.png',
+    '/uploads/products/../invoices/sample.png',
+    '/uploads/products/%2e%2e%2finvoices/sample.png',
   ])('does not serve an invoice at %s', async (url) => {
     const response = await request(app).get(url);
     expect([400, 403, 404]).toContain(response.status);
     expect(response.text).not.toBe('invoices');
   });
+  it.each(['products', 'avatars'])(
+    'never serves a non-image file from %s',
+    async (folder) => {
+      const response = await request(app).get(`/uploads/${folder}/page.html`);
+      expect(response.status).toBe(404);
+      expect(response.text).not.toContain('<script>');
+    },
+  );
 });

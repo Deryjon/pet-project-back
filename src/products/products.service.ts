@@ -15,7 +15,8 @@ import {
 import { Prisma, ProductSeason, TransferStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
-import { extname, join } from 'path';
+import { join } from 'path';
+import { detectImageKind } from '../common/image-upload';
 import {
   CompanyRequestContext,
   requireCompanyContext,
@@ -722,8 +723,14 @@ export class ProductsService {
     const uploadsDirectory = join(process.cwd(), 'uploads', 'products');
     await fs.mkdir(uploadsDirectory, { recursive: true });
 
-    const extension = extname(file.originalname).toLowerCase() || '.jpg';
-    const fileName = `${randomUUID()}${extension}`;
+    // The stored extension comes from the real file type, not the name.
+    const kind = detectImageKind(file.buffer);
+    if (!kind) {
+      throw new BadRequestException(
+        'Only jpg, jpeg, png and webp files are allowed',
+      );
+    }
+    const fileName = `${randomUUID()}.${kind}`;
     const filePath = join(uploadsDirectory, fileName);
 
     await fs.writeFile(filePath, file.buffer);

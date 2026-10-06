@@ -12,7 +12,8 @@ import * as bcrypt from 'bcrypt';
 import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
-import { extname, join } from 'path';
+import { join } from 'path';
+import { detectImageKind } from '../common/image-upload';
 import { extractAccessToken } from '../auth/access-token.util';
 import {
   CompanyContextOptions,
@@ -1320,8 +1321,12 @@ export class UsersService {
 
     await this.removeStoredAvatar(user.avatarUrl);
 
-    const extension = extname(file.originalname).toLowerCase() || '.jpg';
-    const fileName = `${user.id}-${randomUUID()}${extension}`;
+    // The stored extension comes from the real file type, not the name.
+    const kind = detectImageKind(file.buffer);
+    if (!kind) {
+      throw new BadRequestException('Only jpg, jpeg and png files are allowed');
+    }
+    const fileName = `${user.id}-${randomUUID()}.${kind}`;
     const filePath = join(uploadsDirectory, fileName);
 
     await fs.writeFile(filePath, file.buffer);
