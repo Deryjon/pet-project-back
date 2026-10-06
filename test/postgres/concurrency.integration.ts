@@ -210,8 +210,15 @@ describe('real PostgreSQL transaction invariants', () => {
     const results = await Promise.allSettled(
       [1, 2].map(() => service.applyInventory(inventory.id, f.context)),
     );
-    expect(fulfilled(results)).toHaveLength(1);
-    expectDomainRejection(results, [400, 409]);
+    // The losing request either sees the completed session and returns an
+    // idempotent success, or fails with a domain error — never applies twice.
+    const applied = fulfilled(results).filter(
+      (r) => !(r as PromiseFulfilledResult<any>).value.idempotent,
+    );
+    expect(applied).toHaveLength(1);
+    if (fulfilled(results).length === 1) {
+      expectDomainRejection(results, [400, 409]);
+    }
     const state = await stockState(f);
     expect(state.stocks).toHaveLength(1);
     expect(state.stocks[0].quantity).toBe(7);
@@ -224,7 +231,7 @@ describe('real PostgreSQL transaction invariants', () => {
           where: { id: inventory.id },
         })
       ).status,
-    ).toBe('completed');
+    ).toBe('COMPLETED');
   });
 
   it('prevents duplicate stock rows under concurrent upsert', async () => {
