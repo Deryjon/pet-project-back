@@ -90,7 +90,8 @@ export class ProductAttributesService {
   ) {
     const definition = await this.findDefinition(id, requestContext);
     const data: Prisma.AttributeDefinitionUpdateInput = {};
-    if (body.name !== undefined) data.name = this.requireText(body.name, 'name');
+    if (body.name !== undefined)
+      data.name = this.requireText(body.name, 'name');
     if (body.sort_order !== undefined)
       data.sortOrder = this.optionalInt(body.sort_order) ?? 0;
     if (body.is_active !== undefined) data.isActive = body.is_active === true;

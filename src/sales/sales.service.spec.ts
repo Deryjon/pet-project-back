@@ -71,15 +71,30 @@ describe('SalesService money calculations', () => {
         quantity: 2,
         salePrice: 500,
         stockComposition: [
-          { productId: 10, variantId: 'variant-red-m', quantity: 1, salePrice: 100 },
+          {
+            productId: 10,
+            variantId: 'variant-red-m',
+            quantity: 1,
+            salePrice: 100,
+          },
           { productId: 20, variantId: null, quantity: 3, salePrice: 50 },
         ],
       },
     ]);
 
     expect(result).toEqual([
-      expect.objectContaining({ productId: 10, variantId: 'variant-red-m', quantity: 2, salePrice: 100 }),
-      expect.objectContaining({ productId: 20, variantId: null, quantity: 6, salePrice: 50 }),
+      expect.objectContaining({
+        productId: 10,
+        variantId: 'variant-red-m',
+        quantity: 2,
+        salePrice: 100,
+      }),
+      expect.objectContaining({
+        productId: 20,
+        variantId: null,
+        quantity: 6,
+        salePrice: 50,
+      }),
     ]);
   });
 
@@ -88,7 +103,9 @@ describe('SalesService money calculations', () => {
     const productFindMany = jest.fn().mockResolvedValue([]);
     const { service } = createService({
       shop: {
-        findFirst: jest.fn().mockResolvedValue({ id: 'shop-1', branchCode: 'B1' }),
+        findFirst: jest
+          .fn()
+          .mockResolvedValue({ id: 'shop-1', branchCode: 'B1' }),
       },
       company: {
         findUnique: jest.fn().mockResolvedValue({
@@ -199,11 +216,9 @@ describe('SalesService money calculations', () => {
     it('rejects a mixed payment when paid components plus debt do not match', () => {
       const { service } = createService();
       expect(() =>
-        (service as any).validatePaymentAmounts(
-          [{ amount: 300 }],
-          1000,
-          { debt: { amount_uzs: 500 } },
-        ),
+        (service as any).validatePaymentAmounts([{ amount: 300 }], 1000, {
+          debt: { amount_uzs: 500 },
+        }),
       ).toThrow('Payments total plus debt must equal the sale payable total');
     });
 

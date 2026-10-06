@@ -30,13 +30,17 @@ describe('EAN-13', () => {
   it('allocates unique valid codes after the highest one in use', async () => {
     const db = {
       product: {
-        findMany: jest.fn().mockResolvedValue([
-          { barcode: formatInternalEan13(200000000005) },
-          { barcode: '4006381333931' },
-        ]),
+        findMany: jest
+          .fn()
+          .mockResolvedValue([
+            { barcode: formatInternalEan13(200000000005) },
+            { barcode: '4006381333931' },
+          ]),
       },
       productVariant: {
-        findMany: jest.fn().mockResolvedValue([{ barcode: formatInternalEan13(200000000001) }]),
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ barcode: formatInternalEan13(200000000001) }]),
       },
     };
 

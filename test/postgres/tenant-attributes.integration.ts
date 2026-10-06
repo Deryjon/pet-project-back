@@ -45,8 +45,11 @@ describe('Tenant attributes mirrored from legacy colour/size', () => {
       [variantId],
     );
   const optionsKey = async (variantId: string) =>
-    (await one(`SELECT "optionsKey" FROM "ProductVariant" WHERE id = $1`, [variantId]))
-      .optionsKey;
+    (
+      await one(`SELECT "optionsKey" FROM "ProductVariant" WHERE id = $1`, [
+        variantId,
+      ])
+    ).optionsKey;
 
   it('mirrors colours, sizes and variant axes as they are written', async () => {
     await seed();
@@ -59,10 +62,17 @@ describe('Tenant attributes mirrored from legacy colour/size', () => {
       ),
     ).toEqual([
       { code: 'color', name: 'Цвет', legacySource: 'color', sortOrder: 0 },
-      { code: 'size_clothing', name: 'Размер одежды', legacySource: 'size', sortOrder: 1 },
+      {
+        code: 'size_clothing',
+        name: 'Размер одежды',
+        legacySource: 'size',
+        sortOrder: 1,
+      },
     ]);
     expect(
-      await one(`SELECT value, meta FROM "AttributeOption" WHERE "legacyColorId" = 'a-red'`),
+      await one(
+        `SELECT value, meta FROM "AttributeOption" WHERE "legacyColorId" = 'a-red'`,
+      ),
     ).toEqual({ value: 'Red', meta: { code: '#f00' } });
     expect(await values('a-v1')).toEqual([
       { code: 'color', value: 'Red' },
@@ -81,7 +91,9 @@ describe('Tenant attributes mirrored from legacy colour/size', () => {
     await seed();
     const keyBefore = await optionsKey('a-v1');
 
-    await db.query(`UPDATE "ProductColor" SET name = 'Crimson' WHERE id = 'a-red'`);
+    await db.query(
+      `UPDATE "ProductColor" SET name = 'Crimson' WHERE id = 'a-red'`,
+    );
     await db.query(`UPDATE "ProductSize" SET type = 'SHOES' WHERE id = 'a-m'`);
     expect(await values('a-v1')).toEqual([
       { code: 'color', value: 'Crimson' },
@@ -89,14 +101,18 @@ describe('Tenant attributes mirrored from legacy colour/size', () => {
     ]);
     expect(await optionsKey('a-v1')).not.toBe(keyBefore);
 
-    await db.query(`UPDATE "ProductVariant" SET "sizeId" = NULL WHERE id = 'a-v1'`);
+    await db.query(
+      `UPDATE "ProductVariant" SET "sizeId" = NULL WHERE id = 'a-v1'`,
+    );
     expect(await values('a-v1')).toEqual([{ code: 'color', value: 'Crimson' }]);
 
     await db.query(`DELETE FROM "ProductColor" WHERE id = 'a-red'`);
     expect(await values('a-v1')).toEqual([]);
     expect(await optionsKey('a-v1')).toBeNull();
     expect(
-      await one(`SELECT count(*)::int AS n FROM "AttributeOption" WHERE "legacyColorId" = 'a-red'`),
+      await one(
+        `SELECT count(*)::int AS n FROM "AttributeOption" WHERE "legacyColorId" = 'a-red'`,
+      ),
     ).toEqual({ n: 0 });
   });
 

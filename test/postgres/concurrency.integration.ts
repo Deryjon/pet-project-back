@@ -203,7 +203,17 @@ describe('real PostgreSQL transaction invariants', () => {
         number: `INV-TEST-${Date.now()}`,
         name: 'Count',
         status: 'REVIEW',
-        items: { create: { productId: f.product.id, systemQuantitySnapshot: 0, expectedQuantityAtCount: 0, countedQuantity: 7, differenceQuantity: 7, adjustmentDelta: 7, status: 'SURPLUS' } },
+        items: {
+          create: {
+            productId: f.product.id,
+            systemQuantitySnapshot: 0,
+            expectedQuantityAtCount: 0,
+            countedQuantity: 7,
+            differenceQuantity: 7,
+            adjustmentDelta: 7,
+            status: 'SURPLUS',
+          },
+        },
       },
     });
     const service = new WarehouseService(overlappingTransactions(db).prisma);
@@ -236,7 +246,9 @@ describe('real PostgreSQL transaction invariants', () => {
 
   it('prevents duplicate stock rows under concurrent upsert', async () => {
     const f = await fixture(db, 0);
-    await db.productVariantStock.deleteMany({ where: { variantId: f.variant.id } });
+    await db.productVariantStock.deleteMany({
+      where: { variantId: f.variant.id },
+    });
     await db.productStock.deleteMany({ where: { productId: f.product.id } });
     await Promise.all(
       [1, 2].map(() =>
@@ -316,51 +328,54 @@ describe('real PostgreSQL transaction invariants', () => {
   it.each([
     ['one line of 2 units', [2]],
     ['the same product on two lines', [1, 1]],
-  ])('never returns more than was sold with concurrent returns (%s)', async (_, quantities) => {
-    const f = await fixture(db, 0);
-    const lines = quantities.map((quantity) => ({
-      productId: f.product.id,
-      name: 'Product',
-      quantity,
-      salePrice: 10,
-      lineTotal: 10 * quantity,
-      finalPrice: 10 * quantity,
-    }));
-    const sale = await db.sale.create({
-      data: {
-        companyId: f.company.id,
-        userId: f.user.id,
-        branchCode: '001',
-        number: randomUUID(),
-        status: 'paid',
-        isDraft: false,
-        total: 20,
-        payableTotal: 20,
-        items: { create: lines },
-      },
-    });
-    const service = new SalesService(
-      overlappingTransactions(db).prisma,
-      new CompanySettingsService(prisma),
-      {} as any,
-    );
-    const returnAll = { items: [{ product_id: f.product.id, quantity: 2 }] };
+  ])(
+    'never returns more than was sold with concurrent returns (%s)',
+    async (_, quantities) => {
+      const f = await fixture(db, 0);
+      const lines = quantities.map((quantity) => ({
+        productId: f.product.id,
+        name: 'Product',
+        quantity,
+        salePrice: 10,
+        lineTotal: 10 * quantity,
+        finalPrice: 10 * quantity,
+      }));
+      const sale = await db.sale.create({
+        data: {
+          companyId: f.company.id,
+          userId: f.user.id,
+          branchCode: '001',
+          number: randomUUID(),
+          status: 'paid',
+          isDraft: false,
+          total: 20,
+          payableTotal: 20,
+          items: { create: lines },
+        },
+      });
+      const service = new SalesService(
+        overlappingTransactions(db).prisma,
+        new CompanySettingsService(prisma),
+        {} as any,
+      );
+      const returnAll = { items: [{ product_id: f.product.id, quantity: 2 }] };
 
-    const results = await Promise.allSettled(
-      [1, 2].map(() =>
-        service.processReturn(String(sale.id), returnAll, f.context),
-      ),
-    );
+      const results = await Promise.allSettled(
+        [1, 2].map(() =>
+          service.processReturn(String(sale.id), returnAll, f.context),
+        ),
+      );
 
-    expect(fulfilled(results)).toHaveLength(1);
-    expectDomainRejection(results, [400]);
-    const returned = await db.saleItem.aggregate({
-      where: { sale: { parentSaleId: sale.id, saleType: 'return' } },
-      _sum: { quantity: true },
-    });
-    expect(Number(returned._sum.quantity)).toBe(2);
-    expect((await stockState(f)).product.quantity).toBe(2);
-  });
+      expect(fulfilled(results)).toHaveLength(1);
+      expectDomainRejection(results, [400]);
+      const returned = await db.saleItem.aggregate({
+        where: { sale: { parentSaleId: sale.id, saleType: 'return' } },
+        _sum: { quantity: true },
+      });
+      expect(Number(returned._sum.quantity)).toBe(2);
+      expect((await stockState(f)).product.quantity).toBe(2);
+    },
+  );
 
   it('rotates a refresh session once and rolls back the losing replacement row', async () => {
     const f = await fixture(db);

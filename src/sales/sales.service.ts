@@ -790,7 +790,12 @@ export class SalesService {
           stocks: true,
           variants: {
             where: { isActive: true, isDefault: false },
-            include: { ...VARIANT_ATTRIBUTES_INCLUDE, color: true, size: true, stocks: true },
+            include: {
+              ...VARIANT_ATTRIBUTES_INCLUDE,
+              color: true,
+              size: true,
+              stocks: true,
+            },
             orderBy: { createdAt: 'asc' },
           },
           bundleComponents: {
@@ -2650,9 +2655,7 @@ export class SalesService {
           `Product ${productId} is not present in the original sale`,
         );
       }
-      if (
-        new Set(candidates.map((item) => this.returnKey(item))).size > 1
-      ) {
+      if (new Set(candidates.map((item) => this.returnKey(item))).size > 1) {
         throw new BadRequestException(
           `Product ${productId} was sold in several variants: specify variant_id`,
         );
@@ -2881,14 +2884,17 @@ export class SalesService {
     return normalizedItems;
   }
 
-  private async getReturnableQuantities(originalSale: {
-    id: number;
-    items: Array<{
-      productId: number | null;
-      variantId?: string | null;
-      quantity: number;
-    }>;
-  }, tx: Prisma.TransactionClient) {
+  private async getReturnableQuantities(
+    originalSale: {
+      id: number;
+      items: Array<{
+        productId: number | null;
+        variantId?: string | null;
+        quantity: number;
+      }>;
+    },
+    tx: Prisma.TransactionClient,
+  ) {
     const returns = await tx.sale.findMany({
       where: {
         parentSaleId: originalSale.id,
@@ -2936,7 +2942,10 @@ export class SalesService {
     return returnableMap;
   }
 
-  private returnKey(item: { productId: number | null; variantId?: string | null }) {
+  private returnKey(item: {
+    productId: number | null;
+    variantId?: string | null;
+  }) {
     return item.variantId ?? `product:${item.productId}`;
   }
 

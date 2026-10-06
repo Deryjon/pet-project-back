@@ -24,9 +24,14 @@ export type LedgerSeed = {
 function matches(row: Row, where: Row = {}): boolean {
   return Object.entries(where).every(([key, condition]) => {
     if (key === 'OR') return (condition as Row[]).some((c) => matches(row, c));
-    if (key === 'AND') return (condition as Row[]).every((c) => matches(row, c));
+    if (key === 'AND')
+      return (condition as Row[]).every((c) => matches(row, c));
     const value = row[key];
-    if (condition && typeof condition === 'object' && !(condition instanceof Date)) {
+    if (
+      condition &&
+      typeof condition === 'object' &&
+      !(condition instanceof Date)
+    ) {
       if ('gte' in condition) return value >= condition.gte;
       if ('gt' in condition) return value > condition.gt;
       if ('in' in condition) return condition.in.includes(value);
@@ -82,7 +87,9 @@ export function createStockLedgerFake(seed: LedgerSeed) {
   let shopStockId = 0;
 
   const defaultVariantOf = (productId: number) => {
-    let variant = variants.find((v) => v.productId === productId && v.isDefault);
+    let variant = variants.find(
+      (v) => v.productId === productId && v.isDefault,
+    );
     if (!variant) {
       variant = {
         id: `default-${productId}`,
@@ -100,7 +107,12 @@ export function createStockLedgerFake(seed: LedgerSeed) {
   };
 
   // The ledger trigger.
-  const ledger = (variantId: string, shopId: string, branchCode: string, delta: number) => {
+  const ledger = (
+    variantId: string,
+    shopId: string,
+    branchCode: string,
+    delta: number,
+  ) => {
     if (!delta) return;
     const variant = variants.find((v) => v.id === variantId);
     if (!variant) return;
@@ -222,10 +234,16 @@ export function createStockLedgerFake(seed: LedgerSeed) {
   const tx = {
     product: {
       findFirst: jest.fn(async ({ where, select }: Row) =>
-        pick(products.find((p) => matches(p, where)), select),
+        pick(
+          products.find((p) => matches(p, where)),
+          select,
+        ),
       ),
       findUnique: jest.fn(async ({ where, select }: Row) =>
-        pick(products.find((p) => p.id === where.id), select),
+        pick(
+          products.find((p) => p.id === where.id),
+          select,
+        ),
       ),
       update: jest.fn(async ({ where, data }: Row) => {
         const product = products.find((p) => p.id === where.id)!;
@@ -243,7 +261,10 @@ export function createStockLedgerFake(seed: LedgerSeed) {
         ),
       ),
       findUnique: jest.fn(async ({ where, select }: Row) =>
-        pick(variants.find((v) => v.id === where.id), select),
+        pick(
+          variants.find((v) => v.id === where.id),
+          select,
+        ),
       ),
       create: jest.fn(async ({ data, select }: Row) => {
         const variant = {
@@ -367,7 +388,8 @@ export function createStockLedgerFake(seed: LedgerSeed) {
       shopStocks.find((s) => s.productId === productId && s.shopId === shopId)
         ?.quantity ?? 0,
     variantQuantity: (variantId: string, shopId: string) =>
-      variantStocks.find((s) => s.variantId === variantId && s.shopId === shopId)
-        ?.quantity ?? 0,
+      variantStocks.find(
+        (s) => s.variantId === variantId && s.shopId === shopId,
+      )?.quantity ?? 0,
   };
 }

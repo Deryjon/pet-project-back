@@ -15,7 +15,12 @@ describe('ProductAttributesService on PostgreSQL', () => {
     const [tall, regular] = await Promise.all(
       ['tall', 'regular'].map((id) =>
         client.productVariant.create({
-          data: { companyId: f.company.id, productId: f.product.id, colorId: red.id, sku: `${f.company.id}-${id}` },
+          data: {
+            companyId: f.company.id,
+            productId: f.product.id,
+            colorId: red.id,
+            sku: `${f.company.id}-${id}`,
+          },
         }),
       ),
     );
@@ -50,10 +55,9 @@ describe('ProductAttributesService on PostgreSQL', () => {
       include: { attributeOptions: { include: { definition: true } } },
     });
     for (const variant of variants) {
-      expect(variant.attributeOptions.map((v) => v.definition.code).sort()).toEqual([
-        'color',
-        'height',
-      ]);
+      expect(
+        variant.attributeOptions.map((v) => v.definition.code).sort(),
+      ).toEqual(['color', 'height']);
     }
     expect(new Set(variants.map((v) => v.optionsKey)).size).toBe(2);
 
@@ -91,7 +95,9 @@ describe('ProductAttributesService on PostgreSQL', () => {
 
   it('keeps colour/size options in their dictionaries and stores product-level values', async () => {
     const { f } = await shirt();
-    const color = (await service.list(f.context)).find((d) => d.code === 'color')!;
+    const color = (await service.list(f.context)).find(
+      (d) => d.code === 'color',
+    )!;
 
     await expect(
       service.createOption(color.id, { value: 'Blue' }, f.context),
@@ -118,9 +124,8 @@ describe('Business presets on PostgreSQL', () => {
   afterAll(close);
 
   it('seeds starting attributes once and keeps tenant changes', async () => {
-    const { applyBusinessPreset } = await import(
-      '../../src/company-settings/business-presets'
-    );
+    const { applyBusinessPreset } =
+      await import('../../src/company-settings/business-presets');
     const f = await fixture(client, 0);
 
     await applyBusinessPreset(client as any, f.company.id, 'accessories_store');
@@ -147,7 +152,9 @@ describe('Business presets on PostgreSQL', () => {
     ]);
     expect(definitions.find((d) => d.code === 'power')?.name).toBe('Мощность');
     expect(
-      definitions.find((d) => d.code === 'connector')?.options.map((o) => o.value),
+      definitions
+        .find((d) => d.code === 'connector')
+        ?.options.map((o) => o.value),
     ).toEqual(['USB-C', 'Lightning', 'Micro-USB', 'AUX 3.5']);
   });
 });

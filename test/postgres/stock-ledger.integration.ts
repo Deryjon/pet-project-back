@@ -1,6 +1,9 @@
 import { ConflictException } from '@nestjs/common';
 import { Client } from 'pg';
-import { moveVariantStock, setVariantStock } from '../../src/common/stock-ledger';
+import {
+  moveVariantStock,
+  setVariantStock,
+} from '../../src/common/stock-ledger';
 import { database, fixture } from './support';
 
 const connectionString = process.env.TEST_DATABASE_URL;
@@ -51,7 +54,9 @@ describe('Variant stock ledger triggers', () => {
     expect(await shopQuantity(930001)).toBe(5);
     expect(await productQuantity(930001)).toBe(5);
 
-    await db.query(`UPDATE "ProductVariantStock" SET quantity = quantity - 2 WHERE id = 'l-vs1'`);
+    await db.query(
+      `UPDATE "ProductVariantStock" SET quantity = quantity - 2 WHERE id = 'l-vs1'`,
+    );
     expect(await shopQuantity(930001)).toBe(3);
     expect(await productQuantity(930001)).toBe(3);
 
@@ -63,21 +68,31 @@ describe('Variant stock ledger triggers', () => {
   it('rejects direct ProductStock quantity writes but allows prices', async () => {
     await db.query(`INSERT INTO "ProductStock" ("productId", "shopId", "branchCode", quantity, "salePrice", "updatedAt")
       VALUES (930001, 'l-s1', 'L1', 0, 10, now())`);
-    await db.query(`UPDATE "ProductStock" SET "salePrice" = 12 WHERE "productId" = 930001`);
+    await db.query(
+      `UPDATE "ProductStock" SET "salePrice" = 12 WHERE "productId" = 930001`,
+    );
 
     await db.query('SAVEPOINT attempt');
     await expect(
-      db.query(`UPDATE "ProductStock" SET quantity = 9 WHERE "productId" = 930001`),
+      db.query(
+        `UPDATE "ProductStock" SET quantity = 9 WHERE "productId" = 930001`,
+      ),
     ).rejects.toThrow(/follows ProductVariantStock/);
     await db.query('ROLLBACK TO SAVEPOINT attempt');
 
-    await db.query(`SELECT set_config('konkurent.stock_ledger', 'bypass', true)`);
-    await db.query(`UPDATE "ProductStock" SET quantity = 9 WHERE "productId" = 930001`);
+    await db.query(
+      `SELECT set_config('konkurent.stock_ledger', 'bypass', true)`,
+    );
+    await db.query(
+      `UPDATE "ProductStock" SET quantity = 9 WHERE "productId" = 930001`,
+    );
     expect(await shopQuantity(930001)).toBe(9);
   });
 
   it('aligns legacy stock without losing any quantity', async () => {
-    await db.query(`SELECT set_config('konkurent.stock_ledger', 'bypass', true)`);
+    await db.query(
+      `SELECT set_config('konkurent.stock_ledger', 'bypass', true)`,
+    );
     await db.query(`
       INSERT INTO "ProductColor" (id, "companyId", name, "updatedAt") VALUES
         ('l-red', '${COMPANY}', 'Red', now());
@@ -105,8 +120,12 @@ describe('Variant stock ledger triggers', () => {
     await db.query(`SELECT stock_ledger_align()`);
 
     const variantStock = async (variantId: string) =>
-      (await one(`SELECT quantity FROM "ProductVariantStock" WHERE "variantId" = $1`, [variantId]))
-        ?.quantity;
+      (
+        await one(
+          `SELECT quantity FROM "ProductVariantStock" WHERE "variantId" = $1`,
+          [variantId],
+        )
+      )?.quantity;
     // Simple: stale default variant follows ProductStock.
     expect(await variantStock('l-v1')).toBe(5);
     expect(await shopQuantity(930001)).toBe(5);
@@ -125,7 +144,9 @@ describe('Variant stock ledger triggers', () => {
       ),
     ).toEqual({ isDefault: true, quantity: 2 });
     // The ledger trigger is active again after the alignment.
-    await db.query(`UPDATE "ProductVariantStock" SET quantity = 6 WHERE id = 'l-vs1'`);
+    await db.query(
+      `UPDATE "ProductVariantStock" SET quantity = 6 WHERE id = 'l-vs1'`,
+    );
     expect(await shopQuantity(930001)).toBe(6);
   });
 });
@@ -173,7 +194,11 @@ describe('moveVariantStock on PostgreSQL', () => {
       setVariantStock(tx, { ...target, quantity: 7 }),
     );
 
-    expect(result).toMatchObject({ delta: 4, beforeQuantity: 3, afterQuantity: 7 });
+    expect(result).toMatchObject({
+      delta: 4,
+      beforeQuantity: 3,
+      afterQuantity: 7,
+    });
     expect(
       (await client.product.findUniqueOrThrow({ where: { id: f.product.id } }))
         .quantity,

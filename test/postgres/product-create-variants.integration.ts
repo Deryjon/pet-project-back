@@ -38,15 +38,23 @@ describe('Catalog product create with colour variants on PostgreSQL', () => {
       measurement_unit_id: f.unit.id,
       supply_price: 50,
       retail_price: 100,
-      shop_measurement_values: [
-        { shop_id: f.f.shop.id, measurement_value: 0 },
-      ],
+      shop_measurement_values: [{ shop_id: f.f.shop.id, measurement_value: 0 }],
       shop_prices: [
         { shop_id: f.f.shop.id, supply_price: 50, retail_price: 100 },
       ],
       variants: [
-        { color_id: f.red.id, supply_price: 50, retail_price: 100, stocks: { [f.f.shop.id]: 3 } },
-        { color_id: f.blue.id, supply_price: 50, retail_price: 100, stocks: { [f.f.shop.id]: 5 } },
+        {
+          color_id: f.red.id,
+          supply_price: 50,
+          retail_price: 100,
+          stocks: { [f.f.shop.id]: 3 },
+        },
+        {
+          color_id: f.blue.id,
+          supply_price: 50,
+          retail_price: 100,
+          stocks: { [f.f.shop.id]: 5 },
+        },
       ],
       ...extra,
     };

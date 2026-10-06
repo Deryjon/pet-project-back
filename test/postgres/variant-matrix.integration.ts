@@ -58,13 +58,21 @@ describe('Variant availability matrix on PostgreSQL', () => {
       return created;
     }
 
-    const redS = await variant(red.id, s.id, [[f.shop, 3], [otherShop, 7]]);
+    const redS = await variant(red.id, s.id, [
+      [f.shop, 3],
+      [otherShop, 7],
+    ]);
     const redM = await variant(red.id, m.id, [[f.shop, 0]]);
-    const blueS = await variant(blue.id, s.id, [[f.shop, 1]], { salePrice: 12 });
+    const blueS = await variant(blue.id, s.id, [[f.shop, 1]], {
+      salePrice: 12,
+    });
     // Blue/M exists only as a removed variant: the matrix shows it as missing.
     await variant(blue.id, m.id, [[f.shop, 5]], { isActive: false });
 
-    const matrix = await service.getVariantMatrix(f.product.publicId, f.context);
+    const matrix = await service.getVariantMatrix(
+      f.product.publicId,
+      f.context,
+    );
 
     expect(matrix.base_sale_price).toBe(10);
     expect(matrix.shops).toEqual([

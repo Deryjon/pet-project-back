@@ -7001,7 +7001,12 @@ export class ProductsService {
     exclude: string[] = [],
   ) {
     try {
-      return await allocateInternalBarcodes(this.prisma, companyId, count, exclude);
+      return await allocateInternalBarcodes(
+        this.prisma,
+        companyId,
+        count,
+        exclude,
+      );
     } catch (error) {
       if (error instanceof RangeError) {
         throw new BadRequestException('Barcode range exceeded');

@@ -19,11 +19,18 @@ describe('Variant barcode generation on PostgreSQL', () => {
     });
     const sizes = await Promise.all(
       ['S', 'M', 'L', 'XL'].map((name) =>
-        client.productSize.create({ data: { companyId, name, type: 'CLOTHING' } }),
+        client.productSize.create({
+          data: { companyId, name, type: 'CLOTHING' },
+        }),
       ),
     );
     const kept = await client.productVariant.create({
-      data: { companyId, productId: f.product.id, sizeId: sizes[0].id, barcode: '4600000000003' },
+      data: {
+        companyId,
+        productId: f.product.id,
+        sizeId: sizes[0].id,
+        barcode: '4600000000003',
+      },
     });
     const missing = await Promise.all(
       sizes.slice(1).map((size, index) =>
@@ -47,7 +54,9 @@ describe('Variant barcode generation on PostgreSQL', () => {
     const variants = await client.productVariant.findMany({
       where: { productId: f.product.id, isDefault: false },
     });
-    expect(variants.find((v) => v.id === kept.id)?.barcode).toBe('4600000000003');
+    expect(variants.find((v) => v.id === kept.id)?.barcode).toBe(
+      '4600000000003',
+    );
     const generated = variants
       .filter((v) => missing.some((m) => m.id === v.id))
       .map((v) => v.barcode!);
@@ -61,7 +70,10 @@ describe('Variant barcode generation on PostgreSQL', () => {
 
     // Nothing left to generate on a second call.
     await expect(
-      service.ensureVariantBarcodes({ product_ids: [String(f.product.id)] }, f.context),
+      service.ensureVariantBarcodes(
+        { product_ids: [String(f.product.id)] },
+        f.context,
+      ),
     ).resolves.toEqual({ generated: 0 });
   });
 });
