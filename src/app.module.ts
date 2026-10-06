@@ -1,6 +1,7 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { AuthModule } from './auth/auth.module';
 import { ClientsModule } from './clients/clients.module';
@@ -29,16 +30,14 @@ import { ImportsModule } from './imports/imports.module';
     ConfigModule.forRoot({
       isGlobal: true,
     }),
+    // Applied to every route by the global guard below; login routes tighten
+    // it with @Throttle. A second named throttler would apply to all routes
+    // too, so the stricter login limit is an override, not its own throttler.
     ThrottlerModule.forRoot([
       {
         name: 'default',
         ttl: 60000,
         limit: 100,
-      },
-      {
-        name: 'auth',
-        ttl: 60000,
-        limit: 5,
       },
     ]),
     PrismaModule,
@@ -63,6 +62,7 @@ import { ImportsModule } from './imports/imports.module';
     ImportsModule,
   ],
   controllers: [HealthController],
+  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {

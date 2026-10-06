@@ -1,6 +1,7 @@
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import * as express from 'express';
+import helmet from 'helmet';
 import { publicUploads } from './common/public-uploads';
 import { AppModule } from './app.module';
 import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
@@ -90,6 +91,10 @@ async function bootstrap() {
       next();
     },
   );
+
+  // Security headers. Images under /uploads are shown by the frontend from
+  // another origin, so the resource policy must allow cross-origin reads.
+  app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
   app.setGlobalPrefix('api');
   app.enableCors({
