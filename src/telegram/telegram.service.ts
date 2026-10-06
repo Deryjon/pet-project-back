@@ -13,7 +13,8 @@ import {
 import { PlatformService } from '../platform/platform.service';
 import {
   LOYALTY_CASHBACK_PAYMENT_METHOD,
-  LOYALTY_CASHBACK_PAYMENT_NAME,
+  loadLoyaltyProgramType,
+  loyaltyPaymentName,
 } from '../common/loyalty-payment';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -277,10 +278,13 @@ export class TelegramService {
 
       const paymentLines: string[] = [];
       if (extraPayments && extraPayments.length > 0) {
+        const loyaltyName = loyaltyPaymentName(
+          await loadLoyaltyProgramType(this.prisma, sale.companyId),
+        );
         for (const p of extraPayments) {
           if (p.payment_method === LOYALTY_CASHBACK_PAYMENT_METHOD) {
             paymentLines.push(
-              `🎁 ${LOYALTY_CASHBACK_PAYMENT_NAME}: ${this.fmt(p.amount)} UZS`,
+              `🎁 ${loyaltyName}: ${this.fmt(p.amount)} UZS`,
             );
             continue;
           }

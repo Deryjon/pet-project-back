@@ -16,7 +16,8 @@ import {
 import { contextHasPermissions } from '../auth/role-permissions';
 import {
   LOYALTY_CASHBACK_PAYMENT_METHOD,
-  LOYALTY_CASHBACK_PAYMENT_NAME,
+  loadLoyaltyProgramType,
+  loyaltyPaymentName,
 } from '../common/loyalty-payment';
 import { postSaleStockDecrease } from '../common/sale-stock-posting';
 import { moveVariantStock } from '../common/stock-ledger';
@@ -6078,7 +6079,7 @@ export class SalesService {
     }
     const amount = Number(raw);
     if (!Number.isFinite(amount) || amount < 0) {
-      throw new BadRequestException('Сумма оплаты бонусами указана неверно');
+      throw new BadRequestException('Сумма оплаты с баланса лояльности указана неверно');
     }
     if (Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-8) {
       throw new BadRequestException(
@@ -6087,7 +6088,7 @@ export class SalesService {
     }
     if (Math.round(amount * 100) > Math.round(Math.max(0, payable) * 100)) {
       throw new BadRequestException(
-        'Оплата бонусами не может превышать сумму к оплате',
+        'Оплата с баланса лояльности не может превышать сумму к оплате',
       );
     }
     return amount;
@@ -6140,7 +6141,7 @@ export class SalesService {
     }
     if (!sale.companyId || !sale.clientId) {
       throw new BadRequestException(
-        'Выберите клиента, чтобы оплатить бонусами',
+        'Выберите клиента, чтобы оплатить с баланса лояльности',
       );
     }
     const loyalty = await tx.loyaltyProgramSetting.findUnique({
@@ -6158,7 +6159,7 @@ export class SalesService {
       data: { balanceUzs: { decrement: amount } },
     });
     if (debited.count !== 1) {
-      throw new ConflictException('Недостаточно бонусов на балансе клиента');
+      throw new ConflictException('Недостаточно средств на балансе лояльности клиента');
     }
     await tx.sale.update({
       where: { id: sale.id },
@@ -6434,11 +6435,13 @@ export class SalesService {
   }
 
   private async buildPaymentTypeLookup(companyId?: string | null) {
-    const companyPaymentTypes =
-      await this.companySettingsService.getCompanyPaymentTypes(
+    const [companyPaymentTypes, loyaltyType] = await Promise.all([
+      this.companySettingsService.getCompanyPaymentTypes(
         undefined,
         companyId ?? undefined,
-      );
+      ),
+      loadLoyaltyProgramType(this.prisma, companyId),
+    ]);
     const lookup = new Map<
       string,
       {
@@ -6474,11 +6477,12 @@ export class SalesService {
           typeof paymentTypeMeta?.name === 'string' ? paymentTypeMeta.name : '',
       });
     }
+    const loyaltyName = loyaltyPaymentName(loyaltyType);
     lookup.set(LOYALTY_CASHBACK_PAYMENT_METHOD, {
       id: LOYALTY_CASHBACK_PAYMENT_METHOD,
-      name: LOYALTY_CASHBACK_PAYMENT_NAME,
+      name: loyaltyName,
       payment_type_id: LOYALTY_CASHBACK_PAYMENT_METHOD,
-      payment_type_name: LOYALTY_CASHBACK_PAYMENT_NAME,
+      payment_type_name: loyaltyName,
     });
 
     return lookup;

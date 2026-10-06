@@ -11,7 +11,8 @@ import {
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import {
   LOYALTY_CASHBACK_PAYMENT_METHOD,
-  LOYALTY_CASHBACK_PAYMENT_NAME,
+  loadLoyaltyProgramType,
+  loyaltyPaymentName,
 } from '../common/loyalty-payment';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -177,7 +178,7 @@ export class DashboardService {
     }
     paymentTypeLookup.set(
       LOYALTY_CASHBACK_PAYMENT_METHOD,
-      LOYALTY_CASHBACK_PAYMENT_NAME,
+      loyaltyPaymentName(await loadLoyaltyProgramType(this.prisma, companyId)),
     );
 
     const paymentTotals = new Map<

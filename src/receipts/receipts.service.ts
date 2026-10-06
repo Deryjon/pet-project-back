@@ -1,5 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { LOYALTY_CASHBACK_PAYMENT_METHOD } from '../common/loyalty-payment';
+import {
+  LOYALTY_CASHBACK_PAYMENT_METHOD,
+  loadLoyaltyProgramType,
+} from '../common/loyalty-payment';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateChequeSettingsDto } from './dto/update-cheque-settings.dto';
 import {
@@ -315,12 +318,13 @@ export class ReceiptsService {
       });
     }
 
-    const [shopInfo, companyInfo] = await Promise.all([
+    const [shopInfo, companyInfo, loyaltyType] = await Promise.all([
       this.getShopInfo(receipt.shopId),
       this.getCompanyLegalInfo(companyId),
+      loadLoyaltyProgramType(this.prisma, companyId),
     ]);
 
-    return this.assembleResponse(sale, receipt, shopInfo, companyInfo);
+    return this.assembleResponse(sale, receipt, shopInfo, companyInfo, loyaltyType);
   }
 
   async getByNumber(number: string, companyId: string) {
@@ -633,6 +637,7 @@ export class ReceiptsService {
     },
     shopInfo: Awaited<ReturnType<ReceiptsService['getShopInfo']>>,
     companyInfo: Awaited<ReturnType<ReceiptsService['getCompanyLegalInfo']>>,
+    loyaltyType = '',
   ) {
     const items = Array.isArray(receipt.items)
       ? (receipt.items as Array<{ quantity?: unknown }>)
@@ -667,6 +672,8 @@ export class ReceiptsService {
       paid_cash: receipt.paidCash,
       paid_card: receipt.paidCard,
       paid_cashback: receipt.paidCashback,
+      // Wording of the paid-from-balance line: 'cashback' or 'bonus'.
+      loyalty_type: loyaltyType === 'bonus' ? 'bonus' : 'cashback',
       debt: receipt.debt,
       balance_before: receipt.balanceBefore,
       balance_added: receipt.balanceAdded,
