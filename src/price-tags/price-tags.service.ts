@@ -1,4 +1,10 @@
 import { Injectable } from '@nestjs/common';
+import {
+  VARIANT_ATTRIBUTES_INCLUDE,
+  variantAttributes,
+  variantDisplayName,
+  variantLabel,
+} from '../common/variant-attributes';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -65,7 +71,7 @@ export class PriceTagsService {
               isActive: true,
               OR: [{ colorId: { not: null } }, { sizeId: { not: null } }],
             },
-            include: { color: true, size: true, stocks: true },
+            include: { ...VARIANT_ATTRIBUTES_INCLUDE, color: true, size: true, stocks: true },
             orderBy: { createdAt: 'asc' },
           },
         },
@@ -161,9 +167,7 @@ export class PriceTagsService {
               Number(variantStock?.salePrice ?? 0) ||
               Number(variant.salePrice ?? 0) ||
               price;
-            const label = [variant.color?.name, variant.size?.name]
-              .filter(Boolean)
-              .join(' / ');
+            const label = variantLabel(variant);
             return {
               ...productTag,
               tag_key: `${p.id}:${variant.id}`,

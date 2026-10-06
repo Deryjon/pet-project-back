@@ -23,6 +23,12 @@ import {
   setVariantStock,
 } from '../common/stock-ledger';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
+import {
+  VARIANT_ATTRIBUTES_INCLUDE,
+  variantAttributes,
+  variantDisplayName,
+  variantLabel,
+} from '../common/variant-attributes';
 import { PrismaService } from '../prisma/prisma.service';
 import { DEFAULT_PRODUCT_COLORS, SIZE_GRID_PRESETS } from './size-grid-presets';
 
@@ -1030,7 +1036,7 @@ export class ProductsService {
     if (!product) throw new NotFoundException('Product not found');
     return this.prisma.productVariant.findMany({
       where: { companyId: context.companyId, productId: product.id },
-      include: { color: true, size: true, stocks: { include: { shop: true } } },
+      include: { ...VARIANT_ATTRIBUTES_INCLUDE, color: true, size: true, stocks: { include: { shop: true } } },
       orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
     });
   }
@@ -4147,7 +4153,7 @@ export class ProductsService {
         stocks: true,
         variants: {
           where: { isActive: true, isDefault: false },
-          include: { color: true, size: true, stocks: true },
+          include: { ...VARIANT_ATTRIBUTES_INCLUDE, color: true, size: true, stocks: true },
           orderBy: { createdAt: 'asc' },
         },
       },
@@ -4476,13 +4482,13 @@ export class ProductsService {
         stocks: true,
         variants: {
           where: { isActive: true, isDefault: false },
-          include: { color: true, size: true, stocks: true },
+          include: { ...VARIANT_ATTRIBUTES_INCLUDE, color: true, size: true, stocks: true },
           orderBy: { createdAt: 'asc' },
         },
         bundleComponents: {
           include: {
             componentProduct: true,
-            componentVariant: { include: { color: true, size: true } },
+            componentVariant: { include: { ...VARIANT_ATTRIBUTES_INCLUDE, color: true, size: true } },
           },
           orderBy: { createdAt: 'asc' },
         },
@@ -5727,7 +5733,7 @@ export class ProductsService {
       },
       variants: {
         where: { isActive: true, isDefault: false },
-        include: { color: true, size: true, stocks: true },
+        include: { ...VARIANT_ATTRIBUTES_INCLUDE, color: true, size: true, stocks: true },
       },
     } satisfies Prisma.ProductInclude;
 
@@ -6286,7 +6292,7 @@ export class ProductsService {
       items: {
         include: {
           variant: {
-            include: { color: true, size: true, stocks: true },
+            include: { ...VARIANT_ATTRIBUTES_INCLUDE, color: true, size: true, stocks: true },
           },
           product: {
             include: {
@@ -6474,7 +6480,7 @@ export class ProductsService {
     const effectiveProduct = variant
       ? {
           ...product,
-          name: `${product.name} — ${[variant.color?.name, variant.size?.name].filter(Boolean).join(' / ')}`,
+          name: variantDisplayName(product.name, variant),
           sku: variant.sku,
           barcode: variant.barcode,
           purchasePrice: variant.purchasePrice ?? product.purchasePrice,
@@ -6527,7 +6533,7 @@ export class ProductsService {
         item.variant
           ? {
               ...item.product,
-              name: `${item.product.name} — ${[item.variant.color?.name, item.variant.size?.name].filter(Boolean).join(' / ')}`,
+              name: variantDisplayName(item.product.name, item.variant),
               sku: item.variant.sku,
               barcode: item.variant.barcode,
               purchasePrice:
@@ -7322,15 +7328,10 @@ export class ProductsService {
                 OR: [{ colorId: { not: null } }, { sizeId: { not: null } }],
               },
             },
-            include: { variant: { include: { color: true, size: true } } },
+            include: { variant: { include: { ...VARIANT_ATTRIBUTES_INCLUDE, color: true, size: true } } },
           });
           if (removedWithStock) {
-            const label = [
-              removedWithStock.variant.color?.name,
-              removedWithStock.variant.size?.name,
-            ]
-              .filter(Boolean)
-              .join(' / ');
+            const label = variantLabel(removedWithStock.variant);
             throw new ConflictException(
               `Нельзя удалить вариант «${label}»: на складе остаток ${removedWithStock.quantity}. Сначала спишите или переместите его.`,
             );
@@ -7833,9 +7834,8 @@ export class ProductsService {
     const variants = product.variants?.length
       ? product.variants.map((variant) => ({
           id: variant.id,
-          name: [variant.color?.name, variant.size?.name]
-            .filter(Boolean)
-            .join(' / '),
+          name: variantLabel(variant),
+          attributes: variantAttributes(variant),
           color_id: variant.colorId,
           size_id: variant.sizeId,
           color: variant.color,
@@ -7939,12 +7939,7 @@ export class ProductsService {
           barcode:
             component.componentVariant?.barcode ??
             component.componentProduct.barcode,
-          variant_name: [
-            component.componentVariant?.color?.name,
-            component.componentVariant?.size?.name,
-          ]
-            .filter(Boolean)
-            .join(' / '),
+          variant_name: variantLabel(component.componentVariant),
           quantity: Number(component.quantity),
         })) ?? [],
       retail_price: product.salePrice ?? 0,

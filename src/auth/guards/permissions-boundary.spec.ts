@@ -15,6 +15,7 @@ import { PaymentTypesController } from '../../modules/payments/payment-types.con
 import { OrdersController } from '../../modules/orders/orders.controller';
 import { DashboardController } from '../../dashboard/dashboard.controller';
 import { DEFAULT_CRM_ROLES } from '../../roles/default-crm-roles';
+import { ProductAttributesController } from '../../product-attributes/product-attributes.controller';
 import { ProductsController } from '../../products/products.controller';
 import { PERMISSION_ALIASES } from '../role-permissions';
 
@@ -29,6 +30,7 @@ const controllers = [
   OrdersController,
   DashboardController,
   ProductsController,
+  ProductAttributesController,
 ];
 
 function permissionIdsFor(slug: string) {

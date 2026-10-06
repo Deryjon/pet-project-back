@@ -9,6 +9,7 @@ import {
   requireCompanyContext,
 } from '../auth/request-context';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
+import { variantAttributes } from '../common/variant-attributes';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { ReportsMapper } from './reports.mapper';
@@ -612,6 +613,86 @@ export class ReportsService {
       biggest_discount_products: [...items]
         .sort((a, b) => b.average_discount - a.average_discount)
         .slice(0, 10),
+    };
+  }
+
+  /**
+   * Sales split by one variant attribute (size, colour or a tenant attribute):
+   * which sizes sell, which colours return. "size" covers every size grid.
+   */
+  async getSalesByAttribute(
+    query: Record<string, string | undefined>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getContext(requestContext);
+    const code = this.firstQueryValue(query, 'attribute', 'code') ?? 'size';
+    const definitions = await this.db.attributeDefinition.findMany({
+      where: {
+        companyId: context.companyId,
+        ...(code === 'size' ? { legacySource: 'size' } : { code }),
+      },
+      select: { id: true, code: true, name: true },
+    });
+    const definitionIds = new Set(definitions.map((d) => d.id));
+    const where = await this.buildReportWhere(query, context);
+    const items = await this.db.saleItem.findMany({
+      where: { sale: where as any },
+      select: {
+        quantity: true,
+        finalPrice: true,
+        profitAtSale: true,
+        sale: { select: { saleType: true } },
+        variant: {
+          select: {
+            attributeOptions: { include: { definition: true, option: true } },
+          },
+        },
+      },
+    });
+
+    const groups = new Map<
+      string,
+      { value: string; sold_quantity: number; returned_quantity: number; revenue: number; gross_profit: number }
+    >();
+    for (const item of items) {
+      const attribute = variantAttributes(item.variant).find((a) =>
+        definitionIds.has(a.definition_id),
+      );
+      const value = attribute?.value ?? 'Без значения';
+      const group = groups.get(value) ?? {
+        value,
+        sold_quantity: 0,
+        returned_quantity: 0,
+        revenue: 0,
+        gross_profit: 0,
+      };
+      const sign = item.sale.saleType === 'return' ? -1 : 1;
+      const quantity = Number(item.quantity);
+      if (sign < 0) group.returned_quantity += quantity;
+      else group.sold_quantity += quantity;
+      group.revenue += sign * Number(item.finalPrice);
+      group.gross_profit += sign * Number(item.profitAtSale);
+      groups.set(value, group);
+    }
+    const rows = [...groups.values()];
+    const totalRevenue = rows.reduce((sum, row) => sum + row.revenue, 0);
+    return {
+      attribute: {
+        code,
+        name: code === 'size' ? 'Размер' : (definitions[0]?.name ?? code),
+      },
+      filters: this.buildAppliedFilters(query),
+      items: rows
+        .map((row) => ({
+          ...row,
+          net_quantity: row.sold_quantity - row.returned_quantity,
+          revenue: Math.round(row.revenue * 100) / 100,
+          gross_profit: Math.round(row.gross_profit * 100) / 100,
+          revenue_share: totalRevenue
+            ? Math.round((row.revenue / totalRevenue) * 10000) / 100
+            : 0,
+        }))
+        .sort((a, b) => b.revenue - a.revenue),
     };
   }
 

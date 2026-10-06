@@ -22,6 +22,12 @@ import { postSaleStockDecrease } from '../common/sale-stock-posting';
 import { moveVariantStock } from '../common/stock-ledger';
 import { runSerializableTransaction } from '../common/serializable-transaction';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
+import {
+  VARIANT_ATTRIBUTES_INCLUDE,
+  variantAttributes,
+  variantDisplayName,
+  variantLabel,
+} from '../common/variant-attributes';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
 
@@ -783,7 +789,7 @@ export class SalesService {
           stocks: true,
           variants: {
             where: { isActive: true, isDefault: false },
-            include: { color: true, size: true, stocks: true },
+            include: { ...VARIANT_ATTRIBUTES_INCLUDE, color: true, size: true, stocks: true },
             orderBy: { createdAt: 'asc' },
           },
           bundleComponents: {
@@ -1488,7 +1494,7 @@ export class SalesService {
             companyId: context.companyId,
             isActive: true,
           },
-          include: { color: true, size: true },
+          include: { ...VARIANT_ATTRIBUTES_INCLUDE, color: true, size: true },
         })
       : null;
     if (variantId && !variant) {
@@ -1507,7 +1513,7 @@ export class SalesService {
     const itemPurchasePrice =
       variant?.purchasePrice ?? product.purchasePrice ?? 0;
     const itemName = variant
-      ? `${product.name} — ${[variant.color?.name, variant.size?.name].filter(Boolean).join(' / ')}`
+      ? variantDisplayName(product.name, variant)
       : product.name;
     const stockComposition = product.bundleComponents.length
       ? product.bundleComponents.map((component) => ({
@@ -2748,7 +2754,7 @@ export class SalesService {
               companyId: context.companyId,
               isActive: true,
             },
-            include: { color: true, size: true },
+            include: { ...VARIANT_ATTRIBUTES_INCLUDE, color: true, size: true },
           })
         : null;
       if (variantId && !variant) {
@@ -2839,7 +2845,7 @@ export class SalesService {
         productId,
         variantId,
         name: variant
-          ? `${product.name} — ${[variant.color?.name, variant.size?.name].filter(Boolean).join(' / ')}`
+          ? variantDisplayName(product.name, variant)
           : product.name,
         barcode: variant?.barcode ?? product.barcode,
         sku: variant?.sku ?? product.sku,
@@ -5121,9 +5127,7 @@ export class SalesService {
     context?: any,
     shopId?: string,
   ) {
-    const label = [variant.color?.name, variant.size?.name]
-      .filter(Boolean)
-      .join(' / ');
+    const label = variantLabel(variant);
     const response = this.toNewSaleProductResponse(
       {
         ...product,
@@ -5143,6 +5147,7 @@ export class SalesService {
       product_id: String(product.id),
       variant_id: variant.id,
       base_name: product.name,
+      attributes: variantAttributes(variant),
       color: variant.color,
       size: variant.size,
     };

@@ -12,6 +12,7 @@ import { PaymentsModule } from './modules/payments/payments.module';
 import { PlatformModule } from './platform/platform.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { PriceTagsModule } from './price-tags/price-tags.module';
+import { ProductAttributesModule } from './product-attributes/product-attributes.module';
 import { ProductsModule } from './products/products.module';
 import { ReceiptsModule } from './receipts/receipts.module';
 import { RolesModule } from './roles/roles.module';
@@ -51,6 +52,7 @@ import { ImportsModule } from './imports/imports.module';
     OrdersModule,
     PriceTagsModule,
     ProductsModule,
+    ProductAttributesModule,
     ReceiptsModule,
     RolesModule,
     ReportsModule,

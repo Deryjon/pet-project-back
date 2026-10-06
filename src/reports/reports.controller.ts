@@ -13,6 +13,8 @@ import {
 } from '../auth/company-context.decorator';
 import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { Permissions } from '../auth/permissions.decorator';
 import { CompanyRequestContext, RequestContext } from '../auth/request-context';
 import { ReportsService } from './reports.service';
 
@@ -125,6 +127,9 @@ const PRODUCT_SELLS_BY_SUPPLIERS_TABLE_API_ROUTES = versioned([
   'product-sells-by-suppliers-table',
 ]);
 const STOCK_REPORT_TABLE_API_ROUTES = versioned(['stock-report-table']);
+const SALES_BY_ATTRIBUTE_REPORT_ROUTES = versioned([
+  'reports/products/sales-by-attribute',
+]);
 
 @UseGuards(JwtAuthGuard)
 @Controller()
@@ -220,6 +225,16 @@ export class ReportsController {
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.reportsService.getProducts(query, requestContext);
+  }
+
+  @UseGuards(CompanyAccessGuard, PermissionsGuard)
+  @Permissions('reports-products-summary')
+  @Get(SALES_BY_ATTRIBUTE_REPORT_ROUTES)
+  getSalesByAttribute(
+    @Query() query: Record<string, string | undefined>,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.reportsService.getSalesByAttribute(query, requestContext);
   }
 
   @UseGuards(CompanyAccessGuard)
