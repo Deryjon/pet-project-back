@@ -1031,16 +1031,23 @@ export class UsersService {
 
     if (body.is_active !== undefined) {
       data.isActive = this.requireBoolean(body.is_active, 'is_active');
+      if (data.isActive === false) {
+        this.assertNotSelf(id, 'You cannot block your own account', actor);
+      }
     }
 
     if (targetUser.userType === 'company' && companyId) {
+      // A role belongs to one company: moving the user drops the old role
+      // unless a role of the new company is given.
       const crmRole =
         body.crm_role_id !== undefined
           ? await this.resolveCrmRoleForWrite(
               this.optionalString(body.crm_role_id),
               companyId,
             )
-          : targetUser.crmRole;
+          : companyChanged
+            ? null
+            : targetUser.crmRole;
 
       data.company = {
         connect: {
@@ -1053,7 +1060,7 @@ export class UsersService {
               id: crmRole.id,
             },
           }
-        : body.crm_role_id !== undefined
+        : body.crm_role_id !== undefined || companyChanged
           ? { disconnect: true }
           : undefined;
 
@@ -1102,10 +1109,12 @@ export class UsersService {
         (body.can_switch_shops !== undefined
           ? (this.optionalBoolean(body.can_switch_shops) ?? false)
           : targetUser.canSwitchShops) && allowedShops.length > 1;
+      // After a company move the old company's shop accesses must go too.
       data.shopAccesses =
         body.allowed_shop_ids !== undefined ||
         body.current_shop_id !== undefined ||
-        body.branch_location !== undefined
+        body.branch_location !== undefined ||
+        companyChanged
           ? {
               deleteMany: {},
               createMany: {
@@ -1137,10 +1146,18 @@ export class UsersService {
       }
     }
 
-    await this.db.user.update({
-      where: { id },
-      data,
-    });
+    if (data.passwordHash !== undefined) {
+      // A reset password must also end the sessions opened with the old one.
+      await this.db.$transaction([
+        this.db.user.update({ where: { id }, data }),
+        this.revokeSessionsQuery(id),
+      ]);
+    } else {
+      await this.db.user.update({
+        where: { id },
+        data,
+      });
+    }
 
     return this.findOneResponse(id, actor);
   }
@@ -1157,6 +1174,9 @@ export class UsersService {
     }
 
     const isActive = this.requireBoolean(body.is_active, 'is_active');
+    if (!isActive) {
+      this.assertNotSelf(id, 'You cannot block your own account', actor);
+    }
 
     const updatedUser = await this.db.user.update({
       where: { id },
@@ -1178,6 +1198,8 @@ export class UsersService {
     if (actor && !this.canManageUser(actor, targetUser)) {
       throw new ForbiddenException('You cannot manage this user');
     }
+
+    this.assertNotSelf(id, 'You cannot delete your own account', actor);
 
     await this.db.$transaction(async (tx: any) => {
       await tx.user.update({
@@ -1282,12 +1304,16 @@ export class UsersService {
       throw new BadRequestException('Current password is incorrect');
     }
 
-    await this.db.user.update({
-      where: { id: user.id },
-      data: {
-        passwordHash: await bcrypt.hash(newPassword, 10),
-      },
-    });
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    // Sign out every other device; the session making this request stays.
+    const currentSessionId = this.readSessionId(authorization);
+    await this.db.$transaction([
+      this.db.user.update({
+        where: { id: user.id },
+        data: { passwordHash },
+      }),
+      this.revokeSessionsQuery(user.id, currentSessionId),
+    ]);
 
     return {
       message: 'Password updated',
@@ -1319,18 +1345,19 @@ export class UsersService {
       throw new BadRequestException('Avatar size must be 5MB or less');
     }
 
-    const uploadsDirectory = join(process.cwd(), 'uploads', 'avatars');
-    await fs.mkdir(uploadsDirectory, { recursive: true });
-
-    await this.removeStoredAvatar(user.avatarUrl);
-
     // The stored extension comes from the real file type, not the name.
+    // Checked before anything is touched, so a rejected file keeps the old
+    // avatar in place.
     const kind = detectImageKind(file.buffer);
     if (!kind) {
       throw new BadRequestException(
         'Only jpg, jpeg, png and webp files are allowed',
       );
     }
+
+    const uploadsDirectory = join(process.cwd(), 'uploads', 'avatars');
+    await fs.mkdir(uploadsDirectory, { recursive: true });
+
     const fileName = `${user.id}-${randomUUID()}.${kind}`;
     const filePath = join(uploadsDirectory, fileName);
 
@@ -1343,6 +1370,9 @@ export class UsersService {
         avatarUrl,
       },
     });
+    // The old file goes only once the user points at the new one; failing to
+    // delete it leaves an orphan file, not a failed upload.
+    await this.removeStoredAvatar(user.avatarUrl).catch(() => undefined);
 
     return {
       message: 'Avatar uploaded',
@@ -2975,6 +3005,40 @@ export class UsersService {
       `http://localhost:${process.env.PORT?.trim() || '3001'}`;
 
     return `${origin}/uploads/avatars/${fileName}`;
+  }
+
+  private assertNotSelf(
+    targetId: number,
+    message: string,
+    actor?: UserWithRelations,
+  ) {
+    if (actor && actor.id === targetId) {
+      throw new BadRequestException(message);
+    }
+  }
+
+  /** Revokes the user's open sessions, except `keepSessionId` if given. */
+  private revokeSessionsQuery(userId: number, keepSessionId?: string | null) {
+    return this.db.authSession.updateMany({
+      where: {
+        userId,
+        revokedAt: null,
+        ...(keepSessionId ? { id: { not: keepSessionId } } : {}),
+      },
+      data: { revokedAt: new Date() },
+    });
+  }
+
+  /** Session id of an already verified access token, if it carries one. */
+  private readSessionId(authorization?: string): string | null {
+    const payload: unknown = this.jwtService.decode(
+      extractAccessToken(authorization),
+    );
+    const sessionId =
+      payload && typeof payload === 'object'
+        ? (payload as { sessionId?: unknown }).sessionId
+        : undefined;
+    return typeof sessionId === 'string' && sessionId ? sessionId : null;
   }
 
   private async removeStoredAvatar(avatarUrl: string | null) {
