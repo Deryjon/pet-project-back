@@ -1356,6 +1356,59 @@ describe('SalesService money calculations', () => {
     });
   });
 
+  describe('input validation', () => {
+    it('does not open a debt from the sale comment alone', () => {
+      const { service } = createService();
+      expect(
+        (service as any).parseDebtPayload({ comment: 'gift wrap' }, 100),
+      ).toBeNull();
+      expect(
+        (service as any).parseDebtPayload({ note: 'call later' }, 100),
+      ).toBeNull();
+    });
+
+    it('still opens a debt from debt fields and keeps the sale comment on it', () => {
+      const { service } = createService();
+      const debt = (service as any).parseDebtPayload(
+        { debt: { due_date: '2026-12-01' }, comment: 'gift wrap' },
+        100,
+      );
+      expect(Number(debt.amount)).toBe(100);
+      expect(debt.comment).toBe('gift wrap');
+    });
+
+    it.each([
+      [{ discount_percent: -10 }, 'between 0 and 100'],
+      [{ discount_percent: 150 }, 'between 0 and 100'],
+      [{ discount_amount: -5 }, 'must not be negative'],
+      [{ discount_amount: 1.005 }, 'fractions smaller than 0.01'],
+    ])('refuses discount %p', async (body, message) => {
+      const { service } = createService({
+        sale: {
+          findUnique: jest.fn(),
+          update: jest.fn(),
+        },
+      });
+      jest
+        .spyOn(service as any, 'findSaleOrThrow')
+        .mockResolvedValue({ id: 1, isDraft: true });
+      jest.spyOn(service as any, 'assertSaleAccess').mockReturnValue(undefined);
+      jest.spyOn(service as any, 'getRequestContext').mockResolvedValue({});
+
+      await expect(
+        service.updateDiscount(1, body, testContext()),
+      ).rejects.toThrow(message);
+    });
+
+    it('refuses a quantity finer than the stored grain', () => {
+      const { service } = createService();
+      expect(() => (service as any).assertSaleQuantity(0.0004)).toThrow(
+        'more than 3 decimals',
+      );
+      expect(() => (service as any).assertSaleQuantity(1.5)).not.toThrow();
+    });
+  });
+
   describe('cancelled returns', () => {
     it('do not count against the returnable quantity', async () => {
       const { service } = createService();

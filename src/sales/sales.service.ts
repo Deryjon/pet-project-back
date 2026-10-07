@@ -30,6 +30,7 @@ import {
   variantDisplayName,
   variantLabel,
 } from '../common/variant-attributes';
+import { assertMaxDecimals, parseRequestNumber } from '../common/parse-number';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
 
@@ -48,6 +49,10 @@ const DEFAULT_MEASUREMENT_UNIT = {
   is_editable: false,
   is_default: false,
 };
+// Largest value a Decimal(12,2) money column can hold.
+const MAX_MONEY_UZS = 9_999_999_999.99;
+// Largest value a Decimal(12,3) quantity column can hold.
+const MAX_QUANTITY = 999_999_999.999;
 const CANCELLED_SALE_ADJUSTMENT_MESSAGE =
   'Продажа отменена: возврат и обмен по ней невозможны';
 const SHOP_BY_BRANCH_CODE: Record<
@@ -1459,6 +1464,7 @@ export class SalesService {
     if (!Number.isFinite(quantity) || quantity <= 0) {
       throw new BadRequestException('quantity must be greater than 0');
     }
+    this.assertSaleQuantity(quantity);
 
     if (salePrice === undefined) {
       throw new BadRequestException('sale_price is required');
@@ -1661,6 +1667,7 @@ export class SalesService {
     if (!quantity || quantity <= 0) {
       throw new BadRequestException('quantity must be greater than 0');
     }
+    this.assertSaleQuantity(quantity);
 
     const requestedSalePrice = this.toNumber(body.sale_price);
     const salePrice = requestedSalePrice ?? Number(item.salePrice);
@@ -1807,6 +1814,29 @@ export class SalesService {
 
     const discountPercent = this.toNumber(body.discount_percent) ?? 0;
     const discountAmount = this.toNumber(body.discount_amount);
+    // A negative discount is a surcharge and over 100% is meaningless; the
+    // payable total itself is clamped at zero by recalculateSale.
+    if (discountPercent < 0 || discountPercent > 100) {
+      throw new BadRequestException(
+        'discount_percent must be between 0 and 100',
+      );
+    }
+    if (
+      discountAmount !== undefined &&
+      (discountAmount < 0 || discountAmount > MAX_MONEY_UZS)
+    ) {
+      throw new BadRequestException('discount_amount must not be negative');
+    }
+    assertMaxDecimals(
+      discountPercent,
+      2,
+      'discount_percent cannot contain more than 2 decimals',
+    );
+    assertMaxDecimals(
+      discountAmount ?? 0,
+      2,
+      'discount_amount cannot contain fractions smaller than 0.01',
+    );
 
     await this.prisma.sale.update({
       where: { id },
@@ -2709,6 +2739,7 @@ export class SalesService {
           `${fieldName} items require product_id and positive quantity`,
         );
       }
+      this.assertSaleQuantity(quantity);
 
       const candidates = originalSale.items.filter(
         (item) =>
@@ -2807,6 +2838,7 @@ export class SalesService {
           'new_items require product_id and positive quantity',
         );
       }
+      this.assertSaleQuantity(quantity);
 
       const product = await db.product.findFirst({
         where: this.buildProductScope({ id: productId }, context),
@@ -5654,17 +5686,23 @@ export class SalesService {
     return undefined;
   }
 
+  /**
+   * Quantities are stored as Decimal(12,3): a finer value is charged in full
+   * in JS but rounds to 0 in the database, so no stock moves.
+   */
+  private assertSaleQuantity(quantity: number) {
+    if (quantity > MAX_QUANTITY) {
+      throw new BadRequestException('quantity is too large');
+    }
+    assertMaxDecimals(
+      quantity,
+      3,
+      'quantity cannot contain more than 3 decimals',
+    );
+  }
+
   private toNumber(value: unknown) {
-    if (value === undefined || value === null || value === '') {
-      return undefined;
-    }
-
-    const parsed = Number(value);
-    if (Number.isNaN(parsed)) {
-      throw new BadRequestException('Numeric field contains invalid number');
-    }
-
-    return parsed;
+    return parseRequestNumber(value);
   }
 
   private toInt(value: unknown) {
@@ -6468,20 +6506,26 @@ export class SalesService {
       debtRecord?.debt_due_date ??
       body.due_date ??
       body.debt_due_date;
-    const commentValue =
-      debtRecord?.comment ??
-      debtRecord?.debt_comment ??
-      body.comment ??
-      body.debt_comment ??
-      body.note;
+    // Only debt-specific fields open a debt: the POS sends the sale's own
+    // comment as body.comment, which used to turn the whole sale into debt.
+    const debtCommentValue =
+      debtRecord?.comment ?? debtRecord?.debt_comment ?? body.debt_comment;
     const receiptUrlValue = debtRecord?.receipt_url ?? body.receipt_url;
 
     const explicitAmount = this.toNumber(amountValue);
     const dueDate = this.parseNullableDebtDate(dueDateValue);
-    const comment = this.optionalString(commentValue) ?? null;
+    const debtComment = this.optionalString(debtCommentValue) ?? null;
     const receiptUrl = this.optionalString(receiptUrlValue) ?? null;
     const shouldCreateDebt =
-      explicitAmount !== undefined || !!dueDate || !!comment || !!receiptUrl;
+      explicitAmount !== undefined ||
+      !!dueDate ||
+      !!debtComment ||
+      !!receiptUrl;
+    const comment =
+      debtComment ??
+      this.optionalString(body.comment) ??
+      this.optionalString(body.note) ??
+      null;
 
     if (!shouldCreateDebt) {
       return null;
