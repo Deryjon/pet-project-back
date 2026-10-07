@@ -38,6 +38,8 @@ describe('SalesService money calculations', () => {
       clientDebt: {
         findMany: jest.fn().mockResolvedValue([]),
       },
+      // Row lock (SELECT ... FOR UPDATE) on the original sale.
+      $queryRaw: jest.fn().mockResolvedValue([{ id: 1, status: 'paid' }]),
       ...prismaOverrides,
     } as unknown as PrismaService;
 
@@ -263,7 +265,7 @@ describe('SalesService money calculations', () => {
         },
         [{ product_id: 10, quantity: 1 }],
         'items',
-        { $queryRaw: jest.fn() },
+        { $queryRaw: jest.fn().mockResolvedValue([{ status: 'paid' }]) },
       );
 
       expect(items[0]).toEqual(
@@ -1247,6 +1249,110 @@ describe('SalesService money calculations', () => {
           parent_order_id: '101',
         }),
       );
+    });
+  });
+
+  describe('adjustments of a cancelled sale', () => {
+    const cancelledSale = {
+      id: 201,
+      number: 'S-201',
+      companyId: 'company-1',
+      branchCode: 'B1',
+      userId: 7,
+      isDraft: false,
+      saleType: 'sale',
+      status: 'cancelled',
+      items: [],
+    };
+
+    it('refuses a return or exchange of a cancelled sale', async () => {
+      const { service } = createService({
+        sale: { findUnique: jest.fn().mockResolvedValue(cancelledSale) },
+      });
+      jest.spyOn(service as any, 'assertSaleAccess').mockReturnValue(undefined);
+
+      await expect(
+        (service as any).findBaseSaleForAdjustment(
+          String(cancelledSale.id),
+          testContext(),
+        ),
+      ).rejects.toThrow('Продажа отменена');
+    });
+
+    it('re-reads the status under the row lock and refuses a sale cancelled meanwhile', async () => {
+      const { service } = createService();
+      const getReturnable = jest.spyOn(
+        service as any,
+        'getReturnableQuantities',
+      );
+
+      await expect(
+        (service as any).prepareAdjustmentItems(
+          { ...cancelledSale, status: 'paid' },
+          [{ product_id: 10, quantity: 1 }],
+          'items',
+          {
+            $queryRaw: jest.fn().mockResolvedValue([{ status: 'cancelled' }]),
+          },
+        ),
+      ).rejects.toThrow('Продажа отменена');
+      expect(getReturnable).not.toHaveBeenCalled();
+    });
+
+    it('re-counts returns inside the cancel transaction and keeps the sale paid', async () => {
+      const sale = { ...cancelledSale, id: 202, status: 'paid' };
+      const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      const { service, prisma } = createService({
+        sale: {
+          findUnique: jest.fn().mockResolvedValue(sale),
+          // No returns at the pre-check; one committed before the lock.
+          count: jest.fn().mockResolvedValueOnce(0).mockResolvedValueOnce(1),
+          updateMany,
+        },
+      });
+      (prisma as any).$transaction = jest.fn((fn: any) => fn(prisma));
+      const restore = jest
+        .spyOn(service as any, 'restoreSaleStock')
+        .mockResolvedValue(undefined);
+
+      await expect(
+        service.removeOrder(String(sale.id), testContext()),
+      ).rejects.toThrow('Order with returns or exchanges cannot be deleted');
+      expect((prisma as any).$queryRaw).toHaveBeenCalled();
+      expect(updateMany).not.toHaveBeenCalled();
+      expect(restore).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('restoreSaleStock on cancel', () => {
+    const sale = {
+      number: 'S-301',
+      companyId: 'company-1',
+      branchCode: 'B1',
+      userId: null,
+      items: [{ productId: 1, quantity: 1, salePrice: 100 }],
+    };
+
+    it('fails instead of skipping the restore when the shop is unknown', async () => {
+      const { service, prisma } = createService();
+      jest
+        .spyOn(service as any, 'resolveShopIdForBranchCode')
+        .mockResolvedValue(null);
+
+      await expect(
+        (service as any).restoreSaleStock(sale, prisma, 7),
+      ).rejects.toThrow('Филиал со складским кодом B1 не найден');
+    });
+
+    it('fails when neither the sale nor the canceller identifies an employee', async () => {
+      const { service, prisma } = createService();
+      jest
+        .spyOn(service as any, 'resolveShopIdForBranchCode')
+        .mockResolvedValue('shop-1');
+
+      await expect(
+        (service as any).restoreSaleStock(sale, prisma, null),
+      ).rejects.toThrow('Не удалось определить сотрудника');
     });
   });
 

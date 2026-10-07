@@ -48,6 +48,8 @@ const DEFAULT_MEASUREMENT_UNIT = {
   is_editable: false,
   is_default: false,
 };
+const CANCELLED_SALE_ADJUSTMENT_MESSAGE =
+  'Продажа отменена: возврат и обмен по ней невозможны';
 const SHOP_BY_BRANCH_CODE: Record<
   string,
   { shop_id: string; shop_name: string; id?: string; aliases?: string[] }
@@ -2279,20 +2281,26 @@ export class SalesService {
       };
     }
 
-    const childSalesCount = await this.prisma.sale.count({
-      where: {
-        parentSaleId: sale.id,
-        status: {
-          not: 'cancelled',
+    const assertNoLiveAdjustments = async (
+      client: Prisma.TransactionClient | PrismaService,
+    ) => {
+      const childSalesCount = await client.sale.count({
+        where: {
+          parentSaleId: sale.id,
+          status: {
+            not: 'cancelled',
+          },
         },
-      },
-    });
+      });
 
-    if (childSalesCount > 0) {
-      throw new BadRequestException(
-        'Order with returns or exchanges cannot be deleted',
-      );
-    }
+      if (childSalesCount > 0) {
+        throw new BadRequestException(
+          'Order with returns or exchanges cannot be deleted',
+        );
+      }
+    };
+
+    await assertNoLiveAdjustments(this.prisma);
 
     if (sale.isDraft) {
       await this.prisma.sale.delete({
@@ -2310,6 +2318,11 @@ export class SalesService {
     // fail before it could restore the stock again, and a failure in any step
     // leaves the sale paid with its stock untouched.
     await runSerializableTransaction(this.prisma, async (tx) => {
+      // Returns and exchanges lock the original row (prepareAdjustmentItems),
+      // so taking the same lock first and re-counting the adjustments here
+      // keeps a concurrent return from landing on a sale being cancelled.
+      await tx.$queryRaw`SELECT id FROM "Sale" WHERE id = ${sale.id} FOR UPDATE`;
+      await assertNoLiveAdjustments(tx);
       const claimed = await tx.sale.updateMany({
         where: { id: sale.id, isDraft: false, status: { not: 'cancelled' } },
         data: {
@@ -2324,7 +2337,7 @@ export class SalesService {
         throw new BadRequestException('Документ уже отменён');
       }
       await this.annulSaleDebts(tx, sale);
-      await this.restoreSaleStock(sale, tx);
+      await this.restoreSaleStock(sale, tx, context?.userId ?? null);
       await this.undoSaleCashback(tx, sale);
       await this.refreshClientSalesAggregates(
         tx,
@@ -2582,6 +2595,10 @@ export class SalesService {
       );
     }
 
+    if (sale.status === 'cancelled') {
+      throw new BadRequestException(CANCELLED_SALE_ADJUSTMENT_MESSAGE);
+    }
+
     return sale as any;
   }
 
@@ -2644,7 +2661,13 @@ export class SalesService {
 
     // Concurrent returns of one sale queue up on this row lock, so each one
     // counts the returns already committed before it.
-    await tx.$queryRaw`SELECT id FROM "Sale" WHERE id = ${originalSale.id} FOR UPDATE`;
+    // The lock also waits out a cancel of the original, so its committed
+    // status is re-read here: a cancelled sale has already got its stock back.
+    const [lockedSale] = await tx.$queryRaw<Array<{ status: string }>>`
+      SELECT status::text AS status FROM "Sale" WHERE id = ${originalSale.id} FOR UPDATE`;
+    if (!lockedSale || lockedSale.status === 'cancelled') {
+      throw new BadRequestException(CANCELLED_SALE_ADJUSTMENT_MESSAGE);
+    }
     const returnableQuantities = await this.getReturnableQuantities(
       originalSale,
       tx,
@@ -3822,6 +3845,7 @@ export class SalesService {
       }>;
     },
     outerTx?: Prisma.TransactionClient,
+    actorUserId?: number | null,
   ) {
     const sale = {
       ...saleInput,
@@ -3835,16 +3859,28 @@ export class SalesService {
     if (!branchCode) {
       return;
     }
+    // The sale is cancelled in the same transaction, so a missing shop or
+    // author must fail the cancel instead of silently keeping the stock out.
+    if (!sale.companyId) {
+      throw new ConflictException('У продажи не указана компания');
+    }
     const shopId = await this.resolveShopIdForBranchCode(
       branchCode,
-      sale.companyId ?? null,
+      sale.companyId,
       outerTx ?? this.prisma,
     );
-    if (!shopId || !sale.companyId || !sale.userId) {
-      return;
+    if (!shopId) {
+      throw new ConflictException(
+        `Филиал со складским кодом ${branchCode} не найден`,
+      );
+    }
+    const createdById = sale.userId ?? actorUserId ?? null;
+    if (!createdById) {
+      throw new ConflictException(
+        'Не удалось определить сотрудника для движения остатка',
+      );
     }
     const companyId = sale.companyId;
-    const createdById = sale.userId;
 
     const productIds = [
       ...new Set(
@@ -6187,7 +6223,9 @@ export class SalesService {
     }
     const amount = Number(raw);
     if (!Number.isFinite(amount) || amount < 0) {
-      throw new BadRequestException('Сумма оплаты с баланса лояльности указана неверно');
+      throw new BadRequestException(
+        'Сумма оплаты с баланса лояльности указана неверно',
+      );
     }
     if (Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-8) {
       throw new BadRequestException(
@@ -6267,7 +6305,9 @@ export class SalesService {
       data: { balanceUzs: { decrement: amount } },
     });
     if (debited.count !== 1) {
-      throw new ConflictException('Недостаточно средств на балансе лояльности клиента');
+      throw new ConflictException(
+        'Недостаточно средств на балансе лояльности клиента',
+      );
     }
     await tx.sale.update({
       where: { id: sale.id },
