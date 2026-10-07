@@ -1203,6 +1203,7 @@ export class ClientsService {
       where.sales = {
         some: {
           isDraft: false,
+          status: { not: 'cancelled' },
           saleType: { in: ['sale', 'exchange'] },
           items: {
             some: {
@@ -1229,6 +1230,7 @@ export class ClientsService {
       companyId: context.companyId,
       clientId: id,
       isDraft: false,
+      status: { not: 'cancelled' },
       saleType: { in: ['sale', 'exchange'] },
       ...(branchCodes.length ? { branchCode: { in: branchCodes } } : {}),
     };
@@ -1258,6 +1260,7 @@ export class ClientsService {
         companyId: context.companyId,
         clientId: { in: clientIds },
         isDraft: false,
+        status: { not: 'cancelled' },
         saleType: { in: ['sale', 'exchange'] },
         ...(branchCodes.length ? { branchCode: { in: branchCodes } } : {}),
       },

@@ -10686,6 +10686,7 @@ export class ProductsService {
         productId,
         sale: {
           isDraft: false,
+          status: { not: 'cancelled' },
           companyId: context.companyId,
           branchCode: { in: context.allowedBranchCodes },
           ...(createdAtFilter ? { createdAt: createdAtFilter } : {}),
