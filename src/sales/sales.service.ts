@@ -3717,22 +3717,7 @@ export class SalesService {
         }
       }
 
-      for (const productId of productIds) {
-        const totalStock = await tx.productStock.aggregate({
-          where: { productId },
-          _sum: {
-            quantity: true,
-          },
-        });
-
-        await tx.product.update({
-          where: { id: productId },
-          data: {
-            quantity: totalStock._sum.quantity ?? 0,
-          },
-        });
-      }
-
+      // Product.quantity is kept by the stock ledger trigger.
       return lowStockCrossings;
     };
 
