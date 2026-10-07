@@ -30,4 +30,14 @@ describe('runSerializableTransaction', () => {
     ).rejects.toBe(error);
     expect(client.$transaction).toHaveBeenCalledTimes(1);
   });
+
+  it('keeps retrying conflicts up to six attempts, then gives up', async () => {
+    const conflict = { code: 'P2034' };
+    const client = { $transaction: jest.fn().mockRejectedValue(conflict) };
+
+    await expect(
+      runSerializableTransaction(client as any, jest.fn()),
+    ).rejects.toBe(conflict);
+    expect(client.$transaction).toHaveBeenCalledTimes(6);
+  });
 });
