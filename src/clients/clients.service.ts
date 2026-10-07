@@ -1,3 +1,4 @@
+import { assertMaxDecimals, parseRequestNumber } from '../common/parse-number';
 import {
   BadRequestException,
   Injectable,
@@ -27,6 +28,9 @@ type ClientListRecord = Prisma.ClientGetPayload<{
     tags: { include: { tag: true } };
   };
 }>;
+
+// Largest value a Decimal(12,2) money column can hold.
+const MAX_MONEY_UZS = 9_999_999_999.99;
 
 @Injectable()
 export class ClientsService {
@@ -276,9 +280,8 @@ export class ClientsService {
                   this.parseNullableDateTime(body.registered_at) ?? new Date(),
               }
             : {}),
-          ...(body.balance_uzs !== undefined
-            ? { balanceUzs: this.toDecimal(body.balance_uzs) }
-            : {}),
+          // The loyalty balance is money the client can spend: it only moves
+          // through sales, returns and cashback, never through a profile edit.
           ...(body.sms_notifications !== undefined
             ? {
                 smsNotifications: this.parseBoolean(
@@ -721,13 +724,26 @@ export class ClientsService {
       body.shop_id !== undefined
         ? await this.resolveDebtShopId(body.shop_id, context)
         : null;
-    const amount = this.toDecimal(body.amount_uzs);
+    // A zero or negative debt would silently lower the client's total debt.
+    const amount = new Prisma.Decimal(
+      this.requirePositiveNumber(body.amount_uzs, 'amount_uzs'),
+    );
+    const saleId = this.optionalBodyInt(body.sale_id);
+    if (saleId !== null && saleId !== undefined) {
+      const sale = await this.prisma.sale.findFirst({
+        where: { id: saleId, companyId: context.companyId, clientId },
+        select: { id: true },
+      });
+      if (!sale) {
+        throw new NotFoundException('Sale not found');
+      }
+    }
     const debt = await runSerializableTransaction(this.prisma, async (tx) => {
       const created = await tx.clientDebt.create({
         data: {
           companyId: context.companyId,
           clientId,
-          saleId: this.optionalBodyInt(body.sale_id),
+          saleId,
           shopId,
           amountUzs: amount,
           remainingAmountUzs: amount,
@@ -1788,11 +1804,17 @@ export class ClientsService {
     return Number.isFinite(parsed) ? parsed : null;
   }
 
+  /** Positive money amount in whole tiyins (at most 2 decimals). */
   private requirePositiveNumber(value: unknown, field: string) {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
+    const parsed = parseRequestNumber(value);
+    if (parsed === undefined || parsed <= 0 || parsed > MAX_MONEY_UZS) {
       throw new BadRequestException(`${field} must be a positive number`);
     }
+    assertMaxDecimals(
+      parsed,
+      2,
+      `${field} cannot contain fractions smaller than 0.01`,
+    );
     return parsed;
   }
 
@@ -1949,14 +1971,17 @@ export class ClientsService {
       .filter(Boolean);
   }
 
+  /** Non-negative money amount (Decimal(12,2)); missing means 0. */
   private toDecimal(value: unknown) {
-    if (value === undefined || value === null || value === '') {
-      return new Prisma.Decimal(0);
-    }
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) {
+    const parsed = parseRequestNumber(value) ?? 0;
+    if (parsed < 0 || parsed > MAX_MONEY_UZS) {
       throw new BadRequestException('Numeric value is invalid');
     }
+    assertMaxDecimals(
+      parsed,
+      2,
+      'Amount cannot contain fractions smaller than 0.01',
+    );
     return new Prisma.Decimal(parsed);
   }
 
