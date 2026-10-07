@@ -8,6 +8,9 @@ import { PrismaService } from '../prisma/prisma.service';
 const MANAGERS = ['админ', 'admin', 'управляющий магазина', 'store manager', 'manager'];
 const ACTIVE = ['COUNTING', 'REVIEW', 'RECOUNT_REQUIRED'];
 
+// Approval writes the count difference into StockMovement (Decimal(12,3)).
+const MAX_COUNTED_QUANTITY = 999_999_999.999;
+
 @Injectable()
 export class WarehouseService {
   constructor(private readonly db: PrismaService) {}
@@ -148,8 +151,31 @@ export class WarehouseService {
     if (body.actual_quantity !== undefined || body.counted_quantity !== undefined) return this.countInventoryItem(sessionId, item.id, body, c); return this.mapItem(item, s.countMode === 'BLIND' && !this.isManager(c));
   }
 
+  /**
+   * A count is applied to stock on approval, so "", null or [] must not pass
+   * as 0 (Number() would turn them into 0 and zero the stock).
+   */
+  private parseCountedQuantity(value: unknown): number {
+    const raw = typeof value === 'string' ? value.trim() : value;
+    const quantity =
+      typeof raw === 'number'
+        ? raw
+        : typeof raw === 'string' && /^\d+(\.\d+)?$/.test(raw)
+          ? Number(raw)
+          : NaN;
+    if (
+      !Number.isFinite(quantity) ||
+      quantity < 0 ||
+      quantity > MAX_COUNTED_QUANTITY ||
+      Math.abs(quantity * 1000 - Math.round(quantity * 1000)) > 1e-6
+    ) {
+      throw new BadRequestException('counted_quantity is invalid');
+    }
+    return quantity;
+  }
+
   async countInventoryItem(sessionId: string, itemId: string, body: Record<string, unknown>, requestContext: CompanyRequestContext) {
-    const c = this.ctx(requestContext), quantity = Number(body.counted_quantity ?? body.actual_quantity); if (!Number.isFinite(quantity) || quantity < 0) throw new BadRequestException('counted_quantity is invalid');
+    const c = this.ctx(requestContext), quantity = this.parseCountedQuantity(body.counted_quantity ?? body.actual_quantity);
     return runSerializableTransaction(this.db, async (tx) => {
       const s: any = await tx.inventorySession.findFirst({ where: { id: sessionId, ...this.scope(c), status: { in: ['COUNTING', 'RECOUNT_REQUIRED'] } } }); if (!s) throw new NotFoundException('Active inventory not found'); this.assigned(c, s);
       const i: any = await tx.inventoryItem.findFirst({ where: { id: itemId, inventorySessionId: sessionId }, include: { attempts: { orderBy: { attemptNumber: 'desc' }, take: 1 } } }); if (!i) throw new NotFoundException('Inventory item not found'); this.version(i.version, body.version); const now = new Date();
