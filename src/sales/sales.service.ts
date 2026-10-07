@@ -1233,55 +1233,60 @@ export class SalesService {
       body,
       context,
     );
-    const returnSale = await this.prisma.$transaction(async (tx) => {
-      const returnItems = await this.prepareAdjustmentItems(
-        originalSale,
-        body.items,
-        'items',
-        tx,
-      );
-      const createdReturnSale = await this.createAdjustmentSale(
-        {
+    // Serializable with retries: concurrent returns, exchanges and cancels of
+    // one sale conflict on its row and stock, and must not end in a 500.
+    const returnSale = await runSerializableTransaction(
+      this.prisma,
+      async (tx) => {
+        const returnItems = await this.prepareAdjustmentItems(
           originalSale,
-          saleType: 'return',
-          status: 'returned',
-          items: returnItems,
-          sellerId,
-          paymentMethod:
-            this.optionalString(body.payment_method) ??
-            originalSale.paymentMethod ??
-            undefined,
-        },
-        tx,
-      );
+          body.items,
+          'items',
+          tx,
+        );
+        const createdReturnSale = await this.createAdjustmentSale(
+          {
+            originalSale,
+            saleType: 'return',
+            status: 'returned',
+            items: returnItems,
+            sellerId,
+            paymentMethod:
+              this.optionalString(body.payment_method) ??
+              originalSale.paymentMethod ??
+              undefined,
+          },
+          tx,
+        );
 
-      await this.applyStockDelta(
-        originalSale.branchCode,
-        returnItems,
-        1,
-        {
-          companyId: originalSale.companyId,
-          userId: sellerId ?? originalSale.userId,
-          externalId: createdReturnSale.number,
-          movementType: 'RETURN',
-        },
-        tx,
-      );
-      await this.refreshBaseSaleStatus(originalSale.id, tx);
-      const refundedToBalance = await this.refundCashbackPayment(
-        tx,
-        createdReturnSale,
-        originalSale,
-      );
-      const debtCredit = await this.applyReturnCreditToDebt(
-        tx,
-        originalSale,
-        Number(createdReturnSale.payableTotal ?? 0) - refundedToBalance,
-      );
-      await this.recordDebtCredit(tx, createdReturnSale.id, debtCredit);
+        await this.applyStockDelta(
+          originalSale.branchCode,
+          returnItems,
+          1,
+          {
+            companyId: originalSale.companyId,
+            userId: sellerId ?? originalSale.userId,
+            externalId: createdReturnSale.number,
+            movementType: 'RETURN',
+          },
+          tx,
+        );
+        await this.refreshBaseSaleStatus(originalSale.id, tx);
+        const refundedToBalance = await this.refundCashbackPayment(
+          tx,
+          createdReturnSale,
+          originalSale,
+        );
+        const debtCredit = await this.applyReturnCreditToDebt(
+          tx,
+          originalSale,
+          Number(createdReturnSale.payableTotal ?? 0) - refundedToBalance,
+        );
+        await this.recordDebtCredit(tx, createdReturnSale.id, debtCredit);
 
-      return { createdReturnSale, refundedToBalance };
-    });
+        return { createdReturnSale, refundedToBalance };
+      },
+    );
 
     const refundTotal = Number(returnSale.createdReturnSale.payableTotal ?? 0);
     return {
@@ -1309,7 +1314,8 @@ export class SalesService {
     );
     const exchangeGroup = randomUUID();
 
-    const { returnSale, exchangeSale } = await this.prisma.$transaction(
+    const { returnSale, exchangeSale } = await runSerializableTransaction(
+      this.prisma,
       async (tx) => {
         const returnItems = await this.prepareAdjustmentItems(
           originalSale,
@@ -1322,6 +1328,7 @@ export class SalesService {
           body.new_items,
           returnItems,
           context,
+          tx,
         );
         const createdReturnSale = await this.createAdjustmentSale(
           {
@@ -2763,6 +2770,8 @@ export class SalesService {
     rawItems: unknown,
     returnItems: Array<{ productId: number; quantity: number }>,
     context: any,
+    // Read inside the caller's transaction, not on a second pool connection.
+    db: Prisma.TransactionClient | PrismaService = this.prisma,
   ) {
     if (!Array.isArray(rawItems) || rawItems.length === 0) {
       throw new BadRequestException('new_items must contain at least one item');
@@ -2799,7 +2808,7 @@ export class SalesService {
         );
       }
 
-      const product = await this.prisma.product.findFirst({
+      const product = await db.product.findFirst({
         where: this.buildProductScope({ id: productId }, context),
         include: {
           bundleComponents: {
@@ -2817,7 +2826,7 @@ export class SalesService {
       }
 
       const variant = variantId
-        ? await this.prisma.productVariant.findFirst({
+        ? await db.productVariant.findFirst({
             where: {
               id: variantId,
               productId,
@@ -2836,10 +2845,10 @@ export class SalesService {
 
       const stock = originalSale.branchCode
         ? variantId
-          ? await this.prisma.productVariantStock.findFirst({
+          ? await db.productVariantStock.findFirst({
               where: { variantId, branchCode: originalSale.branchCode },
             })
-          : await this.prisma.productStock.findFirst({
+          : await db.productStock.findFirst({
               where: { productId, branchCode: originalSale.branchCode },
             })
         : null;
