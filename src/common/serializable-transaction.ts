@@ -8,6 +8,23 @@ type SerializableClient = {
 };
 
 const SERIALIZATION_CONFLICT = 'P2034';
+// A raw query ($queryRaw, e.g. SELECT ... FOR UPDATE) surfaces the same
+// Postgres conflict as P2010 with the SQLSTATE in meta.code.
+const RAW_QUERY_FAILED = 'P2010';
+const RETRYABLE_SQLSTATES = new Set(['40001', '40P01']);
+
+export function isSerializationConflict(error: unknown) {
+  const { code, meta } = (error ?? {}) as {
+    code?: unknown;
+    meta?: { code?: unknown };
+  };
+  if (code === SERIALIZATION_CONFLICT) return true;
+  return (
+    code === RAW_QUERY_FAILED &&
+    typeof meta?.code === 'string' &&
+    RETRYABLE_SQLSTATES.has(meta.code)
+  );
+}
 
 // Concurrent sales of one product in different shops all update the same
 // Product row through the stock trigger, so conflicts are expected under
@@ -34,8 +51,7 @@ export async function runSerializableTransaction<T>(
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
       });
     } catch (error) {
-      const code = (error as { code?: unknown })?.code;
-      if (code !== SERIALIZATION_CONFLICT || attempt === maxAttempts) {
+      if (!isSerializationConflict(error) || attempt === maxAttempts) {
         throw error;
       }
       await backoff(attempt);
