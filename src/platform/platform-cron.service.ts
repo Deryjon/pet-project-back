@@ -8,7 +8,9 @@ export class PlatformCronService {
 
   constructor(private readonly platformService: PlatformService) {}
 
-  @Cron('5 0 * * *')
+  // Pinned to UTC (05:05 in Tashkent) so the process-wide TZ=Asia/Tashkent
+  // does not move subscription blocking to just after local midnight.
+  @Cron('5 0 * * *', { timeZone: 'UTC' })
   async blockExpiredSubscriptions() {
     const result = await this.platformService.checkExpiredSubscriptions();
 
