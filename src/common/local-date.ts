@@ -19,3 +19,25 @@ export function localDateKey(value: Date): string {
   const day = String(value.getDate()).padStart(2, '0');
   return `${value.getFullYear()}-${month}-${day}`;
 }
+
+/**
+ * Local start of the day, ISO week (Monday) or month a moment falls in,
+ * as "YYYY-MM-DD 00:00:00" — the key report plots are bucketed by.
+ */
+export function localPeriodStartKey(
+  value: Date | string,
+  detalization = 'day',
+): string {
+  const date =
+    typeof value === 'string' ? parseLocalDate(value) : new Date(value);
+  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+  if (detalization === 'month') {
+    start.setDate(1);
+  } else if (detalization === 'week') {
+    const weekday = start.getDay();
+    start.setDate(start.getDate() - (weekday === 0 ? 6 : weekday - 1));
+  }
+
+  return `${localDateKey(start)} 00:00:00`;
+}

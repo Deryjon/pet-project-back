@@ -1,4 +1,4 @@
-import { parseLocalDate } from '../common/local-date';
+import { localPeriodStartKey, parseLocalDate } from '../common/local-date';
 import {
   BadRequestException,
   Injectable,
@@ -3648,29 +3648,9 @@ export class ReportsService {
   }
 
   private toPlotDate(value: Date | string, detalization = 'day') {
-    const date = new Date(value);
-    const normalized = new Date(
-      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
-    );
-
-    switch (detalization) {
-      case 'month':
-        normalized.setUTCDate(1);
-        break;
-      case 'week': {
-        const day = normalized.getUTCDay();
-        const diff = day === 0 ? 6 : day - 1;
-        normalized.setUTCDate(normalized.getUTCDate() - diff);
-        break;
-      }
-      case 'day':
-      default:
-        break;
-    }
-    const year = normalized.getUTCFullYear();
-    const month = String(normalized.getUTCMonth() + 1).padStart(2, '0');
-    const day = String(normalized.getUTCDate()).padStart(2, '0');
-    return `${year}-${month}-${day} 00:00:00`;
+    // Same local calendar as the date filters (parseLocalDate): a sale at
+    // 02:00 Tashkent is plotted on that day, not on the previous UTC day.
+    return localPeriodStartKey(value, detalization);
   }
 
   private roundMetric(value: unknown, fractionDigits = 2) {
