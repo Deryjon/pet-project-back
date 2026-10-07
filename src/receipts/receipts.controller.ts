@@ -28,6 +28,11 @@ import { ReceiptsService } from './receipts.service';
 const RECEIPT_PERMISSIONS = [
   'new-sale',
   'order-new',
+  'manual-discount',
+  'order-debt',
+  'delay-finish',
+  'sell-gift-card',
+  'pay-gift-card',
   'order-return',
   'all-sales',
   'orders',
