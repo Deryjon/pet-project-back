@@ -34,6 +34,7 @@ import {
   variantDisplayName,
   variantLabel,
 } from '../common/variant-attributes';
+import { parseRequestNumber } from '../common/parse-number';
 import { PrismaService } from '../prisma/prisma.service';
 import { DEFAULT_PRODUCT_COLORS, SIZE_GRID_PRESETS } from './size-grid-presets';
 
@@ -12310,16 +12311,7 @@ export class ProductsService {
   }
 
   private toNumber(value: unknown) {
-    if (value === undefined || value === null || value === '') {
-      return undefined;
-    }
-
-    const parsed = Number(value);
-    if (Number.isNaN(parsed)) {
-      throw new BadRequestException('Numeric field contains invalid number');
-    }
-
-    return parsed;
+    return parseRequestNumber(value);
   }
 
   private toInt(value: unknown) {
