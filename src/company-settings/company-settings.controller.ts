@@ -178,8 +178,10 @@ export class CompanySettingsController {
     return this.companySettingsService.getPriceTagById(id, context.companyId);
   }
 
+  // Same right as the /settings/price-tags pages that edit the templates.
   @Post(['price-tag', 'v1/price-tag'])
-  @UseGuards(JwtAuthGuard, CompanyAccessGuard)
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('bulk-price-tags')
   async createPriceTag(
     @Body() body: Record<string, unknown>,
     @CurrentCompanyContext() context: CompanyRequestContext,
@@ -189,7 +191,8 @@ export class CompanySettingsController {
   }
 
   @Put(['price-tag/:id', 'v1/price-tag/:id'])
-  @UseGuards(JwtAuthGuard, CompanyAccessGuard)
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('bulk-price-tags')
   async updatePriceTag(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -200,7 +203,8 @@ export class CompanySettingsController {
   }
 
   @Delete(['price-tag/:id', 'v1/price-tag/:id'])
-  @UseGuards(JwtAuthGuard, CompanyAccessGuard)
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('bulk-price-tags')
   async deletePriceTag(
     @Param('id') id: string,
     @CurrentCompanyContext() context: CompanyRequestContext,
