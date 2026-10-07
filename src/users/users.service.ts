@@ -2902,7 +2902,13 @@ export class UsersService {
       const payload = await this.jwtService.verifyAsync<{
         sub: number;
         sessionId?: string;
+        type?: string;
       }>(token);
+      // Without JWT_REFRESH_SECRET the refresh token is signed with the same
+      // key; it must never pass as a (much shorter-lived) access token.
+      if (payload.type === 'refresh') {
+        throw new UnauthorizedException('Invalid token');
+      }
       if (payload.sessionId) {
         await this.assertAuthSessionIsActive(payload.sessionId, payload.sub);
       }
