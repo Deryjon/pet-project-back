@@ -31,7 +31,7 @@ for (const file of controllerFiles(join(__dirname, '..'))) {
     for (const method of Object.getOwnPropertyNames(controller.prototype)) {
       const handler = controller.prototype[method];
       if (method === 'constructor' || typeof handler !== 'function') continue;
-      for (const slug of slugsOf(handler as object)) {
+      for (const slug of slugsOf(handler)) {
         usages.push({ where: `${name}.${method}`, slug });
       }
     }
