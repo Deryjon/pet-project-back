@@ -3143,7 +3143,9 @@ export class SalesService {
       );
     }
 
-    for (const item of this.expandStockComposition(items)) {
+    for (const item of this.inStockLockOrder(
+      this.expandStockComposition(items),
+    )) {
       if (!meta?.companyId) {
         throw new InternalServerErrorException(
           'Для движения товара не задана компания',
@@ -3215,6 +3217,21 @@ export class SalesService {
         });
       }
     }
+  }
+
+  /**
+   * Every stock movement locks variant, product-stock and product rows (the
+   * ledger trigger), so two documents touching the same goods in different
+   * orders can deadlock. Moving them in one fixed order avoids that.
+   */
+  private inStockLockOrder<
+    T extends { productId: number | null; variantId?: string | null },
+  >(items: T[]): T[] {
+    return [...items].sort(
+      (a, b) =>
+        (a.productId ?? 0) - (b.productId ?? 0) ||
+        String(a.variantId ?? '').localeCompare(String(b.variantId ?? '')),
+    );
   }
 
   // Reads through the caller's transaction when there is one, so a cancel or
@@ -3691,7 +3708,7 @@ export class SalesService {
         quantity: number;
       }> = [];
 
-      for (const item of sale.items) {
+      for (const item of this.inStockLockOrder(sale.items)) {
         if (!item.productId) {
           continue;
         }
@@ -3842,7 +3859,7 @@ export class SalesService {
     }
 
     const restore = async (tx: Prisma.TransactionClient) => {
-      for (const item of sale.items) {
+      for (const item of this.inStockLockOrder(sale.items)) {
         if (!item.productId) {
           continue;
         }
