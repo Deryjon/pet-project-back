@@ -1,3 +1,4 @@
+import { getSignedSaleAmount } from '../common/money-calculations';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ANALYTICS_CONFIG } from './analytics.config';
@@ -26,11 +27,9 @@ type SaleWithItems = {
   }>;
 };
 
+// Same signed revenue as sales, reports and the dashboard.
 function revenueOf(sale: SaleWithItems) {
-  const amount = sale.payableTotal !== 0 || sale.total === 0 || sale.discountAmount > 0 || sale.discountPercent > 0
-    ? sale.payableTotal
-    : sale.total;
-  return sale.saleType === 'return' ? -amount : amount;
+  return getSignedSaleAmount(sale);
 }
 
 function average(values: number[]) {

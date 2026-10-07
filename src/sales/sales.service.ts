@@ -1,3 +1,4 @@
+import { getSignedSaleAmount } from '../common/money-calculations';
 import {
   BadRequestException,
   ConflictException,
@@ -5250,8 +5251,8 @@ export class SalesService {
     discountAmount?: Prisma.Decimal | number | null;
     discountPercent?: Prisma.Decimal | number | null;
   }) {
-    const amount = this.getSalePayableAmount(sale);
-    return sale.saleType === 'return' ? -amount : amount;
+    // One definition for sales, reports and the dashboard.
+    return getSignedSaleAmount(sale);
   }
 
   private getSalePayableAmount(sale: {
