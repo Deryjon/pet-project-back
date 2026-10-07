@@ -1223,9 +1223,6 @@ describe('SalesService money calculations', () => {
       jest
         .spyOn(service as any, 'applyStockDelta')
         .mockResolvedValue(undefined);
-      jest
-        .spyOn(service as any, 'syncProductsQuantity')
-        .mockResolvedValue(undefined);
 
       const result = await service.removeOrder(
         String(adjustment.id),

@@ -1265,7 +1265,6 @@ export class SalesService {
         },
         tx,
       );
-      await this.syncProductsQuantity(returnItems, tx);
       await this.refreshBaseSaleStatus(originalSale.id, tx);
       const refundedToBalance = await this.refundCashbackPayment(
         tx,
@@ -1383,7 +1382,6 @@ export class SalesService {
           },
           tx,
         );
-        await this.syncProductsQuantity([...returnItems, ...exchangeItems], tx);
         await this.refreshBaseSaleStatus(originalSale.id, tx);
         const debtCredit = await this.applyReturnCreditToDebt(
           tx,
@@ -2238,10 +2236,6 @@ export class SalesService {
           );
         }
 
-        await this.syncProductsQuantity(
-          adjustmentSales.flatMap((adjustment) => adjustment.items),
-          tx,
-        );
         await this.createSaleAuditLog(
           tx,
           context,
@@ -3223,53 +3217,6 @@ export class SalesService {
     }
   }
 
-  private async syncProductsQuantity(
-    items: Array<{
-      productId: number;
-      variantId?: string | null;
-      quantity?: Prisma.Decimal | number;
-      salePrice?: Prisma.Decimal | number;
-      stockComposition?: unknown;
-    }>,
-    tx: Prisma.TransactionClient | PrismaService = this.prisma,
-  ) {
-    const expandedItems = this.expandStockComposition(
-      items.map((item) => ({
-        ...item,
-        quantity: item.quantity ?? 0,
-        salePrice: item.salePrice ?? 0,
-      })),
-    );
-    const uniqueProductIds = [
-      ...new Set(
-        expandedItems
-          .map((item) => item.productId)
-          .filter((id): id is number => typeof id === 'number'),
-      ),
-    ];
-
-    for (const productId of uniqueProductIds) {
-      const product = await tx.product.findUnique({
-        where: { id: productId },
-        include: { stocks: true },
-      });
-
-      if (!product) {
-        continue;
-      }
-
-      await tx.product.update({
-        where: { id: productId },
-        data: {
-          quantity: product.stocks.reduce(
-            (sum, stock) => sum + stock.quantity,
-            0,
-          ),
-        },
-      });
-    }
-  }
-
   // Reads through the caller's transaction when there is one, so a cancel or
   // return does not hold a second pool connection while waiting for the shop.
   private async resolveShopIdForBranchCode(
@@ -3950,21 +3897,8 @@ export class SalesService {
         });
       }
 
-      for (const productId of productIds) {
-        const totalStock = await tx.productStock.aggregate({
-          where: { productId },
-          _sum: {
-            quantity: true,
-          },
-        });
-
-        await tx.product.update({
-          where: { id: productId },
-          data: {
-            quantity: totalStock._sum.quantity ?? 0,
-          },
-        });
-      }
+      // Product.quantity is kept by the stock ledger trigger; rewriting it
+      // here with an absolute sum could overwrite a concurrent movement.
     };
 
     if (outerTx) {
