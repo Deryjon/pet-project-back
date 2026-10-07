@@ -28,7 +28,7 @@ describe('Rate limiting', () => {
     (method) => {
       expect(
         Reflect.getMetadata(`${THROTTLER_LIMIT}default`, proto[method]),
-      ).toBe(5);
+      ).toBe(20);
     },
   );
 
@@ -68,5 +68,18 @@ describe('Rate limiting', () => {
         }),
       ).resolves.toBe('3.3.3.3');
     }
+  });
+
+  it('keeps counting signed-in auth routes per token', async () => {
+    const guard = Object.create(AppThrottlerGuard.prototype) as {
+      getTracker(req: Record<string, unknown>): Promise<string>;
+    };
+    await expect(
+      guard.getTracker({
+        originalUrl: '/api/auth/me',
+        headers: { authorization: 'Bearer a' },
+        ip: '4.4.4.4',
+      }),
+    ).resolves.toMatch(/^token:/);
   });
 });

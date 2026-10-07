@@ -18,25 +18,29 @@ import { PlatformLoginDto } from './dto/platform-login.dto';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  // Per IP: several cashiers of one shop may sign in at shift start.
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
   @Post('auth/company-login')
   companyLogin(@Body() dto: CompanyLoginDto) {
     return this.authService.companyLogin(dto);
   }
 
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  // Per IP: several cashiers of one shop may sign in at shift start.
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
   @Post('auth/platform-login')
   platformLogin(@Body() dto: PlatformLoginDto) {
     return this.authService.platformLogin(dto);
   }
 
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  // Per IP: several cashiers of one shop may sign in at shift start.
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
   @Post('platform/auth/login')
   platformAuthLogin(@Body() dto: PlatformLoginDto) {
     return this.authService.platformLogin(dto);
   }
 
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  // Per IP: several cashiers of one shop may sign in at shift start.
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
   @Post('auth/login')
   login(
     @Body() dto: LoginDto,
