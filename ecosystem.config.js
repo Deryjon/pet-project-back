@@ -6,7 +6,10 @@ module.exports = {
       cwd: "/home/deryjon/pet-project-back",
       env: {
         NODE_ENV: "production",
+<<<<<<< Updated upstream
         TZ: "Asia/Tashkent"
+=======
+>>>>>>> Stashed changes
       }
     }
   ]
