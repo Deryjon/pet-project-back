@@ -167,6 +167,16 @@ export class SalesController {
     return this.salesService.updatePaymentMethod(id, body, requestContext);
   }
 
+  @Patch(['order/:id/date', 'v2/order/:id/date'])
+  @Permissions('order-date')
+  updateSaleDate(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.salesService.updateSaleDate(id, body, requestContext);
+  }
+
   @Get('new-sale/:id')
   findDraft(
     @Param('id', ParseIntPipe) id: number,

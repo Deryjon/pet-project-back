@@ -149,7 +149,6 @@ export const DEFAULT_CRM_ROLES = [
       'report-print',
       'orders-other-shops',
       'payment-type',
-      'order-date',
       'order-client',
       'order-seller',
       'order-delete',

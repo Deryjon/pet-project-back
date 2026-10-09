@@ -1226,6 +1226,93 @@ export class SalesService {
     );
   }
 
+  /**
+   * Moves a finished sale to another date (createdAt + paidAt, so every report
+   * agrees). Stock movements keep their real timestamps: their before/after
+   * quantities form a chronological ledger that a shifted row would break.
+   */
+  async updateSaleDate(
+    id: string,
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const context = await this.getRequestContext(requestContext);
+    const saleId = this.parseEntityId(id, 'order id');
+    const rawDate = this.optionalString(body.date ?? body.paid_at);
+    const newDate = rawDate ? new Date(rawDate) : null;
+    if (!newDate || Number.isNaN(newDate.getTime())) {
+      throw new BadRequestException('Укажите корректную дату');
+    }
+    if (newDate.getTime() > Date.now() + 60_000) {
+      throw new BadRequestException('Дата не может быть в будущем');
+    }
+    const reason = this.optionalString(body.reason) ?? null;
+
+    await this.prisma.$transaction(async (tx) => {
+      const sale = await tx.sale.findUnique({ where: { id: saleId } });
+      if (!sale) {
+        throw new NotFoundException('Order not found');
+      }
+      this.assertSaleAccess(sale, context);
+      if (sale.isDraft || sale.status === 'cancelled' || sale.cancelledAt) {
+        throw new BadRequestException(
+          'Дату можно менять только у завершённой продажи',
+        );
+      }
+
+      const saleDate = (s: { paidAt: Date | null; createdAt: Date }) =>
+        s.paidAt ?? s.createdAt;
+
+      if (sale.parentSaleId) {
+        const parent = await tx.sale.findUnique({
+          where: { id: sale.parentSaleId },
+          select: { paidAt: true, createdAt: true },
+        });
+        if (parent && newDate < saleDate(parent)) {
+          throw new BadRequestException(
+            'Дата возврата/обмена не может быть раньше исходной продажи',
+          );
+        }
+      }
+
+      const children = await tx.sale.findMany({
+        where: {
+          parentSaleId: sale.id,
+          isDraft: false,
+          status: { not: 'cancelled' },
+        },
+        select: { paidAt: true, createdAt: true },
+      });
+      if (children.some((child) => newDate > saleDate(child))) {
+        throw new BadRequestException(
+          'Дата продажи не может быть позже её возвратов/обменов',
+        );
+      }
+
+      const previousDate = saleDate(sale);
+      await tx.sale.update({
+        where: { id: sale.id },
+        data: { paidAt: newDate, createdAt: newDate },
+      });
+      await tx.clientDebt.updateMany({
+        where: { saleId: sale.id },
+        data: { createdAt: newDate },
+      });
+      await this.refreshClientSalesAggregates(
+        tx,
+        sale.companyId,
+        sale.clientId,
+      );
+      await this.createSaleAuditLog(tx, context, 'sale.date_changed', sale, {
+        reason,
+        from: previousDate.toISOString(),
+        to: newDate.toISOString(),
+      });
+    });
+
+    return this.findOrder(id, requestContext);
+  }
+
   async processReturn(
     id: string,
     body: Record<string, unknown>,
@@ -4488,6 +4575,7 @@ export class SalesService {
       branchCode: string | null;
       createdAt: Date;
       updatedAt: Date;
+      paidAt?: Date | null;
       isDraft: boolean;
       discountPercent: Prisma.Decimal | number;
       total: Prisma.Decimal | number;
@@ -4862,7 +4950,10 @@ export class SalesService {
       display_finished_at: '',
       sold_at: sale.isDraft
         ? ''
-        : this.formatDateTime(sale.updatedAt, context?.companyId),
+        : this.formatDateTime(
+            sale.paidAt ?? sale.updatedAt,
+            context?.companyId,
+          ),
       display_sold_at: '',
       display_deleted_at: '',
       order_debt_payments: null,
