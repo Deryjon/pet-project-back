@@ -1,25 +1,24 @@
--- Add StoreType enum
-CREATE TYPE "StoreType" AS ENUM ('ACCESSORIES', 'CLOTHING', 'SHOES', 'CLOTHING_SHOES');
+-- Enums (idempotent)
+DO $$ BEGIN
+  CREATE TYPE "StoreType" AS ENUM ('ACCESSORIES', 'CLOTHING', 'SHOES', 'CLOTHING_SHOES');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- Add ProductSizeKind enum
-CREATE TYPE "ProductSizeKind" AS ENUM ('CLOTHING', 'SHOES');
+DO $$ BEGIN
+  CREATE TYPE "ProductSizeKind" AS ENUM ('CLOTHING', 'SHOES');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- Add storeType to Company
-ALTER TABLE "Company" ADD COLUMN "storeType" "StoreType" NOT NULL DEFAULT 'ACCESSORIES';
+-- Company.storeType
+ALTER TABLE "Company" ADD COLUMN IF NOT EXISTS "storeType" "StoreType" NOT NULL DEFAULT 'ACCESSORIES';
 
--- Update ProductColor: add code and hex columns, add unique constraint on code
-ALTER TABLE "ProductColor" DROP CONSTRAINT IF EXISTS "ProductColor_companyId_code_key";
-ALTER TABLE "ProductColor" ADD COLUMN "hex" TEXT;
-UPDATE "ProductColor" SET "code" = COALESCE("code", '') WHERE "code" IS NULL;
-ALTER TABLE "ProductColor" ALTER COLUMN "code" SET NOT NULL;
-ALTER TABLE "ProductColor" ALTER COLUMN "code" SET DEFAULT '';
-ALTER TABLE "ProductColor" ADD CONSTRAINT "ProductColor_companyId_code_key" UNIQUE ("companyId", "code");
+-- ProductColor: code stays NULLABLE (old colors without code = NULL, unique index allows many NULLs)
+ALTER TABLE "ProductColor" ADD COLUMN IF NOT EXISTS "code" TEXT;
+ALTER TABLE "ProductColor" ADD COLUMN IF NOT EXISTS "hex" TEXT;
+UPDATE "ProductColor" SET "code" = NULL WHERE trim("code") = '';
 
--- Update ProductSize: add code and kind columns, add unique constraint on code
-ALTER TABLE "ProductSize" ADD COLUMN "code" TEXT NOT NULL DEFAULT '';
-ALTER TABLE "ProductSize" ADD COLUMN "kind" "ProductSizeKind";
-ALTER TABLE "ProductSize" ADD CONSTRAINT "ProductSize_companyId_code_key" UNIQUE ("companyId", "code");
+-- ProductSize: code NULLABLE, kind
+ALTER TABLE "ProductSize" ADD COLUMN IF NOT EXISTS "code" TEXT;
+ALTER TABLE "ProductSize" ADD COLUMN IF NOT EXISTS "kind" "ProductSizeKind";
 
--- Create indexes for better query performance
-CREATE INDEX "ProductColor_companyId_code_idx" ON "ProductColor"("companyId", "code");
-CREATE INDEX "ProductSize_companyId_code_idx" ON "ProductSize"("companyId", "code");
+-- Unique (companyId, code)
+CREATE UNIQUE INDEX IF NOT EXISTS "ProductColor_companyId_code_key" ON "ProductColor"("companyId", "code");
+CREATE UNIQUE INDEX IF NOT EXISTS "ProductSize_companyId_code_key"  ON "ProductSize"("companyId", "code");
