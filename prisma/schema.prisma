@@ -145,6 +145,7 @@ model Company {
   productVariants         ProductVariant[]
   productColors           ProductColor[]
   productSizes            ProductSize[]
+  productSeasons          ProductSeasonOption[]
   attributeDefinitions    AttributeDefinition[]
   attributeOptions        AttributeOption[]
   variantAttributeValues  VariantAttributeValue[]
@@ -499,6 +500,7 @@ model Product {
   tier                 ProductTier?
   gender               String?
   season               ProductSeason               @default(NO_SEASON)
+  seasonOptionId       String?
   seasonYear           Int?
   collection           String?
   archivedAt           DateTime?
@@ -522,10 +524,12 @@ model Product {
   includedInBundles    ProductBundleComponent[]    @relation("BundleComponentProduct")
   attributeAxes        ProductAttributeAxis[]
   attributeValues      ProductAttributeValue[]
+  seasonOption         ProductSeasonOption?        @relation(fields: [seasonOptionId], references: [id], onDelete: SetNull)
   createdAt            DateTime                    @default(now())
   updatedAt            DateTime                    @updatedAt
 
   @@unique([companyId, sku])
+  @@unique([companyId, article])
   @@unique([companyId, barcode])
   @@index([companyId])
   @@index([companyId, productGroupId])
@@ -537,8 +541,11 @@ model ProductColor {
   id        String           @id @default(uuid())
   companyId String
   name      String
+  nameRu    String?
+  nameUz    String?
   code      String           @default("")
   hex       String?
+  sortOrder Int              @default(0)
   isActive  Boolean          @default(true)
   company   Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   variants  ProductVariant[]
@@ -555,6 +562,8 @@ model ProductSize {
   companyId String
   code      String             @default("")
   name      String
+  nameRu    String?
+  nameUz    String?
   kind      ProductSizeKind?
   type      ProductSizeType
   system    ProductSizeSystem?
@@ -568,6 +577,23 @@ model ProductSize {
   @@unique([companyId, type, name])
   @@unique([companyId, code])
   @@index([companyId, type, isActive, sortOrder])
+}
+
+model ProductSeasonOption {
+  id        String    @id @default(uuid())
+  companyId String
+  code      String
+  nameRu    String
+  nameUz    String
+  sortOrder Int       @default(0)
+  isActive  Boolean   @default(true)
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  products  Product[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@unique([companyId, code])
+  @@index([companyId, isActive, sortOrder])
 }
 
 model ProductVariant {
@@ -605,6 +631,7 @@ model ProductVariant {
 
   @@unique([companyId, barcode])
   @@unique([companyId, sku])
+  @@unique([productId, colorId, sizeId])
   @@index([productId, isActive])
   @@index([productId, optionsKey])
   @@index([colorId])
