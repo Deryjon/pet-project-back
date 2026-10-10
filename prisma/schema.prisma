@@ -117,6 +117,18 @@ enum ProductSizeSystem {
   OTHER
 }
 
+enum StoreType {
+  ACCESSORIES
+  CLOTHING
+  SHOES
+  CLOTHING_SHOES
+}
+
+enum ProductSizeKind {
+  CLOTHING
+  SHOES
+}
+
 model Company {
   id                      String                   @id @default(uuid())
   login                   String                   @unique
@@ -176,6 +188,7 @@ model Company {
   supplierProductAliases  SupplierProductAlias[]
   supplyPriceStrategy     SupplyPriceStrategy      @default(LAST_PURCHASE)
   businessType            String                   @default("clothing_store")
+  storeType               StoreType                @default(ACCESSORIES)
   productFeatureSettings  Json                     @default("{\"variants\":true,\"color\":true,\"size\":true,\"season\":true,\"collection\":true,\"bundles\":false}")
   createdAt               DateTime                 @default(now())
   updatedAt               DateTime                 @updatedAt
@@ -524,7 +537,8 @@ model ProductColor {
   id        String           @id @default(uuid())
   companyId String
   name      String
-  code      String?
+  code      String           @default("")
+  hex       String?
   isActive  Boolean          @default(true)
   company   Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   variants  ProductVariant[]
@@ -532,13 +546,16 @@ model ProductColor {
   updatedAt DateTime         @updatedAt
 
   @@unique([companyId, name])
+  @@unique([companyId, code])
   @@index([companyId, isActive])
 }
 
 model ProductSize {
   id        String             @id @default(uuid())
   companyId String
+  code      String             @default("")
   name      String
+  kind      ProductSizeKind?
   type      ProductSizeType
   system    ProductSizeSystem?
   sortOrder Int                @default(0)
@@ -549,6 +566,7 @@ model ProductSize {
   updatedAt DateTime           @updatedAt
 
   @@unique([companyId, type, name])
+  @@unique([companyId, code])
   @@index([companyId, type, isActive, sortOrder])
 }
 
