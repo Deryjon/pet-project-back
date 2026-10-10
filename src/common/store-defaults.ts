@@ -37,31 +37,15 @@ export const DEFAULT_PRODUCT_SEASONS = [
 ] as const;
 
 function clothingSizes() {
-  const letters = [
-    'XXS',
-    'XS',
-    'S',
-    'M',
-    'L',
-    'XL',
-    '2XL',
-    '3XL',
-    '4XL',
-    '5XL',
-  ];
-  const russian = Array.from({ length: 11 }, (_, index) =>
-    String(40 + index * 2),
-  );
-  return [
-    ...letters.map((code) => ({ code, name: code })),
-    ...russian.map((value) => ({ code: `R${value}`, name: `${value} (RU)` })),
-    { code: 'ONE', name: 'ONE' },
-  ];
+  return ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL'].map((code) => ({
+    code,
+    name: code,
+  }));
 }
 
 function shoeSizes() {
-  return Array.from({ length: 23 }, (_, index) => {
-    const value = 35 + index / 2;
+  return Array.from({ length: 10 }, (_, index) => {
+    const value = 36 + index;
     return { code: String(value), name: String(value) };
   });
 }

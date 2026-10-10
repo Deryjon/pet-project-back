@@ -215,7 +215,6 @@ describe('ProductsService size grid presets and variant codes', () => {
     const prisma = {
       productSize: {
         createMany: jest.fn(),
-        updateMany: jest.fn(),
         findMany: jest.fn().mockResolvedValue([
           { id: 's-m', name: 'M', type: 'CLOTHING' },
           { id: 's-42', name: '42', type: 'SHOES' },
