@@ -92,6 +92,42 @@ describe('ProductsService identifier generation', () => {
       barcode: '2000000000008',
     });
   });
+
+  it('allocates import identifiers through the active transaction', async () => {
+    const rootPrisma = {
+      product: {
+        findMany: jest.fn().mockRejectedValue(new Error('root client used')),
+        findFirst: jest.fn().mockRejectedValue(new Error('root client used')),
+      },
+      productVariant: {
+        findFirst: jest.fn().mockRejectedValue(new Error('root client used')),
+      },
+    };
+    const tx = {
+      product: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+      productVariant: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+    };
+    const service = new ProductsService(rootPrisma as any, {} as any);
+
+    await expect(
+      (service as any).resolveIdentifiersForImportCreate(
+        { name: 'Футболка', quantity: 1, supplyPrice: 1, retailPrice: 2 },
+        'company-1',
+        tx,
+      ),
+    ).resolves.toMatchObject({
+      sku: expect.stringMatching(/-\d{5}$/),
+      barcode: expect.stringMatching(/^2\d{12}$/),
+    });
+    expect(rootPrisma.product.findMany).not.toHaveBeenCalled();
+    expect(tx.product.findMany).toHaveBeenCalled();
+    expect(tx.productVariant.findFirst).toHaveBeenCalled();
+  });
 });
 
 describe('ProductsService apparel import grouping', () => {

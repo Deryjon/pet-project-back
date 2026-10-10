@@ -10042,95 +10042,115 @@ export class ProductsService {
     createdById: number,
     sessionId: string,
   ) {
-    return this.withImportProductLock(`${companyId}:import-commit`, () =>
-      this.prisma.$transaction(
-        async (tx) => {
-          let createdCount = 0;
-          let updatedCount = 0;
-          const auditRows: ImportAuditRow[] = [];
+    let applyingRow = 0;
+    try {
+      return await this.withImportProductLock(
+        `${companyId}:import-commit`,
+        () =>
+          this.prisma.$transaction(
+            async (tx) => {
+              let createdCount = 0;
+              let updatedCount = 0;
+              const auditRows: ImportAuditRow[] = [];
 
-          for (let index = 0; index < rows.length; index += 1) {
-            const row = rows[index];
-            const error = this.validateImportRow(row);
-            if (error) {
-              throw new BadRequestException(
-                `Import row ${index + 1}: ${error}`,
-              );
-            }
+              for (let index = 0; index < rows.length; index += 1) {
+                applyingRow = index + 1;
+                const row = rows[index];
+                const error = this.validateImportRow(row);
+                if (error) {
+                  throw new BadRequestException(
+                    `Import row ${index + 1}: ${error}`,
+                  );
+                }
 
-            const matchedProduct = await this.findImportMatchedProduct(
-              companyId,
-              row,
-              tx,
-            );
-            let actionResult: {
-              action: 'create' | 'update';
-              productId: number;
-              changedFields: Array<{ field: string; reason: string }>;
-            };
+                const matchedProduct = await this.findImportMatchedProduct(
+                  companyId,
+                  row,
+                  tx,
+                );
+                let actionResult: {
+                  action: 'create' | 'update';
+                  productId: number;
+                  changedFields: Array<{ field: string; reason: string }>;
+                };
 
-            if (matchedProduct) {
-              const changedFields = await this.applyImportUpdate(
-                tx,
-                matchedProduct.id,
-                row,
-                companyId,
-                shopId,
-                branchCode,
-                onMatchPolicy,
-                createdById,
-                sessionId,
-              );
-              actionResult = {
-                action: 'update',
-                productId: matchedProduct.id,
-                changedFields,
+                if (matchedProduct) {
+                  const changedFields = await this.applyImportUpdate(
+                    tx,
+                    matchedProduct.id,
+                    row,
+                    companyId,
+                    shopId,
+                    branchCode,
+                    onMatchPolicy,
+                    createdById,
+                    sessionId,
+                  );
+                  actionResult = {
+                    action: 'update',
+                    productId: matchedProduct.id,
+                    changedFields,
+                  };
+                } else {
+                  const createdProduct = await this.applyImportCreate(
+                    tx,
+                    row,
+                    companyId,
+                    shopId,
+                    branchCode,
+                    createdById,
+                    sessionId,
+                  );
+                  actionResult = {
+                    action: 'create',
+                    productId: createdProduct.id,
+                    changedFields: [
+                      { field: 'product', reason: 'created_new_product' },
+                    ],
+                  };
+                }
+
+                if (actionResult.action === 'update') updatedCount += 1;
+                else createdCount += 1;
+
+                auditRows.push({
+                  row: index + 1,
+                  action: actionResult.action,
+                  reason:
+                    actionResult.action === 'update'
+                      ? 'matched_by_exact_sku_and_barcode'
+                      : 'product_not_found_by_exact_sku_and_barcode',
+                  product_id: actionResult.productId,
+                  changed_fields: actionResult.changedFields,
+                });
+              }
+
+              return {
+                created_count: createdCount,
+                updated_count: updatedCount,
+                error_count: 0,
+                errors: [] as Array<{ row: number; message: string }>,
+                audit_rows: auditRows,
               };
-            } else {
-              const createdProduct = await this.applyImportCreate(
-                tx,
-                row,
-                companyId,
-                shopId,
-                branchCode,
-                createdById,
-                sessionId,
-              );
-              actionResult = {
-                action: 'create',
-                productId: createdProduct.id,
-                changedFields: [
-                  { field: 'product', reason: 'created_new_product' },
-                ],
-              };
-            }
-
-            if (actionResult.action === 'update') updatedCount += 1;
-            else createdCount += 1;
-
-            auditRows.push({
-              row: index + 1,
-              action: actionResult.action,
-              reason:
-                actionResult.action === 'update'
-                  ? 'matched_by_exact_sku_and_barcode'
-                  : 'product_not_found_by_exact_sku_and_barcode',
-              product_id: actionResult.productId,
-              changed_fields: actionResult.changedFields,
-            });
-          }
-
-          return {
-            created_count: createdCount,
-            updated_count: updatedCount,
-            error_count: 0,
-            errors: [] as Array<{ row: number; message: string }>,
-            audit_rows: auditRows,
-          };
-        },
-        { maxWait: 10_000, timeout: 120_000 },
-      ),
-    );
+            },
+            { maxWait: 10_000, timeout: 120_000 },
+          ),
+      );
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const rawTarget = error.meta?.target;
+        const target = Array.isArray(rawTarget)
+          ? rawTarget.join(', ')
+          : String(rawTarget ?? 'уникальные поля');
+        throw new ConflictException(
+          `Строка ${applyingRow}: значение уже существует (${target})`,
+        );
+      }
+      throw error;
+    }
   }
 
   private async applyImportCreate(
@@ -10145,6 +10165,7 @@ export class ProductsService {
     const identifiers = await this.resolveIdentifiersForImportCreate(
       row,
       companyId,
+      tx,
     );
     const createdProduct = await (async () => {
       const dimensions = await this.resolveImportVariantDimensions(
@@ -10725,6 +10746,7 @@ export class ProductsService {
   private async resolveIdentifiersForImportCreate(
     row: ImportRowInput,
     companyId: string,
+    tx: Prisma.TransactionClient,
   ) {
     let sku = row.sku?.trim() ?? '';
     let barcode = row.barcode?.trim() ?? '';
@@ -10733,7 +10755,7 @@ export class ProductsService {
       const prefix = this.normalizeSkuPrefix(
         row.name ? this.buildSkuPrefix(row.name) : undefined,
       );
-      const nextSkuNumber = await this.getNextSkuNumber(companyId, prefix);
+      const nextSkuNumber = await this.getNextSkuNumber(companyId, prefix, tx);
       const maxSkuNumber = 10 ** SKU_NUMBER_LENGTH - 1;
       for (
         let skuNumber = nextSkuNumber;
@@ -10742,11 +10764,11 @@ export class ProductsService {
       ) {
         const candidate = this.formatSku(prefix, skuNumber);
         const [existingProduct, existingVariant] = await Promise.all([
-          this.prisma.product.findFirst({
+          tx.product.findFirst({
             where: { companyId, sku: candidate },
             select: { id: true },
           }),
-          this.prisma.productVariant.findFirst({
+          tx.productVariant.findFirst({
             where: { companyId, sku: candidate },
             select: { id: true },
           }),
@@ -10764,7 +10786,7 @@ export class ProductsService {
     }
 
     if (!barcode) {
-      const latestBarcodeRecords = await this.prisma.product.findMany({
+      const latestBarcodeRecords = await tx.product.findMany({
         where: { companyId, barcode: { startsWith: '2' } },
         orderBy: { barcode: 'desc' },
         select: { barcode: true },
@@ -10782,11 +10804,11 @@ export class ProductsService {
       while (nextPayload <= BARCODE_PAYLOAD_MAX) {
         const candidate = this.formatEan13Barcode(nextPayload);
         const [existingProduct, existingVariant] = await Promise.all([
-          this.prisma.product.findFirst({
+          tx.product.findFirst({
             where: { companyId, barcode: candidate },
             select: { id: true },
           }),
-          this.prisma.productVariant.findFirst({
+          tx.productVariant.findFirst({
             where: { companyId, barcode: candidate },
             select: { id: true },
           }),
@@ -12144,8 +12166,12 @@ export class ProductsService {
     return `${prefix}-${String(skuNumber).padStart(SKU_NUMBER_LENGTH, '0')}`;
   }
 
-  private async getNextSkuNumber(companyId: string, prefix: string) {
-    const latestSkuRecords = await this.prisma.product.findMany({
+  private async getNextSkuNumber(
+    companyId: string,
+    prefix: string,
+    db: Pick<Prisma.TransactionClient, 'product'> = this.prisma,
+  ) {
+    const latestSkuRecords = await db.product.findMany({
       where: {
         companyId,
         sku: {
