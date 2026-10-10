@@ -9797,6 +9797,28 @@ export class ProductsService {
       if (variant) return variant.product;
     }
 
+    // A row with colour/size but no identifiers is one more variant of the
+    // variative product with the same name (e.g. Nike Hoodie Black/S, Black/M).
+    if (!article && !sku && !barcode && row.name && (row.colorName || row.sizeName)) {
+      return this.prisma.product.findFirst({
+        where: {
+          companyId,
+          variantType: 'variative',
+          name: { equals: row.name.trim(), mode: 'insensitive' },
+          ...(row.brandName
+            ? { brand: { name: { equals: row.brandName.trim(), mode: 'insensitive' } } }
+            : {}),
+        },
+        include: {
+          category: true,
+          brand: true,
+          suppliers: { include: { supplier: true } },
+          stocks: true,
+        },
+        orderBy: { id: 'asc' },
+      });
+    }
+
     if (!sku && !barcode) {
       return null;
     }
@@ -10840,6 +10862,10 @@ export class ProductsService {
 
     if (barcode) {
       return `${companyId}:barcode:${barcode}`;
+    }
+
+    if (row.name && (row.colorName || row.sizeName)) {
+      return `${companyId}:variant-name:${row.name.trim().toLowerCase()}`;
     }
 
     return `${companyId}:row:${randomUUID()}`;

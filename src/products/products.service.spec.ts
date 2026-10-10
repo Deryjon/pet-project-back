@@ -274,3 +274,53 @@ describe('Catalog deletion safety', () => {
     expect(tx.orderItem.deleteMany).not.toHaveBeenCalled();
   });
 });
+
+describe('Excel import variant grouping', () => {
+  const baseRow = {
+    quantity: 1,
+    supplyPrice: 1,
+    retailPrice: 2,
+  };
+
+  it('matches an identifier-less colour/size row to the variative product of the same company and name', async () => {
+    const prisma = { product: { findFirst: jest.fn().mockResolvedValue({ id: 7 }) } };
+    const service = new ProductsService(prisma as any, {} as any);
+
+    const matched = await (service as any).findImportMatchedProduct('company-1', {
+      ...baseRow,
+      name: 'Nike Hoodie',
+      colorName: 'Black',
+      sizeName: 'M',
+    });
+
+    expect(matched).toEqual({ id: 7 });
+    expect(prisma.product.findFirst.mock.calls[0][0].where).toMatchObject({
+      companyId: 'company-1',
+      variantType: 'variative',
+      name: { equals: 'Nike Hoodie', mode: 'insensitive' },
+    });
+  });
+
+  it('does not merge plain rows by name alone', async () => {
+    const prisma = { product: { findFirst: jest.fn() } };
+    const service = new ProductsService(prisma as any, {} as any);
+
+    await expect(
+      (service as any).findImportMatchedProduct('company-1', {
+        ...baseRow,
+        name: 'Nike Hoodie',
+      }),
+    ).resolves.toBeNull();
+    expect(prisma.product.findFirst).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Winter', 'AW'],
+    ['Зима', 'AW'],
+    ['Summer', 'SS'],
+    ['Лето', 'SS'],
+  ])('maps season %s to %s', (input, expected) => {
+    const service = new ProductsService({} as any, {} as any);
+    expect((service as any).resolveProductSeason(input)).toBe(expected);
+  });
+});
