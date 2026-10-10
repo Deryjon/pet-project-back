@@ -10176,10 +10176,15 @@ export class ProductsService {
           create: {
             companyId,
             name: row.colorName,
-            code: (row.colorCode?.toUpperCase().replace(/[^A-Z0-9]/g, '') || row.colorName?.toUpperCase().replace(/[^A-Z0-9]/g, '') || '').substring(0, 10),
-            hex: row.colorCode && /^#[0-9a-f]{6}$/i.test(row.colorCode)
-              ? row.colorCode.toUpperCase()
-              : undefined,
+            code: (
+              row.colorCode?.toUpperCase().replace(/[^A-Z0-9]/g, '') ||
+              row.colorName?.toUpperCase().replace(/[^A-Z0-9]/g, '') ||
+              ''
+            ).substring(0, 10),
+            hex:
+              row.colorCode && /^#[0-9a-f]{6}$/i.test(row.colorCode)
+                ? row.colorCode.toUpperCase()
+                : undefined,
           },
           select: { id: true },
         })
@@ -10187,7 +10192,12 @@ export class ProductsService {
 
     let sizeId: string | null = null;
     if (row.sizeName) {
-      const normalizedCode = row.sizeName.trim().toUpperCase().replace(/,/g, '.').replace(/^XXL$/, '2XL').replace(/^XXXL$/, '3XL');
+      const normalizedCode = row.sizeName
+        .trim()
+        .toUpperCase()
+        .replace(/,/g, '.')
+        .replace(/^XXL$/, '2XL')
+        .replace(/^XXXL$/, '3XL');
       let determinedKind: 'CLOTHING' | 'SHOES' = 'CLOTHING';
       const numMatch = normalizedCode.match(/^(\d{2})(\.\d)?$/);
       if (numMatch) {
