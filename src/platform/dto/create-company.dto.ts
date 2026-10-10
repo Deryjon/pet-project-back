@@ -25,6 +25,10 @@ export class CreateCompanyDto {
   business_type?: 'clothing_store' | 'accessories_store' | 'general_store';
 
   @IsOptional()
+  @IsIn(['ACCESSORIES', 'CLOTHING', 'SHOES', 'CLOTHING_SHOES'])
+  store_type?: 'ACCESSORIES' | 'CLOTHING' | 'SHOES' | 'CLOTHING_SHOES';
+
+  @IsOptional()
   @IsString()
   owner_name?: string;
 

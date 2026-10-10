@@ -11,6 +11,8 @@ import {
   parseBusinessType,
 } from '../company-settings/product-feature-settings';
 import { applyBusinessPreset } from '../company-settings/business-presets';
+import { StoreType } from '@prisma/client';
+import { seedStoreDefaults } from '../common/store-defaults';
 
 const DEFAULT_COMPANY_ROLES = [
   { code: 'owner', name: 'Owner', isSystem: true },
@@ -35,7 +37,10 @@ export class PlatformService {
       body.subdomain ?? body.login,
       'subdomain',
     );
-    const businessType = parseBusinessType(body.business_type ?? 'general_store');
+    const businessType = parseBusinessType(
+      body.business_type ?? 'general_store',
+    );
+    const storeType = this.parseStoreType(body.store_type ?? body.storeType);
 
     const existing = await this.db.company.findFirst({
       where: {
@@ -60,11 +65,13 @@ export class PlatformService {
           blockReason: null,
           isActive: true,
           businessType,
+          storeType,
           productFeatureSettings: defaultProductFeatures(businessType),
         },
       });
 
       await applyBusinessPreset(tx, createdCompany.id, businessType);
+      await seedStoreDefaults(tx, createdCompany.id, storeType);
 
       await tx.companyRole.createMany({
         data: DEFAULT_COMPANY_ROLES.map((role) => ({
@@ -237,6 +244,17 @@ export class PlatformService {
       data.isActive = isActive;
       data.status = isActive ? 'active' : 'blocked';
       data.blockReason = isActive ? null : (company.blockReason ?? 'manual');
+    }
+
+    const storeTypeValue = body.store_type ?? body.storeType;
+    if (storeTypeValue !== undefined) {
+      const storeType = this.parseStoreType(storeTypeValue);
+      data.storeType = storeType;
+      await this.db.$transaction(async (tx) => {
+        await tx.company.update({ where: { id: companyId }, data });
+        await seedStoreDefaults(tx, companyId, storeType);
+      });
+      return this.findCompany(companyId);
     }
 
     if (body.owner_name !== undefined || body.ownerName !== undefined) {
@@ -1217,6 +1235,24 @@ export class PlatformService {
     return value;
   }
 
+  private parseStoreType(value: unknown): StoreType {
+    const normalized = String(value ?? 'ACCESSORIES')
+      .trim()
+      .toUpperCase();
+    const allowed = [
+      'ACCESSORIES',
+      'CLOTHING',
+      'SHOES',
+      'CLOTHING_SHOES',
+    ] as const;
+    if (!allowed.includes(normalized as (typeof allowed)[number])) {
+      throw new BadRequestException(
+        `store_type must be one of: ${allowed.join(', ')}`,
+      );
+    }
+    return normalized as StoreType;
+  }
+
   private optionalString(value: unknown) {
     if (value === undefined || value === null) {
       return null;
@@ -1432,6 +1468,7 @@ export class PlatformService {
     blockReason?: string | null;
     isActive: boolean;
     businessType?: string;
+    storeType?: StoreType;
     productFeatureSettings?: unknown;
     shops: Array<{
       id: string;
@@ -1467,7 +1504,9 @@ export class PlatformService {
       block_reason: company.blockReason ?? null,
       is_active: company.isActive,
       business_type: company.businessType ?? 'clothing_store',
-      product_features: company.productFeatureSettings ??
+      store_type: company.storeType ?? 'ACCESSORIES',
+      product_features:
+        company.productFeatureSettings ??
         defaultProductFeatures('clothing_store'),
       subscription: company.subscriptions?.[0]
         ? this.toSubscriptionItem(company.subscriptions[0])

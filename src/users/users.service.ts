@@ -2607,6 +2607,7 @@ export class UsersService {
     name: string;
     subdomain: string;
     isActive: boolean;
+    storeType?: string;
   }) {
     return {
       id: company.id,
@@ -2615,6 +2616,7 @@ export class UsersService {
       subdomain: company.subdomain,
       name: company.name,
       is_active: company.isActive,
+      store_type: company.storeType ?? 'ACCESSORIES',
     };
   }
 

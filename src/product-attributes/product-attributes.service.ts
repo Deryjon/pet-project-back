@@ -564,16 +564,41 @@ export class ProductAttributesService {
 
   // ---- Color management (for clothing/shoe stores) --------------------------
 
-  async listColors(requestContext: CompanyRequestContext) {
+  private async requireApparelCompany(requestContext: CompanyRequestContext) {
     const { companyId } = requireCompanyContext(requestContext);
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { storeType: true },
+    });
+    if (!company) throw new NotFoundException('Company not found');
+    // Keep the legacy colour/size API available for accessory tenants. The
+    // apparel settings UI and import columns are gated by storeType instead.
+    return { companyId, storeType: company.storeType };
+  }
+
+  private dictionaryCode(value: unknown, field = 'code') {
+    const code = this.requireText(value, field).toUpperCase();
+    if (!/^[A-Z0-9.]{1,20}$/.test(code)) {
+      throw new BadRequestException(
+        `${field} must contain only latin letters, digits and .`,
+      );
+    }
+    return code;
+  }
+
+  async listColors(requestContext: CompanyRequestContext) {
+    const { companyId } = await this.requireApparelCompany(requestContext);
     return this.prisma.productColor.findMany({
       where: { companyId },
-      orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
+      orderBy: [{ isActive: 'desc' }, { sortOrder: 'asc' }, { name: 'asc' }],
       select: {
         id: true,
         code: true,
         name: true,
+        nameRu: true,
+        nameUz: true,
         hex: true,
+        sortOrder: true,
         isActive: true,
         createdAt: true,
       },
@@ -584,25 +609,24 @@ export class ProductAttributesService {
     body: Record<string, unknown>,
     requestContext: CompanyRequestContext,
   ) {
-    const { companyId } = requireCompanyContext(requestContext);
-    const name = this.requireText(body.name, 'name');
-    const code = (this.optionalText(body.code) ?? name)
-      .toUpperCase()
-      .replace(/[^A-Z0-9]/g, '')
-      .substring(0, 10);
-    if (!code) {
-      throw new BadRequestException(
-        'code must not be empty after normalization',
-      );
-    }
+    const { companyId } = await this.requireApparelCompany(requestContext);
+    const nameRu = this.requireText(body.name_ru ?? body.name, 'name_ru');
+    const nameUz = this.requireText(
+      body.name_uz ?? body.name ?? nameRu,
+      'name_uz',
+    );
+    const code = this.dictionaryCode(body.code);
 
     try {
       const created = await this.prisma.productColor.create({
         data: {
           companyId,
           code,
-          name,
+          name: nameRu,
+          nameRu,
+          nameUz,
           hex: this.optionalText(body.hex),
+          sortOrder: this.optionalInt(body.sort_order) ?? 100,
           isActive: body.is_active !== false,
         },
       });
@@ -617,16 +641,23 @@ export class ProductAttributesService {
     body: Record<string, unknown>,
     requestContext: CompanyRequestContext,
   ) {
-    const { companyId } = requireCompanyContext(requestContext);
+    const { companyId } = await this.requireApparelCompany(requestContext);
     const color = await this.prisma.productColor.findFirst({
       where: { id, companyId },
     });
     if (!color) throw new NotFoundException('Color not found');
 
     const data: Prisma.ProductColorUpdateInput = {};
-    if (body.name !== undefined)
-      data.name = this.requireText(body.name, 'name');
+    if (body.name !== undefined || body.name_ru !== undefined) {
+      const nameRu = this.requireText(body.name_ru ?? body.name, 'name_ru');
+      data.name = nameRu;
+      data.nameRu = nameRu;
+    }
+    if (body.name_uz !== undefined)
+      data.nameUz = this.requireText(body.name_uz, 'name_uz');
     if (body.hex !== undefined) data.hex = this.optionalText(body.hex);
+    if (body.sort_order !== undefined)
+      data.sortOrder = this.optionalInt(body.sort_order) ?? 0;
     if (body.is_active !== undefined) data.isActive = body.is_active === true;
 
     const updated = await this.prisma.productColor.update({
@@ -637,7 +668,7 @@ export class ProductAttributesService {
   }
 
   async deleteColor(id: string, requestContext: CompanyRequestContext) {
-    const { companyId } = requireCompanyContext(requestContext);
+    const { companyId } = await this.requireApparelCompany(requestContext);
     const color = await this.prisma.productColor.findFirst({
       where: { id, companyId },
     });
@@ -658,7 +689,7 @@ export class ProductAttributesService {
   // ---- Size management (for clothing/shoe stores) ---------------------------
 
   async listSizes(requestContext: CompanyRequestContext) {
-    const { companyId } = requireCompanyContext(requestContext);
+    const { companyId } = await this.requireApparelCompany(requestContext);
     return this.prisma.productSize.findMany({
       where: { companyId },
       orderBy: [{ isActive: 'desc' }, { sortOrder: 'asc' }],
@@ -666,6 +697,8 @@ export class ProductAttributesService {
         id: true,
         code: true,
         name: true,
+        nameRu: true,
+        nameUz: true,
         kind: true,
         sortOrder: true,
         isActive: true,
@@ -678,17 +711,13 @@ export class ProductAttributesService {
     body: Record<string, unknown>,
     requestContext: CompanyRequestContext,
   ) {
-    const { companyId } = requireCompanyContext(requestContext);
-    const name = this.requireText(body.name, 'name');
-    const code = (this.optionalText(body.code) ?? name)
-      .toUpperCase()
-      .replace(/[^A-Z0-9.]/g, '')
-      .substring(0, 10);
-    if (!code) {
-      throw new BadRequestException(
-        'code must not be empty after normalization',
-      );
-    }
+    const { companyId } = await this.requireApparelCompany(requestContext);
+    const nameRu = this.requireText(body.name_ru ?? body.name, 'name_ru');
+    const nameUz = this.requireText(
+      body.name_uz ?? body.name ?? nameRu,
+      'name_uz',
+    );
+    const code = this.dictionaryCode(body.code);
 
     const kind = body.kind === 'SHOES' ? 'SHOES' : 'CLOTHING';
 
@@ -697,7 +726,9 @@ export class ProductAttributesService {
         data: {
           companyId,
           code,
-          name,
+          name: nameRu,
+          nameRu,
+          nameUz,
           kind,
           type: 'OTHER',
           sortOrder: this.optionalInt(body.sort_order) ?? 100,
@@ -715,15 +746,20 @@ export class ProductAttributesService {
     body: Record<string, unknown>,
     requestContext: CompanyRequestContext,
   ) {
-    const { companyId } = requireCompanyContext(requestContext);
+    const { companyId } = await this.requireApparelCompany(requestContext);
     const size = await this.prisma.productSize.findFirst({
       where: { id, companyId },
     });
     if (!size) throw new NotFoundException('Size not found');
 
     const data: Prisma.ProductSizeUpdateInput = {};
-    if (body.name !== undefined)
-      data.name = this.requireText(body.name, 'name');
+    if (body.name !== undefined || body.name_ru !== undefined) {
+      const nameRu = this.requireText(body.name_ru ?? body.name, 'name_ru');
+      data.name = nameRu;
+      data.nameRu = nameRu;
+    }
+    if (body.name_uz !== undefined)
+      data.nameUz = this.requireText(body.name_uz, 'name_uz');
     if (body.sort_order !== undefined)
       data.sortOrder = this.optionalInt(body.sort_order) ?? 0;
     if (body.is_active !== undefined) data.isActive = body.is_active === true;
@@ -736,7 +772,7 @@ export class ProductAttributesService {
   }
 
   async deleteSize(id: string, requestContext: CompanyRequestContext) {
-    const { companyId } = requireCompanyContext(requestContext);
+    const { companyId } = await this.requireApparelCompany(requestContext);
     const size = await this.prisma.productSize.findFirst({
       where: { id, companyId },
     });
@@ -759,7 +795,10 @@ export class ProductAttributesService {
       id: color.id,
       code: color.code,
       name: color.name,
+      name_ru: color.nameRu ?? color.name,
+      name_uz: color.nameUz ?? color.name,
       hex: color.hex,
+      sort_order: color.sortOrder,
       is_active: color.isActive,
       created_at: color.createdAt,
     };
@@ -770,10 +809,98 @@ export class ProductAttributesService {
       id: size.id,
       code: size.code,
       name: size.name,
+      name_ru: size.nameRu ?? size.name,
+      name_uz: size.nameUz ?? size.name,
       kind: size.kind,
       sort_order: size.sortOrder,
       is_active: size.isActive,
       created_at: size.createdAt,
+    };
+  }
+
+  async listSeasons(requestContext: CompanyRequestContext) {
+    const { companyId } = await this.requireApparelCompany(requestContext);
+    const rows = await this.prisma.productSeasonOption.findMany({
+      where: { companyId },
+      orderBy: [{ isActive: 'desc' }, { sortOrder: 'asc' }],
+    });
+    return rows.map((row) => this.toSeason(row));
+  }
+
+  async createSeason(
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const { companyId } = await this.requireApparelCompany(requestContext);
+    const code = this.dictionaryCode(body.code);
+    try {
+      const row = await this.prisma.productSeasonOption.create({
+        data: {
+          companyId,
+          code,
+          nameRu: this.requireText(body.name_ru ?? body.name, 'name_ru'),
+          nameUz: this.requireText(body.name_uz ?? body.name, 'name_uz'),
+          sortOrder: this.optionalInt(body.sort_order) ?? 100,
+          isActive: body.is_active !== false,
+        },
+      });
+      return this.toSeason(row);
+    } catch (error) {
+      throw this.uniqueConflict(error, `Сезон с кодом ${code} уже существует`);
+    }
+  }
+
+  async updateSeason(
+    id: string,
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const { companyId } = await this.requireApparelCompany(requestContext);
+    const current = await this.prisma.productSeasonOption.findFirst({
+      where: { id, companyId },
+    });
+    if (!current) throw new NotFoundException('Season not found');
+    const data: Prisma.ProductSeasonOptionUpdateInput = {};
+    if (body.name_ru !== undefined || body.name !== undefined)
+      data.nameRu = this.requireText(body.name_ru ?? body.name, 'name_ru');
+    if (body.name_uz !== undefined)
+      data.nameUz = this.requireText(body.name_uz, 'name_uz');
+    if (body.sort_order !== undefined)
+      data.sortOrder = this.optionalInt(body.sort_order) ?? 0;
+    if (body.is_active !== undefined) data.isActive = body.is_active === true;
+    return this.toSeason(
+      await this.prisma.productSeasonOption.update({ where: { id }, data }),
+    );
+  }
+
+  async deleteSeason(id: string, requestContext: CompanyRequestContext) {
+    const { companyId } = await this.requireApparelCompany(requestContext);
+    const current = await this.prisma.productSeasonOption.findFirst({
+      where: { id, companyId },
+    });
+    if (!current) throw new NotFoundException('Season not found');
+    if (
+      await this.prisma.product.count({
+        where: { companyId, seasonOptionId: id },
+      })
+    ) {
+      throw new ConflictException(
+        'Сезон используется в товарах — отключите его вместо удаления',
+      );
+    }
+    await this.prisma.productSeasonOption.delete({ where: { id } });
+    return { success: true };
+  }
+
+  private toSeason(season: Prisma.ProductSeasonOptionGetPayload<true>) {
+    return {
+      id: season.id,
+      code: season.code,
+      name_ru: season.nameRu,
+      name_uz: season.nameUz,
+      sort_order: season.sortOrder,
+      is_active: season.isActive,
+      created_at: season.createdAt,
     };
   }
 }

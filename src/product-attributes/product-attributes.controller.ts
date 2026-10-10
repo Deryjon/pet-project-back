@@ -180,4 +180,34 @@ export class ProductAttributesController {
   ) {
     return this.attributes.deleteSize(id, requestContext);
   }
+
+  @Get('product-seasons')
+  listSeasons(@CurrentCompanyContext() requestContext: CompanyRequestContext) {
+    return this.attributes.listSeasons(requestContext);
+  }
+
+  @Post('product-seasons')
+  createSeason(
+    @Body() body: Record<string, unknown>,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.attributes.createSeason(body, requestContext);
+  }
+
+  @Patch('product-seasons/:id')
+  updateSeason(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.attributes.updateSeason(id, body, requestContext);
+  }
+
+  @Delete('product-seasons/:id')
+  deleteSeason(
+    @Param('id') id: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.attributes.deleteSeason(id, requestContext);
+  }
 }
