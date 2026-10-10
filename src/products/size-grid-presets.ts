@@ -10,31 +10,17 @@ export const SIZE_GRID_PRESETS: Array<{
 }> = [
   {
     key: 'clothing_letter',
-    name: 'Одежда XS–3XL',
+    name: 'Одежда XS–XXL',
     type: 'CLOTHING',
     system: null,
-    sizes: ['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL'],
-  },
-  {
-    key: 'clothing_numeric',
-    name: 'Одежда 40–58',
-    type: 'CLOTHING',
-    system: null,
-    sizes: ['40', '42', '44', '46', '48', '50', '52', '54', '56', '58'],
+    sizes: ['XS', 'S', 'M', 'L', 'XL', 'XXL'],
   },
   {
     key: 'shoes',
-    name: 'Обувь 35–46',
+    name: 'Обувь 36–45',
     type: 'SHOES',
     system: 'EU',
-    sizes: ['35', '36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46'],
-  },
-  {
-    key: 'kids',
-    name: 'Детская 86–164',
-    type: 'CLOTHING',
-    system: null,
-    sizes: ['86', '92', '98', '104', '110', '116', '122', '128', '134', '140', '146', '152', '158', '164'],
+    sizes: ['36', '37', '38', '39', '40', '41', '42', '43', '44', '45'],
   },
 ];
 

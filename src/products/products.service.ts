@@ -877,18 +877,7 @@ export class ProductsService {
   async getSizeGridPresets(requestContext: CompanyRequestContext) {
     const { companyId } = await this.getRequestContext(requestContext);
 
-    await this.prisma.productSize.createMany({
-      data: SIZE_GRID_PRESETS.flatMap((grid) =>
-        grid.sizes.map((name, index) => ({
-          companyId,
-          name,
-          type: grid.type,
-          system: grid.system,
-          sortOrder: index,
-        })),
-      ),
-      skipDuplicates: true,
-    });
+    await this.ensureDefaultSizes(companyId);
     if (
       (await this.prisma.productColor.count({ where: { companyId } })) === 0
     ) {
@@ -934,11 +923,45 @@ export class ProductsService {
     return { grids, colors };
   }
 
+  private isDefaultSize(size: { type: string; name: string }) {
+    return SIZE_GRID_PRESETS.some(
+      (grid) => grid.type === size.type && grid.sizes.includes(size.name),
+    );
+  }
+
+  /** Default sizes always exist and are always enabled. */
+  private async ensureDefaultSizes(companyId: string) {
+    await this.prisma.productSize.createMany({
+      data: SIZE_GRID_PRESETS.flatMap((grid) =>
+        grid.sizes.map((name, index) => ({
+          companyId,
+          name,
+          type: grid.type,
+          system: grid.system,
+          sortOrder: index,
+        })),
+      ),
+      skipDuplicates: true,
+    });
+    await this.prisma.productSize.updateMany({
+      where: {
+        companyId,
+        isActive: false,
+        OR: SIZE_GRID_PRESETS.map((grid) => ({
+          type: grid.type,
+          name: { in: grid.sizes },
+        })),
+      },
+      data: { isActive: true },
+    });
+  }
+
   async listProductSizes(
     requestContext: CompanyRequestContext,
     options: { type?: string; includeInactive?: boolean } = {},
   ) {
     const { companyId } = await this.getRequestContext(requestContext);
+    await this.ensureDefaultSizes(companyId);
     const type = options.type?.toUpperCase();
     if (type && !['CLOTHING', 'SHOES', 'OTHER'].includes(type)) {
       throw new BadRequestException('type must be CLOTHING, SHOES or OTHER');
@@ -1002,6 +1025,9 @@ export class ProductsService {
       where: { id, companyId },
     });
     if (!current) throw new NotFoundException('Size not found');
+    if (this.isDefaultSize(current)) {
+      throw new BadRequestException('Стандартный размер нельзя изменить');
+    }
     const type =
       body.type === undefined
         ? undefined
@@ -1054,6 +1080,9 @@ export class ProductsService {
       where: { id, companyId },
     });
     if (!current) throw new NotFoundException('Size not found');
+    if (this.isDefaultSize(current)) {
+      throw new BadRequestException('Стандартный размер нельзя удалить');
+    }
     if (
       await this.prisma.productVariant.count({
         where: { companyId, sizeId: id },
