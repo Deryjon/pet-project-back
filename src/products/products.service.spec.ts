@@ -93,6 +93,56 @@ describe('ProductsService identifier generation', () => {
     });
   });
 });
+
+describe('ProductsService apparel import grouping', () => {
+  const makeRow = (overrides: Record<string, unknown> = {}) => ({
+    name: 'Футболка',
+    article: 'TS-1',
+    colorCode: 'BLK',
+    sizeName: 'm',
+    seasonCode: 'SUMMER',
+    quantity: 2,
+    supplyPrice: 50,
+    retailPrice: 100,
+    ...overrides,
+  });
+
+  const buildService = () =>
+    new ProductsService(
+      {
+        company: {
+          findUnique: jest.fn().mockResolvedValue({ storeType: 'CLOTHING' }),
+        },
+      } as any,
+      {} as any,
+    );
+
+  it('sums duplicate article/color/size combinations and adds a warning', async () => {
+    const rows = await (buildService() as any).normalizeApparelImportRows(
+      'company-1',
+      [makeRow(), makeRow({ quantity: 3, sizeName: ' M ' })],
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      quantity: 5,
+      colorCode: 'BLK',
+      sizeName: 'M',
+    });
+    expect(rows[0].warnings).toEqual([
+      expect.stringContaining('количество из строки 2 суммировано'),
+    ]);
+  });
+
+  it('rejects conflicting product facts within one article group', async () => {
+    await expect(
+      (buildService() as any).normalizeApparelImportRows('company-1', [
+        makeRow(),
+        makeRow({ name: 'Другая футболка', colorCode: 'WHT' }),
+      ]),
+    ).rejects.toThrow('различаются название или сезон');
+  });
+});
 describe('Legacy product creation authorization', () => {
   it('rejects calls without authorization before writing a product', async () => {
     const prisma = { product: { create: jest.fn() } };
@@ -137,9 +187,9 @@ describe('Product attribute safety', () => {
     };
     const service = new ProductsService(prisma as any, {} as any);
 
-    await expect(service.deleteProductColor('color-1', companyContext)).rejects.toThrow(
-      'Нельзя удалить цвет',
-    );
+    await expect(
+      service.deleteProductColor('color-1', companyContext),
+    ).rejects.toThrow('Нельзя удалить цвет');
     expect(prisma.productColor.delete).not.toHaveBeenCalled();
   });
 
@@ -153,9 +203,9 @@ describe('Product attribute safety', () => {
     };
     const service = new ProductsService(prisma as any, {} as any);
 
-    await expect(service.deleteProductSize('size-1', companyContext)).rejects.toThrow(
-      'Нельзя удалить размер',
-    );
+    await expect(
+      service.deleteProductSize('size-1', companyContext),
+    ).rejects.toThrow('Нельзя удалить размер');
     expect(prisma.productSize.delete).not.toHaveBeenCalled();
   });
 });

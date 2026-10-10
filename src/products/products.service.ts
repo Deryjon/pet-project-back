@@ -35,6 +35,7 @@ import {
   variantLabel,
 } from '../common/variant-attributes';
 import { parseRequestNumber } from '../common/parse-number';
+import { normalizeSizeCode, resolveSize } from '../common/resolve-size';
 import { PrismaService } from '../prisma/prisma.service';
 import { DEFAULT_PRODUCT_COLORS, SIZE_GRID_PRESETS } from './size-grid-presets';
 
@@ -90,6 +91,7 @@ type ImportRowInput = {
   sizeName?: string;
   sizeType?: string;
   season?: ProductSeason;
+  seasonCode?: string;
   seasonYear?: number;
   collection?: string;
   gender?: string;
@@ -101,6 +103,8 @@ type ImportRowInput = {
   measurementUnit?: string;
   supplier?: string;
   description?: string;
+  warnings?: string[];
+  isApparel?: boolean;
 };
 
 type ImportValidationIssue = {
@@ -145,6 +149,7 @@ type PreparedImportItem = {
   description: string;
   error?: string;
   validation_issues: ImportValidationIssue[];
+  warnings: string[];
   action: 'create' | 'update' | 'error';
   raw: ImportRowInput;
 };
@@ -186,6 +191,12 @@ type ImportSession = {
     error_count: number;
     errors: Array<{ row: number; message: string }>;
     audit_rows?: ImportAuditRow[];
+    imported_variants?: Array<{
+      row: number;
+      product_id: number;
+      variant_id: string;
+      barcode: string;
+    }>;
     committed_at?: string;
     committed_by?: {
       user_id: number;
@@ -765,13 +776,18 @@ export class ProductsService {
       await this.getRequestContext(requestContext),
     );
     const name = this.requireString(body.name, 'name');
-    const code = this.optionalString(body.code);
-    if (code && !/^#[0-9a-f]{6}$/i.test(code)) {
-      throw new BadRequestException('code must be a HEX color such as #000000');
+    const code = this.requireString(
+      body.code ?? body.name,
+      'code',
+    ).toUpperCase();
+    if (!/^[A-Z0-9.]{1,20}$/.test(code)) {
+      throw new BadRequestException(
+        'code must contain only latin letters, digits and .',
+      );
     }
     try {
       return await this.prisma.productColor.create({
-        data: { companyId, name, code: code?.toUpperCase() },
+        data: { companyId, name, code, hex: this.optionalString(body.hex) },
       });
     } catch (error) {
       if (
@@ -796,9 +812,14 @@ export class ProductsService {
       where: { id, companyId },
     });
     if (!current) throw new NotFoundException('Color not found');
-    const code = body.code === null ? null : this.optionalString(body.code);
-    if (code && !/^#[0-9a-f]{6}$/i.test(code)) {
-      throw new BadRequestException('code must be a HEX color such as #000000');
+    const code =
+      body.code === undefined
+        ? undefined
+        : this.requireString(body.code, 'code').toUpperCase();
+    if (code && !/^[A-Z0-9.]{1,20}$/.test(code)) {
+      throw new BadRequestException(
+        'code must contain only latin letters, digits and .',
+      );
     }
     try {
       return await this.prisma.productColor.update({
@@ -807,8 +828,9 @@ export class ProductsService {
           ...(body.name !== undefined
             ? { name: this.requireString(body.name, 'name') }
             : {}),
-          ...(body.code !== undefined
-            ? { code: code?.toUpperCase() ?? null }
+          ...(body.code !== undefined ? { code } : {}),
+          ...(body.hex !== undefined
+            ? { hex: this.optionalString(body.hex) }
             : {}),
           ...(typeof body.is_active === 'boolean'
             ? { isActive: body.is_active }
@@ -1351,13 +1373,17 @@ export class ProductsService {
             data: { isActive: false },
           });
         }
+        const requestedBarcode = this.optionalString(body.barcode);
+        const barcode =
+          requestedBarcode ??
+          (await allocateInternalBarcodes(tx, context.companyId, 1))[0];
         const variant = await tx.productVariant.create({
           data: {
             companyId: context.companyId,
             productId: product.id,
             colorId,
             sizeId,
-            barcode: this.optionalString(body.barcode),
+            barcode,
             sku: this.optionalString(body.sku),
             purchasePrice:
               this.toNumber(body.purchase_price) ?? product.purchasePrice,
@@ -1591,7 +1617,10 @@ export class ProductsService {
       shopId,
       writeContext,
     );
-    const rows = this.extractImportRows(body);
+    const rows = await this.normalizeApparelImportRows(
+      companyId,
+      this.extractImportRows(body),
+    );
     const fields = this.extractImportFields(body);
     const onMatchPolicy =
       this.extractImportOnMatchPolicy(body) ??
@@ -1852,7 +1881,10 @@ export class ProductsService {
       writeContext,
     );
     const rows = Array.isArray(body.rows)
-      ? this.extractImportRows(body)
+      ? await this.normalizeApparelImportRows(
+          companyId,
+          this.extractImportRows(body),
+        )
       : (existingSession?.rows ?? []);
 
     if (!rows.length) {
@@ -2042,7 +2074,10 @@ export class ProductsService {
       shopId,
       writeContext,
     );
-    const rows = this.extractImportRows(body);
+    const rows = await this.normalizeApparelImportRows(
+      companyId,
+      this.extractImportRows(body),
+    );
     const onMatchPolicy =
       this.extractImportOnMatchPolicy(body) ??
       this.defaultImportOnMatchPolicy();
@@ -2492,8 +2527,49 @@ export class ProductsService {
         writeContext.userId,
         session.id,
       );
+      const importedVariants = (
+        await Promise.all(
+          (result.audit_rows ?? []).map(async (auditRow) => {
+            if (!auditRow.product_id) return null;
+            const item = session.items[auditRow.row - 1];
+            if (!item) return null;
+            const raw = item.raw;
+            const colorCode = (raw.colorCode ?? raw.colorName)
+              ?.trim()
+              .toUpperCase();
+            const sizeCode = raw.sizeName
+              ? normalizeSizeCode(raw.sizeName)
+              : undefined;
+            const variant = await this.prisma.productVariant.findFirst({
+              where: {
+                productId: auditRow.product_id,
+                ...(raw.barcode
+                  ? { barcode: raw.barcode }
+                  : colorCode || sizeCode
+                    ? {
+                        color: colorCode ? { code: colorCode } : undefined,
+                        size: sizeCode ? { code: sizeCode } : undefined,
+                      }
+                    : { isDefault: true }),
+              },
+              select: { id: true, barcode: true, sku: true },
+            });
+            if (!variant?.barcode) return null;
+            item.product_id = String(auditRow.product_id);
+            item.product_barcode = variant.barcode;
+            item.product_sku = variant.sku ?? item.product_sku;
+            return {
+              row: auditRow.row,
+              product_id: auditRow.product_id,
+              variant_id: variant.id,
+              barcode: variant.barcode,
+            };
+          }),
+        )
+      ).filter((item): item is NonNullable<typeof item> => item !== null);
       session.result = {
         ...result,
+        imported_variants: importedVariants,
         committed_at: this.formatDateTime(new Date()),
         committed_by: {
           user_id: writeContext.userId,
@@ -3152,7 +3228,7 @@ export class ProductsService {
       });
     }
 
-    if (row.supplyPrice <= 0) {
+    if (row.supplyPrice <= 0 && !row.isApparel) {
       issues.push({
         code: 'missing_supply_price',
         field: 'supply_price',
@@ -4255,6 +4331,10 @@ export class ProductsService {
         season,
         seasonYear,
         collection,
+        seasonOption: await this.resolveSeasonOptionRelation(
+          productCompanyId,
+          body.season,
+        ),
         // Shop stocks reach Product.quantity through the ledger trigger.
         quantity: stocks.length ? 0 : totalQuantityFromStocks || quantity,
         metadata: metadataInput,
@@ -4505,6 +4585,10 @@ export class ProductsService {
         season,
         seasonYear,
         collection,
+        seasonOption: await this.resolveSeasonOptionRelation(
+          productCompanyId,
+          body.season,
+        ),
         productGroupId: this.optionalString(body.product_group_id),
         tier: this.resolveProductTier(body.tier),
         // Shop stocks reach Product.quantity through the ledger trigger.
@@ -9430,8 +9514,9 @@ export class ProductsService {
           sizeType: this.optionalString(item.size_type),
           season:
             item.season !== undefined
-              ? this.resolveProductSeason(item.season)
+              ? this.resolveImportLegacySeason(item.season)
               : undefined,
+          seasonCode: this.optionalString(item.season)?.toUpperCase(),
           seasonYear: this.toInt(item.season_year),
           collection: this.optionalString(item.collection),
           gender: this.optionalString(item.gender),
@@ -9460,6 +9545,66 @@ export class ProductsService {
         return prepared;
       });
     });
+  }
+
+  private async normalizeApparelImportRows(
+    companyId: string,
+    rows: ImportRowInput[],
+  ) {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { storeType: true },
+    });
+    if (
+      !company ||
+      !['CLOTHING', 'SHOES', 'CLOTHING_SHOES'].includes(company.storeType)
+    )
+      return rows;
+
+    const articleFacts = new Map<string, { name: string; season: string }>();
+    const consolidated = new Map<string, ImportRowInput>();
+    rows = rows.map((row) => ({ ...row, isApparel: true }));
+    for (const row of rows) {
+      const article = row.article?.trim().toUpperCase();
+      if (!article) continue;
+      const facts = { name: row.name.trim(), season: row.seasonCode ?? '' };
+      const previous = articleFacts.get(article);
+      if (
+        previous &&
+        (previous.name !== facts.name || previous.season !== facts.season)
+      ) {
+        throw new BadRequestException(
+          `У артикула ${article} различаются название или сезон`,
+        );
+      }
+      articleFacts.set(article, facts);
+    }
+    for (const [index, row] of rows.entries()) {
+      const article = row.article?.trim().toUpperCase();
+      if (!article) {
+        consolidated.set(`row:${consolidated.size}`, row);
+        continue;
+      }
+      const color = (row.colorCode ?? row.colorName ?? '').trim().toUpperCase();
+      const size = normalizeSizeCode(row.sizeName ?? '');
+      const key = `${article}\u0000${color}\u0000${size}`;
+      const previous = consolidated.get(key);
+      if (previous) {
+        previous.quantity += row.quantity;
+        const message = `Дубликат комбинации ${article}/${color}/${size}: количество из строки ${index + 1} суммировано`;
+        previous.warnings = [...(previous.warnings ?? []), message];
+      } else {
+        consolidated.set(key, {
+          ...row,
+          article: row.article?.trim(),
+          colorCode: color,
+          colorName: color,
+          sizeName: size,
+          warnings: [...(row.warnings ?? [])],
+        });
+      }
+    }
+    return [...consolidated.values()];
   }
 
   private extractImportFields(body: Record<string, unknown>) {
@@ -9500,9 +9645,14 @@ export class ProductsService {
       const row = rows[index];
       let existingProduct: CatalogProductWithRelations | null = null;
       let matchError: string | null = null;
+      let warnings = [...(row.warnings ?? [])];
 
       if (!matchError) {
         try {
+          warnings = [
+            ...warnings,
+            ...(await this.validateImportReferences(companyId, row)),
+          ];
           existingProduct = await this.findImportMatchedProduct(companyId, row);
         } catch (error) {
           matchError =
@@ -9564,6 +9714,7 @@ export class ProductsService {
         description: row.description ?? '',
         error: validationIssues[0]?.message,
         validation_issues: validationIssues,
+        warnings,
         action:
           validationIssues.length > 0
             ? 'error'
@@ -9584,13 +9735,15 @@ export class ProductsService {
   private async findImportMatchedProduct(
     companyId: string,
     row: ImportRowInput,
+    tx?: Prisma.TransactionClient,
   ) {
+    const db = tx ?? this.prisma;
     const sku = row.sku?.trim();
     const barcode = row.barcode?.trim();
     const article = row.article?.trim();
 
     if (article) {
-      const articleMatch = await this.prisma.product.findFirst({
+      const articleMatch = await db.product.findFirst({
         where: {
           companyId,
           OR: [{ article }, { sku: article }],
@@ -9602,11 +9755,30 @@ export class ProductsService {
           stocks: true,
         },
       });
+      if (barcode) {
+        const [barcodeProduct, barcodeVariant] = await Promise.all([
+          db.product.findFirst({
+            where: { companyId, barcode },
+            select: { id: true },
+          }),
+          db.productVariant.findFirst({
+            where: { companyId, barcode },
+            select: { productId: true },
+          }),
+        ]);
+        const barcodeProductId =
+          barcodeProduct?.id ?? barcodeVariant?.productId;
+        if (barcodeProductId && barcodeProductId !== articleMatch?.id) {
+          throw new BadRequestException(
+            `Баркод ${barcode} принадлежит другому товару`,
+          );
+        }
+      }
       if (articleMatch) return articleMatch;
     }
 
     if ((row.colorName || row.sizeName) && (sku || barcode)) {
-      const variant = await this.prisma.productVariant.findFirst({
+      const variant = await db.productVariant.findFirst({
         where: {
           companyId,
           OR: [...(sku ? [{ sku }] : []), ...(barcode ? [{ barcode }] : [])],
@@ -9630,7 +9802,7 @@ export class ProductsService {
     }
 
     if (sku && barcode) {
-      const exactMatch = await this.prisma.product.findFirst({
+      const exactMatch = await db.product.findFirst({
         where: {
           companyId,
           sku,
@@ -9654,7 +9826,7 @@ export class ProductsService {
 
     const [skuMatch, barcodeMatch] = await Promise.all([
       sku
-        ? this.prisma.product.findFirst({
+        ? db.product.findFirst({
             where: {
               companyId,
               sku,
@@ -9672,7 +9844,7 @@ export class ProductsService {
           })
         : Promise.resolve(null),
       barcode
-        ? this.prisma.product.findFirst({
+        ? db.product.findFirst({
             where: {
               companyId,
               barcode,
@@ -9870,39 +10042,36 @@ export class ProductsService {
     createdById: number,
     sessionId: string,
   ) {
-    let createdCount = 0;
-    let updatedCount = 0;
-    const errors: Array<{ row: number; message: string }> = [];
-    const auditRows: ImportAuditRow[] = [];
+    return this.withImportProductLock(`${companyId}:import-commit`, () =>
+      this.prisma.$transaction(
+        async (tx) => {
+          let createdCount = 0;
+          let updatedCount = 0;
+          const auditRows: ImportAuditRow[] = [];
 
-    for (let index = 0; index < rows.length; index += 1) {
-      const row = rows[index];
-      const error = this.validateImportRow(row);
-      if (error) {
-        errors.push({
-          row: index + 1,
-          message: error,
-        });
-        auditRows.push({
-          row: index + 1,
-          action: 'error',
-          reason: error,
-        });
-        continue;
-      }
+          for (let index = 0; index < rows.length; index += 1) {
+            const row = rows[index];
+            const error = this.validateImportRow(row);
+            if (error) {
+              throw new BadRequestException(
+                `Import row ${index + 1}: ${error}`,
+              );
+            }
 
-      const productLockKey = this.resolveImportProductLockKey(companyId, row);
-
-      try {
-        const actionResult = await this.withImportProductLock(
-          productLockKey,
-          async () => {
             const matchedProduct = await this.findImportMatchedProduct(
               companyId,
               row,
+              tx,
             );
+            let actionResult: {
+              action: 'create' | 'update';
+              productId: number;
+              changedFields: Array<{ field: string; reason: string }>;
+            };
+
             if (matchedProduct) {
               const changedFields = await this.applyImportUpdate(
+                tx,
                 matchedProduct.id,
                 row,
                 companyId,
@@ -9912,80 +10081,60 @@ export class ProductsService {
                 createdById,
                 sessionId,
               );
-
-              return {
-                action: 'update' as const,
+              actionResult = {
+                action: 'update',
                 productId: matchedProduct.id,
                 changedFields,
               };
+            } else {
+              const createdProduct = await this.applyImportCreate(
+                tx,
+                row,
+                companyId,
+                shopId,
+                branchCode,
+                createdById,
+                sessionId,
+              );
+              actionResult = {
+                action: 'create',
+                productId: createdProduct.id,
+                changedFields: [
+                  { field: 'product', reason: 'created_new_product' },
+                ],
+              };
             }
 
-            const createdProduct = await this.applyImportCreate(
-              row,
-              companyId,
-              shopId,
-              branchCode,
-              createdById,
-              sessionId,
-            );
-            return {
-              action: 'create' as const,
-              productId: createdProduct.id,
-              changedFields: [
-                {
-                  field: 'product',
-                  reason: 'created_new_product',
-                },
-              ],
-            };
-          },
-        );
+            if (actionResult.action === 'update') updatedCount += 1;
+            else createdCount += 1;
 
-        if (actionResult.action === 'update') {
-          updatedCount += 1;
-        } else {
-          createdCount += 1;
-        }
+            auditRows.push({
+              row: index + 1,
+              action: actionResult.action,
+              reason:
+                actionResult.action === 'update'
+                  ? 'matched_by_exact_sku_and_barcode'
+                  : 'product_not_found_by_exact_sku_and_barcode',
+              product_id: actionResult.productId,
+              changed_fields: actionResult.changedFields,
+            });
+          }
 
-        auditRows.push({
-          row: index + 1,
-          action: actionResult.action,
-          reason:
-            actionResult.action === 'update'
-              ? 'matched_by_exact_sku_and_barcode'
-              : 'product_not_found_by_exact_sku_and_barcode',
-          product_id: actionResult.productId,
-          changed_fields: actionResult.changedFields,
-        });
-      } catch (applyError) {
-        errors.push({
-          row: index + 1,
-          message:
-            applyError instanceof Error
-              ? applyError.message
-              : 'Import failed for row',
-        });
-        auditRows.push({
-          row: index + 1,
-          action: 'error',
-          reason:
-            applyError instanceof Error
-              ? applyError.message
-              : 'Import failed for row',
-        });
-      }
-    }
-
-    return {
-      created_count: createdCount,
-      updated_count: updatedCount,
-      error_count: errors.length,
-      errors,
-      audit_rows: auditRows,
-    };
+          return {
+            created_count: createdCount,
+            updated_count: updatedCount,
+            error_count: 0,
+            errors: [] as Array<{ row: number; message: string }>,
+            audit_rows: auditRows,
+          };
+        },
+        { maxWait: 10_000, timeout: 120_000 },
+      ),
+    );
   }
 
   private async applyImportCreate(
+    tx: Prisma.TransactionClient,
     row: ImportRowInput,
     companyId: string,
     shopId: string,
@@ -9997,7 +10146,7 @@ export class ProductsService {
       row,
       companyId,
     );
-    const createdProduct = await this.prisma.$transaction(async (tx) => {
+    const createdProduct = await (async () => {
       const dimensions = await this.resolveImportVariantDimensions(
         tx,
         row,
@@ -10023,6 +10172,13 @@ export class ProductsService {
           barcode: hasVariantDimensions ? null : identifiers.barcode,
           gender: row.gender,
           season: row.season ?? ProductSeason.NO_SEASON,
+          seasonOption: row.seasonCode
+            ? {
+                connect: {
+                  companyId_code: { companyId, code: row.seasonCode },
+                },
+              }
+            : undefined,
           seasonYear: row.seasonYear,
           collection: row.collection,
           variantType: hasVariantDimensions ? 'variative' : 'simple',
@@ -10154,7 +10310,7 @@ export class ProductsService {
       });
 
       return product;
-    });
+    })();
 
     return createdProduct;
   }
@@ -10164,72 +10320,46 @@ export class ProductsService {
     row: ImportRowInput,
     companyId: string,
   ) {
-    const color = row.colorName
-      ? await tx.productColor.upsert({
-          where: { companyId_name: { companyId, name: row.colorName } },
-          update: {
-            ...(row.colorCode && /^#[0-9a-f]{6}$/i.test(row.colorCode)
-              ? { hex: row.colorCode.toUpperCase() }
-              : {}),
-            isActive: true,
-          },
-          create: {
-            companyId,
-            name: row.colorName,
-            code: (
-              row.colorCode?.toUpperCase().replace(/[^A-Z0-9]/g, '') ||
-              row.colorName?.toUpperCase().replace(/[^A-Z0-9]/g, '') ||
-              ''
-            ).substring(0, 10),
-            hex:
-              row.colorCode && /^#[0-9a-f]{6}$/i.test(row.colorCode)
-                ? row.colorCode.toUpperCase()
-                : undefined,
-          },
+    const company = await tx.company.findUnique({
+      where: { id: companyId },
+      select: { storeType: true },
+    });
+    const apparel =
+      company &&
+      ['CLOTHING', 'SHOES', 'CLOTHING_SHOES'].includes(company.storeType);
+    const requestedColorCode = (row.colorCode ?? row.colorName)
+      ?.trim()
+      .toUpperCase();
+    const color = requestedColorCode
+      ? await tx.productColor.findFirst({
+          where: apparel
+            ? { companyId, code: requestedColorCode, isActive: true }
+            : {
+                companyId,
+                OR: [{ code: requestedColorCode }, { name: row.colorName }],
+              },
           select: { id: true },
         })
       : null;
+    if (apparel && requestedColorCode && !color) {
+      throw new BadRequestException(
+        `Неизвестный код цвета: ${requestedColorCode}`,
+      );
+    }
 
     let sizeId: string | null = null;
     if (row.sizeName) {
-      const normalizedCode = row.sizeName
-        .trim()
-        .toUpperCase()
-        .replace(/,/g, '.')
-        .replace(/^XXL$/, '2XL')
-        .replace(/^XXXL$/, '3XL');
-      let determinedKind: 'CLOTHING' | 'SHOES' = 'CLOTHING';
-      const numMatch = normalizedCode.match(/^(\d{2})(\.\d)?$/);
-      if (numMatch) {
-        const num = parseFloat(normalizedCode);
-        if (num >= 30 && num <= 50) determinedKind = 'SHOES';
-      }
-
-      const size = await tx.productSize.upsert({
-        where: {
-          companyId_code: {
-            companyId,
-            code: normalizedCode,
-          },
-        },
-        update: { isActive: true },
-        create: {
-          companyId,
-          code: normalizedCode,
-          name: row.sizeName,
-          kind: determinedKind,
-          type: determinedKind === 'SHOES' ? 'SHOES' : 'CLOTHING',
-          system: determinedKind === 'SHOES' ? 'EU' : undefined,
-        },
-        select: { id: true },
+      const resolved = await resolveSize(row.sizeName, companyId, tx, {
+        autoCreate: true,
       });
-      sizeId = size.id;
+      sizeId = resolved.sizeId ?? null;
     }
 
     return { colorId: color?.id, sizeId };
   }
 
   private async applyImportUpdate(
+    tx: Prisma.TransactionClient,
     productId: number,
     row: ImportRowInput,
     companyId: string,
@@ -10241,7 +10371,7 @@ export class ProductsService {
   ): Promise<Array<{ field: string; reason: string }>> {
     const changedFields: Array<{ field: string; reason: string }> = [];
 
-    await this.prisma.$transaction(async (tx) => {
+    await (async () => {
       const existingProduct = await tx.product.findUnique({
         where: { id: productId },
         include: {
@@ -10296,6 +10426,9 @@ export class ProductsService {
           },
         });
         if (!variant) {
+          const generatedBarcode = row.barcode
+            ? row.barcode
+            : (await allocateInternalBarcodes(tx, companyId, 1))[0];
           variant = await tx.productVariant.create({
             data: {
               companyId,
@@ -10303,7 +10436,7 @@ export class ProductsService {
               colorId: dimensions.colorId,
               sizeId: dimensions.sizeId,
               sku: row.sku,
-              barcode: row.barcode,
+              barcode: generatedBarcode,
               purchasePrice: appliedSupplyPrice,
               salePrice: appliedRetailPrice,
             },
@@ -10395,6 +10528,15 @@ export class ProductsService {
               : undefined,
           purchasePrice: appliedSupplyPrice,
           salePrice: appliedRetailPrice,
+          ...(row.seasonCode
+            ? {
+                seasonOption: {
+                  connect: {
+                    companyId_code: { companyId, code: row.seasonCode },
+                  },
+                },
+              }
+            : {}),
           quantity: allStocks.reduce((sum, stock) => sum + stock.quantity, 0),
           unit:
             this.shouldUseFileValue(onMatchPolicy.measurementUnit) &&
@@ -10520,7 +10662,7 @@ export class ProductsService {
         fromRetailPrice: previousRetailPrice,
         fromSupplyPrice: previousSupplyPrice,
       });
-    });
+    })();
 
     if (this.shouldUseFileValue(onMatchPolicy.name) && row.name) {
       changedFields.push({
@@ -11419,13 +11561,110 @@ export class ProductsService {
 
   private resolveProductSeason(value: unknown): ProductSeason {
     const normalized = this.optionalString(value)?.toUpperCase();
-    if (!normalized || normalized === ProductSeason.NO_SEASON) {
+    if (
+      !normalized ||
+      normalized === ProductSeason.NO_SEASON ||
+      normalized === 'ALL' ||
+      normalized === 'DEMI'
+    ) {
       return ProductSeason.NO_SEASON;
     }
-    if (normalized === ProductSeason.SS || normalized === ProductSeason.AW) {
-      return normalized;
+    if (normalized === ProductSeason.SS || normalized === 'SUMMER')
+      return ProductSeason.SS;
+    if (normalized === ProductSeason.AW || normalized === 'WINTER')
+      return ProductSeason.AW;
+    throw new BadRequestException('Неизвестный код сезона');
+  }
+
+  private async resolveSeasonOptionRelation(companyId: string, value: unknown) {
+    let code = this.optionalString(value)?.toUpperCase();
+    if (!code || code === 'NO_SEASON') return undefined;
+    if (code === 'SS') code = 'SUMMER';
+    if (code === 'AW') code = 'WINTER';
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { storeType: true },
+    });
+    if (
+      !company ||
+      !['CLOTHING', 'SHOES', 'CLOTHING_SHOES'].includes(company.storeType)
+    )
+      return undefined;
+    const season = await this.prisma.productSeasonOption.findUnique({
+      where: { companyId_code: { companyId, code } },
+      select: { id: true, isActive: true },
+    });
+    if (!season?.isActive)
+      throw new BadRequestException(`Неизвестный код сезона: ${code}`);
+    return { connect: { id: season.id } };
+  }
+
+  private resolveImportLegacySeason(value: unknown): ProductSeason {
+    const code = this.optionalString(value)?.toUpperCase();
+    if (!code || code === 'ALL' || code === 'DEMI' || code === 'NO_SEASON') {
+      return ProductSeason.NO_SEASON;
     }
-    throw new BadRequestException('season must be SS, AW or NO_SEASON');
+    if (code === 'SUMMER' || code === ProductSeason.SS) return ProductSeason.SS;
+    if (code === 'WINTER' || code === ProductSeason.AW) return ProductSeason.AW;
+    throw new BadRequestException('Неизвестный код сезона');
+  }
+
+  private async validateImportReferences(
+    companyId: string,
+    row: ImportRowInput,
+  ) {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { storeType: true },
+    });
+    if (
+      !company ||
+      !['CLOTHING', 'SHOES', 'CLOTHING_SHOES'].includes(company.storeType)
+    )
+      return [];
+
+    const warnings: string[] = [];
+
+    if (!row.article?.trim())
+      throw new BadRequestException('Не указан артикул');
+
+    const colorCode = (row.colorCode ?? row.colorName)?.trim().toUpperCase();
+    if (!colorCode) throw new BadRequestException('Не указан код цвета');
+    const color = await this.prisma.productColor.findFirst({
+      where: { companyId, code: colorCode, isActive: true },
+      select: { id: true },
+    });
+    if (!color)
+      throw new BadRequestException(`Неизвестный код цвета: ${colorCode}`);
+
+    if (!row.sizeName) throw new BadRequestException('Не указан код размера');
+    const resolvedSize = await resolveSize(
+      row.sizeName,
+      companyId,
+      this.prisma,
+    );
+    if (company.storeType === 'CLOTHING' && resolvedSize.kind === 'SHOES') {
+      warnings.push(
+        `Размер ${normalizeSizeCode(row.sizeName)} похож на обувной для магазина одежды`,
+      );
+    }
+    if (company.storeType === 'SHOES' && resolvedSize.kind === 'CLOTHING') {
+      warnings.push(
+        `Размер ${normalizeSizeCode(row.sizeName)} похож на размер одежды для обувного магазина`,
+      );
+    }
+
+    if (row.seasonCode) {
+      const season = await this.prisma.productSeasonOption.findFirst({
+        where: { companyId, code: row.seasonCode, isActive: true },
+        select: { id: true },
+      });
+      if (!season)
+        throw new BadRequestException(
+          `Неизвестный код сезона: ${row.seasonCode}`,
+        );
+    }
+    return warnings;
   }
 
   private resolveProductType(value: unknown) {
