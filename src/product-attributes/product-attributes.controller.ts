@@ -120,4 +120,68 @@ export class ProductAttributesController {
   ) {
     return this.attributes.setProductValues(id, body, requestContext);
   }
+
+  @Get('product-colors')
+  listColors(
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.attributes.listColors(requestContext);
+  }
+
+  @Post('product-colors')
+  createColor(
+    @Body() body: Record<string, unknown>,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.attributes.createColor(body, requestContext);
+  }
+
+  @Patch('product-colors/:id')
+  updateColor(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.attributes.updateColor(id, body, requestContext);
+  }
+
+  @Delete('product-colors/:id')
+  deleteColor(
+    @Param('id') id: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.attributes.deleteColor(id, requestContext);
+  }
+
+  @Get('product-sizes')
+  listSizes(
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.attributes.listSizes(requestContext);
+  }
+
+  @Post('product-sizes')
+  createSize(
+    @Body() body: Record<string, unknown>,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.attributes.createSize(body, requestContext);
+  }
+
+  @Patch('product-sizes/:id')
+  updateSize(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.attributes.updateSize(id, body, requestContext);
+  }
+
+  @Delete('product-sizes/:id')
+  deleteSize(
+    @Param('id') id: string,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.attributes.deleteSize(id, requestContext);
+  }
 }

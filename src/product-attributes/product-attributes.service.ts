@@ -561,4 +561,224 @@ export class ProductAttributesService {
     }
     return value as Prisma.InputJsonValue;
   }
+
+  // ---- Color management (for clothing/shoe stores) --------------------------
+
+  async listColors(requestContext: CompanyRequestContext) {
+    const { companyId } = requireCompanyContext(requestContext);
+    return this.prisma.productColor.findMany({
+      where: { companyId },
+      orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        hex: true,
+        isActive: true,
+        createdAt: true,
+      },
+    });
+  }
+
+  async createColor(
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const { companyId } = requireCompanyContext(requestContext);
+    const name = this.requireText(body.name, 'name');
+    const code = (this.optionalText(body.code) ?? name)
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '')
+      .substring(0, 10);
+    if (!code) {
+      throw new BadRequestException('code must not be empty after normalization');
+    }
+
+    try {
+      const created = await this.prisma.productColor.create({
+        data: {
+          companyId,
+          code,
+          name,
+          hex: this.optionalText(body.hex),
+          isActive: body.is_active !== false,
+        },
+      });
+      return this.toColor(created);
+    } catch (error) {
+      throw this.uniqueConflict(
+        error,
+        `Цвет с кодом ${code} уже существует`,
+      );
+    }
+  }
+
+  async updateColor(
+    id: string,
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const { companyId } = requireCompanyContext(requestContext);
+    const color = await this.prisma.productColor.findFirst({
+      where: { id, companyId },
+    });
+    if (!color) throw new NotFoundException('Color not found');
+
+    const data: Prisma.ProductColorUpdateInput = {};
+    if (body.name !== undefined) data.name = this.requireText(body.name, 'name');
+    if (body.hex !== undefined) data.hex = this.optionalText(body.hex);
+    if (body.is_active !== undefined) data.isActive = body.is_active === true;
+
+    const updated = await this.prisma.productColor.update({
+      where: { id },
+      data,
+    });
+    return this.toColor(updated);
+  }
+
+  async deleteColor(
+    id: string,
+    requestContext: CompanyRequestContext,
+  ) {
+    const { companyId } = requireCompanyContext(requestContext);
+    const color = await this.prisma.productColor.findFirst({
+      where: { id, companyId },
+    });
+    if (!color) throw new NotFoundException('Color not found');
+
+    const used = await this.prisma.productVariant.count({
+      where: { colorId: id },
+    });
+    if (used) {
+      throw new ConflictException(
+        'Цвет используется в товарах — отключите его вместо удаления',
+      );
+    }
+    await this.prisma.productColor.delete({ where: { id } });
+    return { success: true };
+  }
+
+  // ---- Size management (for clothing/shoe stores) ---------------------------
+
+  async listSizes(requestContext: CompanyRequestContext) {
+    const { companyId } = requireCompanyContext(requestContext);
+    return this.prisma.productSize.findMany({
+      where: { companyId },
+      orderBy: [{ isActive: 'desc' }, { sortOrder: 'asc' }],
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        kind: true,
+        sortOrder: true,
+        isActive: true,
+        createdAt: true,
+      },
+    });
+  }
+
+  async createSize(
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const { companyId } = requireCompanyContext(requestContext);
+    const name = this.requireText(body.name, 'name');
+    const code = (this.optionalText(body.code) ?? name)
+      .toUpperCase()
+      .replace(/[^A-Z0-9.]/g, '')
+      .substring(0, 10);
+    if (!code) {
+      throw new BadRequestException('code must not be empty after normalization');
+    }
+
+    const kind = body.kind === 'SHOES' ? 'SHOES' : 'CLOTHING';
+
+    try {
+      const created = await this.prisma.productSize.create({
+        data: {
+          companyId,
+          code,
+          name,
+          kind,
+          type: 'OTHER',
+          sortOrder: this.optionalInt(body.sort_order) ?? 100,
+          isActive: body.is_active !== false,
+        },
+      });
+      return this.toSize(created);
+    } catch (error) {
+      throw this.uniqueConflict(
+        error,
+        `Размер с кодом ${code} уже существует`,
+      );
+    }
+  }
+
+  async updateSize(
+    id: string,
+    body: Record<string, unknown>,
+    requestContext: CompanyRequestContext,
+  ) {
+    const { companyId } = requireCompanyContext(requestContext);
+    const size = await this.prisma.productSize.findFirst({
+      where: { id, companyId },
+    });
+    if (!size) throw new NotFoundException('Size not found');
+
+    const data: Prisma.ProductSizeUpdateInput = {};
+    if (body.name !== undefined) data.name = this.requireText(body.name, 'name');
+    if (body.sort_order !== undefined) data.sortOrder = this.optionalInt(body.sort_order) ?? 0;
+    if (body.is_active !== undefined) data.isActive = body.is_active === true;
+
+    const updated = await this.prisma.productSize.update({
+      where: { id },
+      data,
+    });
+    return this.toSize(updated);
+  }
+
+  async deleteSize(
+    id: string,
+    requestContext: CompanyRequestContext,
+  ) {
+    const { companyId } = requireCompanyContext(requestContext);
+    const size = await this.prisma.productSize.findFirst({
+      where: { id, companyId },
+    });
+    if (!size) throw new NotFoundException('Size not found');
+
+    const used = await this.prisma.productVariant.count({
+      where: { sizeId: id },
+    });
+    if (used) {
+      throw new ConflictException(
+        'Размер используется в товарах — отключите его вместо удаления',
+      );
+    }
+    await this.prisma.productSize.delete({ where: { id } });
+    return { success: true };
+  }
+
+  private toColor(color: Prisma.ProductColorGetPayload<true>) {
+    return {
+      id: color.id,
+      code: color.code,
+      name: color.name,
+      hex: color.hex,
+      is_active: color.isActive,
+      created_at: color.createdAt,
+    };
+  }
+
+  private toSize(size: Prisma.ProductSizeGetPayload<true>) {
+    return {
+      id: size.id,
+      code: size.code,
+      name: size.name,
+      kind: size.kind,
+      sort_order: size.sortOrder,
+      is_active: size.isActive,
+      created_at: size.createdAt,
+    };
+  }
 }
