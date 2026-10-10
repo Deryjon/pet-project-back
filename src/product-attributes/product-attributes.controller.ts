@@ -122,9 +122,7 @@ export class ProductAttributesController {
   }
 
   @Get('product-colors')
-  listColors(
-    @CurrentCompanyContext() requestContext: CompanyRequestContext,
-  ) {
+  listColors(@CurrentCompanyContext() requestContext: CompanyRequestContext) {
     return this.attributes.listColors(requestContext);
   }
 
@@ -154,9 +152,7 @@ export class ProductAttributesController {
   }
 
   @Get('product-sizes')
-  listSizes(
-    @CurrentCompanyContext() requestContext: CompanyRequestContext,
-  ) {
+  listSizes(@CurrentCompanyContext() requestContext: CompanyRequestContext) {
     return this.attributes.listSizes(requestContext);
   }
 

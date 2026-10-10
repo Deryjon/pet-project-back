@@ -591,7 +591,9 @@ export class ProductAttributesService {
       .replace(/[^A-Z0-9]/g, '')
       .substring(0, 10);
     if (!code) {
-      throw new BadRequestException('code must not be empty after normalization');
+      throw new BadRequestException(
+        'code must not be empty after normalization',
+      );
     }
 
     try {
@@ -606,10 +608,7 @@ export class ProductAttributesService {
       });
       return this.toColor(created);
     } catch (error) {
-      throw this.uniqueConflict(
-        error,
-        `Цвет с кодом ${code} уже существует`,
-      );
+      throw this.uniqueConflict(error, `Цвет с кодом ${code} уже существует`);
     }
   }
 
@@ -625,7 +624,8 @@ export class ProductAttributesService {
     if (!color) throw new NotFoundException('Color not found');
 
     const data: Prisma.ProductColorUpdateInput = {};
-    if (body.name !== undefined) data.name = this.requireText(body.name, 'name');
+    if (body.name !== undefined)
+      data.name = this.requireText(body.name, 'name');
     if (body.hex !== undefined) data.hex = this.optionalText(body.hex);
     if (body.is_active !== undefined) data.isActive = body.is_active === true;
 
@@ -636,10 +636,7 @@ export class ProductAttributesService {
     return this.toColor(updated);
   }
 
-  async deleteColor(
-    id: string,
-    requestContext: CompanyRequestContext,
-  ) {
+  async deleteColor(id: string, requestContext: CompanyRequestContext) {
     const { companyId } = requireCompanyContext(requestContext);
     const color = await this.prisma.productColor.findFirst({
       where: { id, companyId },
@@ -688,7 +685,9 @@ export class ProductAttributesService {
       .replace(/[^A-Z0-9.]/g, '')
       .substring(0, 10);
     if (!code) {
-      throw new BadRequestException('code must not be empty after normalization');
+      throw new BadRequestException(
+        'code must not be empty after normalization',
+      );
     }
 
     const kind = body.kind === 'SHOES' ? 'SHOES' : 'CLOTHING';
@@ -707,10 +706,7 @@ export class ProductAttributesService {
       });
       return this.toSize(created);
     } catch (error) {
-      throw this.uniqueConflict(
-        error,
-        `Размер с кодом ${code} уже существует`,
-      );
+      throw this.uniqueConflict(error, `Размер с кодом ${code} уже существует`);
     }
   }
 
@@ -726,8 +722,10 @@ export class ProductAttributesService {
     if (!size) throw new NotFoundException('Size not found');
 
     const data: Prisma.ProductSizeUpdateInput = {};
-    if (body.name !== undefined) data.name = this.requireText(body.name, 'name');
-    if (body.sort_order !== undefined) data.sortOrder = this.optionalInt(body.sort_order) ?? 0;
+    if (body.name !== undefined)
+      data.name = this.requireText(body.name, 'name');
+    if (body.sort_order !== undefined)
+      data.sortOrder = this.optionalInt(body.sort_order) ?? 0;
     if (body.is_active !== undefined) data.isActive = body.is_active === true;
 
     const updated = await this.prisma.productSize.update({
@@ -737,10 +735,7 @@ export class ProductAttributesService {
     return this.toSize(updated);
   }
 
-  async deleteSize(
-    id: string,
-    requestContext: CompanyRequestContext,
-  ) {
+  async deleteSize(id: string, requestContext: CompanyRequestContext) {
     const { companyId } = requireCompanyContext(requestContext);
     const size = await this.prisma.productSize.findFirst({
       where: { id, companyId },

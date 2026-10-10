@@ -44,7 +44,10 @@ export async function resolveSize(
     if (!existingSize.kind) {
       throw new Error(`Size ${code} has no kind defined`);
     }
-    return { kind: existingSize.kind as ProductSizeKind, sizeId: existingSize.id };
+    return {
+      kind: existingSize.kind as ProductSizeKind,
+      sizeId: existingSize.id,
+    };
   }
 
   // Step 2: determine kind by pattern

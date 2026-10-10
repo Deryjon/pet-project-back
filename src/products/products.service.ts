@@ -10169,53 +10169,54 @@ export class ProductsService {
           where: { companyId_name: { companyId, name: row.colorName } },
           update: {
             ...(row.colorCode && /^#[0-9a-f]{6}$/i.test(row.colorCode)
-              ? { code: row.colorCode.toUpperCase() }
+              ? { hex: row.colorCode.toUpperCase() }
               : {}),
             isActive: true,
           },
           create: {
             companyId,
             name: row.colorName,
-            code:
-              row.colorCode && /^#[0-9a-f]{6}$/i.test(row.colorCode)
-                ? row.colorCode.toUpperCase()
-                : undefined,
+            code: (row.colorCode?.toUpperCase().replace(/[^A-Z0-9]/g, '') || row.colorName?.toUpperCase().replace(/[^A-Z0-9]/g, '') || '').substring(0, 10),
+            hex: row.colorCode && /^#[0-9a-f]{6}$/i.test(row.colorCode)
+              ? row.colorCode.toUpperCase()
+              : undefined,
           },
           select: { id: true },
         })
       : null;
-    const normalizedSizeType = row.sizeType?.trim().toUpperCase();
-    const inferredSizeType =
-      normalizedSizeType === 'SHOES' ||
-      normalizedSizeType === 'CLOTHING' ||
-      normalizedSizeType === 'OTHER'
-        ? normalizedSizeType
-        : row.sizeName &&
-            /^\d+(?:[.,]\d+)?$/.test(row.sizeName) &&
-            Number(row.sizeName.replace(',', '.')) >= 35 &&
-            Number(row.sizeName.replace(',', '.')) <= 50
-          ? 'SHOES'
-          : 'CLOTHING';
-    const size = row.sizeName
-      ? await tx.productSize.upsert({
-          where: {
-            companyId_type_name: {
-              companyId,
-              type: inferredSizeType as 'CLOTHING' | 'SHOES' | 'OTHER',
-              name: row.sizeName,
-            },
-          },
-          update: { isActive: true },
-          create: {
+
+    let sizeId: string | null = null;
+    if (row.sizeName) {
+      const normalizedCode = row.sizeName.trim().toUpperCase().replace(/,/g, '.').replace(/^XXL$/, '2XL').replace(/^XXXL$/, '3XL');
+      let determinedKind: 'CLOTHING' | 'SHOES' = 'CLOTHING';
+      const numMatch = normalizedCode.match(/^(\d{2})(\.\d)?$/);
+      if (numMatch) {
+        const num = parseFloat(normalizedCode);
+        if (num >= 30 && num <= 50) determinedKind = 'SHOES';
+      }
+
+      const size = await tx.productSize.upsert({
+        where: {
+          companyId_code: {
             companyId,
-            name: row.sizeName,
-            type: inferredSizeType as 'CLOTHING' | 'SHOES' | 'OTHER',
-            system: inferredSizeType === 'SHOES' ? 'EU' : undefined,
+            code: normalizedCode,
           },
-          select: { id: true },
-        })
-      : null;
-    return { colorId: color?.id, sizeId: size?.id };
+        },
+        update: { isActive: true },
+        create: {
+          companyId,
+          code: normalizedCode,
+          name: row.sizeName,
+          kind: determinedKind,
+          type: determinedKind === 'SHOES' ? 'SHOES' : 'CLOTHING',
+          system: determinedKind === 'SHOES' ? 'EU' : undefined,
+        },
+        select: { id: true },
+      });
+      sizeId = size.id;
+    }
+
+    return { colorId: color?.id, sizeId };
   }
 
   private async applyImportUpdate(
