@@ -8,6 +8,7 @@ import {
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
   Injectable,
   Logger,
   NotFoundException,
@@ -2585,10 +2586,16 @@ export class ProductsService {
         session.updatedAt = this.formatDateTime(new Date());
         await this.persistImportSession(session);
       } catch (error) {
+        const detail =
+          error instanceof HttpException
+            ? JSON.stringify(error.getResponse())
+            : error instanceof Error
+              ? error.message
+              : String(error);
         this.logger.error(
           `Import ${session.id} commit failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+            error instanceof Error ? error.name : typeof error
+          } ${detail}`,
           error instanceof Error ? error.stack : undefined,
         );
         // Never leave the import stuck in "importing": return it to the
