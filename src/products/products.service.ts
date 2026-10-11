@@ -9,6 +9,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -702,6 +703,8 @@ type FindProductsArgs = {
 
 @Injectable()
 export class ProductsService {
+  private readonly logger = new Logger(ProductsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly companySettingsService: CompanySettingsService,
@@ -2582,6 +2585,12 @@ export class ProductsService {
         session.updatedAt = this.formatDateTime(new Date());
         await this.persistImportSession(session);
       } catch (error) {
+        this.logger.error(
+          `Import ${session.id} commit failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          error instanceof Error ? error.stack : undefined,
+        );
         // Never leave the import stuck in "importing": return it to the
         // review step so the user sees the error and can fix the file or retry.
         if (session.status === 'importing') {
