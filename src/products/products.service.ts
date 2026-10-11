@@ -2589,9 +2589,13 @@ export class ProductsService {
         const detail =
           error instanceof HttpException
             ? JSON.stringify(error.getResponse())
-            : error instanceof Error
-              ? error.message
-              : String(error);
+            : error instanceof AggregateError
+              ? error.errors
+                  .map((inner) => String(inner?.message ?? inner))
+                  .join('; ')
+              : error instanceof Error
+                ? error.message
+                : String(error);
         this.logger.error(
           `Import ${session.id} commit failed: ${
             error instanceof Error ? error.name : typeof error
@@ -9839,14 +9843,24 @@ export class ProductsService {
 
     // A row with colour/size but no identifiers is one more variant of the
     // variative product with the same name (e.g. Nike Hoodie Black/S, Black/M).
-    if (!article && !sku && !barcode && row.name && (row.colorName || row.sizeName)) {
+    if (
+      !article &&
+      !sku &&
+      !barcode &&
+      row.name &&
+      (row.colorName || row.sizeName)
+    ) {
       return this.prisma.product.findFirst({
         where: {
           companyId,
           variantType: 'variative',
           name: { equals: row.name.trim(), mode: 'insensitive' },
           ...(row.brandName
-            ? { brand: { name: { equals: row.brandName.trim(), mode: 'insensitive' } } }
+            ? {
+                brand: {
+                  name: { equals: row.brandName.trim(), mode: 'insensitive' },
+                },
+              }
             : {}),
         },
         include: {
@@ -10255,13 +10269,11 @@ export class ProductsService {
           barcode: hasVariantDimensions ? null : identifiers.barcode,
           gender: row.gender,
           season: row.season ?? ProductSeason.NO_SEASON,
-          seasonOption: row.seasonCode
-            ? {
-                connect: {
-                  companyId_code: { companyId, code: row.seasonCode },
-                },
-              }
-            : undefined,
+          seasonOption: await this.connectImportSeason(
+            tx,
+            companyId,
+            row.seasonCode,
+          ),
           seasonYear: row.seasonYear,
           collection: row.collection,
           variantType: hasVariantDimensions ? 'variative' : 'simple',
@@ -10611,15 +10623,11 @@ export class ProductsService {
               : undefined,
           purchasePrice: appliedSupplyPrice,
           salePrice: appliedRetailPrice,
-          ...(row.seasonCode
-            ? {
-                seasonOption: {
-                  connect: {
-                    companyId_code: { companyId, code: row.seasonCode },
-                  },
-                },
-              }
-            : {}),
+          ...(await this.connectImportSeason(
+            tx,
+            companyId,
+            row.seasonCode,
+          ).then((seasonOption) => (seasonOption ? { seasonOption } : {}))),
           quantity: allStocks.reduce((sum, stock) => sum + stock.quantity, 0),
           unit:
             this.shouldUseFileValue(onMatchPolicy.measurementUnit) &&
@@ -11662,6 +11670,25 @@ export class ProductsService {
     if (normalized === ProductSeason.AW || normalized === 'WINTER')
       return ProductSeason.AW;
     throw new BadRequestException('Неизвестный код сезона');
+  }
+
+  /**
+   * Links an imported product to a season from the company dictionary. A code
+   * with no matching active season is skipped (the legacy season field still
+   * applies) instead of failing the whole import on a missing record.
+   */
+  private async connectImportSeason(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    code?: string | null,
+  ) {
+    const normalized = code?.trim().toUpperCase();
+    if (!normalized) return undefined;
+    const season = await tx.productSeasonOption.findFirst({
+      where: { companyId, code: normalized, isActive: true },
+      select: { id: true },
+    });
+    return season ? { connect: { id: season.id } } : undefined;
   }
 
   private async resolveSeasonOptionRelation(companyId: string, value: unknown) {
