@@ -2508,78 +2508,89 @@ export class ProductsService {
       session.status = 'importing';
       session.updatedAt = this.formatDateTime(new Date());
       await this.persistImportSession(session);
-      await this.ensureImportPreviewItems(session);
-      if (session.items.some((item) => item.validation_issues.length > 0)) {
-        session.status = 'preview_ready';
-        await this.persistImportSession(session);
-        throw new BadRequestException(
-          this.buildImportCommitValidationError(session),
+      try {
+        await this.ensureImportPreviewItems(session);
+        if (session.items.some((item) => item.validation_issues.length > 0)) {
+          session.status = 'preview_ready';
+          await this.persistImportSession(session);
+          throw new BadRequestException(
+            this.buildImportCommitValidationError(session),
+          );
+        }
+        const result = await this.applyImportRows(
+          session.items
+            .filter((item) => item.action !== 'error')
+            .map((item) => item.raw),
+          session.companyId,
+          session.shopId,
+          session.branchCode,
+          session.onMatchPolicy,
+          writeContext.userId,
+          session.id,
         );
+        const importedVariants = (
+          await Promise.all(
+            (result.audit_rows ?? []).map(async (auditRow) => {
+              if (!auditRow.product_id) return null;
+              const item = session.items[auditRow.row - 1];
+              if (!item) return null;
+              const raw = item.raw;
+              const colorCode = (raw.colorCode ?? raw.colorName)
+                ?.trim()
+                .toUpperCase();
+              const sizeCode = raw.sizeName
+                ? normalizeSizeCode(raw.sizeName)
+                : undefined;
+              const variant = await this.prisma.productVariant.findFirst({
+                where: {
+                  productId: auditRow.product_id,
+                  ...(raw.barcode
+                    ? { barcode: raw.barcode }
+                    : colorCode || sizeCode
+                      ? {
+                          color: colorCode ? { code: colorCode } : undefined,
+                          size: sizeCode ? { code: sizeCode } : undefined,
+                        }
+                      : { isDefault: true }),
+                },
+                select: { id: true, barcode: true, sku: true },
+              });
+              if (!variant?.barcode) return null;
+              item.product_id = String(auditRow.product_id);
+              item.product_barcode = variant.barcode;
+              item.product_sku = variant.sku ?? item.product_sku;
+              return {
+                row: auditRow.row,
+                product_id: auditRow.product_id,
+                variant_id: variant.id,
+                barcode: variant.barcode,
+              };
+            }),
+          )
+        ).filter((item): item is NonNullable<typeof item> => item !== null);
+        session.result = {
+          ...result,
+          imported_variants: importedVariants,
+          committed_at: this.formatDateTime(new Date()),
+          committed_by: {
+            user_id: writeContext.userId,
+            full_name: writeContext.fullName,
+            user_type: writeContext.userType,
+          },
+        };
+        session.status = 'completed';
+        session.updatedAt = this.formatDateTime(new Date());
+        await this.persistImportSession(session);
+      } catch (error) {
+        // Never leave the import stuck in "importing": return it to the
+        // review step so the user sees the error and can fix the file or retry.
+        if (session.status === 'importing') {
+          session.status = 'preview_ready';
+          session.updatedAt = this.formatDateTime(new Date());
+          await this.persistImportSession(session).catch(() => undefined);
+        }
+        throw error;
       }
-      const result = await this.applyImportRows(
-        session.items
-          .filter((item) => item.action !== 'error')
-          .map((item) => item.raw),
-        session.companyId,
-        session.shopId,
-        session.branchCode,
-        session.onMatchPolicy,
-        writeContext.userId,
-        session.id,
-      );
-      const importedVariants = (
-        await Promise.all(
-          (result.audit_rows ?? []).map(async (auditRow) => {
-            if (!auditRow.product_id) return null;
-            const item = session.items[auditRow.row - 1];
-            if (!item) return null;
-            const raw = item.raw;
-            const colorCode = (raw.colorCode ?? raw.colorName)
-              ?.trim()
-              .toUpperCase();
-            const sizeCode = raw.sizeName
-              ? normalizeSizeCode(raw.sizeName)
-              : undefined;
-            const variant = await this.prisma.productVariant.findFirst({
-              where: {
-                productId: auditRow.product_id,
-                ...(raw.barcode
-                  ? { barcode: raw.barcode }
-                  : colorCode || sizeCode
-                    ? {
-                        color: colorCode ? { code: colorCode } : undefined,
-                        size: sizeCode ? { code: sizeCode } : undefined,
-                      }
-                    : { isDefault: true }),
-              },
-              select: { id: true, barcode: true, sku: true },
-            });
-            if (!variant?.barcode) return null;
-            item.product_id = String(auditRow.product_id);
-            item.product_barcode = variant.barcode;
-            item.product_sku = variant.sku ?? item.product_sku;
-            return {
-              row: auditRow.row,
-              product_id: auditRow.product_id,
-              variant_id: variant.id,
-              barcode: variant.barcode,
-            };
-          }),
-        )
-      ).filter((item): item is NonNullable<typeof item> => item !== null);
-      session.result = {
-        ...result,
-        imported_variants: importedVariants,
-        committed_at: this.formatDateTime(new Date()),
-        committed_by: {
-          user_id: writeContext.userId,
-          full_name: writeContext.fullName,
-          user_type: writeContext.userType,
-        },
-      };
-      session.status = 'completed';
-      session.updatedAt = this.formatDateTime(new Date());
-      await this.persistImportSession(session);
     } finally {
       IMPORT_COMMIT_LOCKS.delete(session.id);
     }
@@ -2816,9 +2827,20 @@ export class ProductsService {
     return IMPORT_SESSIONS.get(job.importId);
   }
 
+  /** "importing" with no commit running (crash / old failure) is a dead state. */
+  private healStuckImportingSession(session: ImportSession) {
+    if (session.status !== 'importing' || IMPORT_COMMIT_LOCKS.has(session.id))
+      return false;
+    session.status = 'preview_ready';
+    session.updatedAt = this.formatDateTime(new Date());
+    void this.persistImportSession(session).catch(() => undefined);
+    return true;
+  }
+
   private async resolveImportSessionFromStore(id: string) {
     const directSession = this.resolveImportSession(id);
     if (directSession) {
+      this.healStuckImportingSession(directSession);
       return directSession;
     }
 
@@ -2830,6 +2852,7 @@ export class ProductsService {
       return undefined;
     }
 
+    this.healStuckImportingSession(persistedSession);
     IMPORT_SESSIONS.set(persistedSession.id, persistedSession);
     if (persistedSession.jobId) {
       IMPORT_JOBS.set(persistedSession.jobId, {
@@ -3504,6 +3527,7 @@ export class ProductsService {
     } | null,
     shopLookup?: Map<string, ResolvedShop>,
   ) {
+    this.healStuckImportingSession(session);
     const shop = this.resolveShopByBranchCode(session.branchCode, shopLookup);
     const totals = this.buildLegacyImportTotals(session);
     const actor = this.resolveLegacyImportActor(session, context);
