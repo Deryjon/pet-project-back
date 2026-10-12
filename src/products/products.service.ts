@@ -11803,7 +11803,8 @@ export class ProductsService {
       }
     }
 
-    const warnings = await this.fillImportDimensionsFromCatalog(companyId, row);
+    const { warnings, matchedVariant } =
+      await this.fillImportDimensionsFromCatalog(companyId, row);
 
     if (!row.article?.trim())
       throw new BadRequestException('Не указан артикул');
@@ -11841,15 +11842,19 @@ export class ProductsService {
       );
     }
 
-    if (row.seasonCode) {
+    // The season of an existing variant is kept as is, and "no season" or the
+    // legacy SS/AW values are not dictionary codes.
+    const seasonCode = row.seasonCode?.trim().toUpperCase();
+    const isSeasonMarker =
+      !seasonCode ||
+      ['NO_SEASON', 'ALL', 'DEMI', 'SS', 'AW'].includes(seasonCode);
+    if (!matchedVariant && !isSeasonMarker) {
       const season = await this.prisma.productSeasonOption.findFirst({
-        where: { companyId, code: row.seasonCode, isActive: true },
+        where: { companyId, code: seasonCode, isActive: true },
         select: { id: true },
       });
       if (!season)
-        throw new BadRequestException(
-          `Неизвестный код сезона: ${row.seasonCode}`,
-        );
+        throw new BadRequestException(`Неизвестный код сезона: ${seasonCode}`);
     }
     return warnings;
   }
@@ -11871,6 +11876,7 @@ export class ProductsService {
     let storeColor: string | undefined;
     let storeSize: string | undefined;
     let variantLabel: string | undefined;
+    let matchedVariant = false;
 
     if (barcode || sku) {
       const variant = await this.prisma.productVariant.findFirst({
@@ -11890,6 +11896,7 @@ export class ProductsService {
           (variant?.product.article ?? '').trim().toUpperCase();
       // A code of another article is reported by product matching instead.
       if (variant && sameArticle) {
+        matchedVariant = true;
         storeColor = variant.color?.code ?? undefined;
         storeSize = variant.size?.code ?? undefined;
         variantLabel = barcode ? `баркода ${barcode}` : `SKU ${sku}`;
@@ -11941,7 +11948,7 @@ export class ProductsService {
       row.sizeName = storeSize;
     }
 
-    return warnings;
+    return { warnings, matchedVariant };
   }
 
   // Colours migrated from the old catalog have LEGACY… or hex codes, so a

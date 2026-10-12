@@ -309,6 +309,44 @@ describe('ProductsService import colours from the catalog', () => {
     );
   });
 
+  it('does not look up the no-season marker in the season dictionary', async () => {
+    const service = buildService({});
+    const input = row({
+      colorCode: 'BLK',
+      sizeName: 'M',
+      seasonCode: 'NO_SEASON',
+    });
+
+    await expect(
+      service.validateImportReferences('company-1', input),
+    ).resolves.toEqual([]);
+  });
+
+  it('skips the season check for a row that matches an existing variant', async () => {
+    const service = buildService({
+      findFirst: jest.fn().mockResolvedValue(variant('BLK', 'M')),
+    });
+    const input = row({ barcode: '111', seasonCode: 'UNKNOWN' });
+
+    await expect(
+      service.validateImportReferences('company-1', input),
+    ).resolves.toEqual([]);
+  });
+
+  it('still rejects an unknown season on a new product', async () => {
+    const service = buildService({});
+    service.prisma.productSeasonOption = {
+      findFirst: jest.fn().mockResolvedValue(null),
+    };
+
+    await expect(
+      service.validateImportReferences(
+        'company-1',
+        row({ colorCode: 'BLK', sizeName: 'M', seasonCode: 'UNKNOWN' }),
+      ),
+    ).rejects.toThrow('Неизвестный код сезона: UNKNOWN');
+  });
+
   it('still requires a colour for a new product', async () => {
     const service = buildService({});
 
