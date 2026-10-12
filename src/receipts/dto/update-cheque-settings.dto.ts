@@ -8,6 +8,7 @@ import {
   IsString,
   IsUrl,
   Max,
+  MaxLength,
   Min,
   ValidateNested,
   ValidateIf,
@@ -78,7 +79,35 @@ export class UpdateChequeSettingsDto {
 
   @IsOptional()
   @IsString()
+  // A data: URL logo is resized/compressed on the client to stay well below this.
+  @MaxLength(90_000)
   logo_url?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(20)
+  @Max(100)
+  logo_width?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  has_brand_name?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  brand_name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  brand_tagline?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(14)
+  @Max(40)
+  brand_name_size?: number;
 
   @IsOptional()
   @IsBoolean()

@@ -559,6 +559,11 @@ export class ReceiptsService {
     if (dto.item_dividers !== undefined) patch.itemDividers = dto.item_dividers;
     if (dto.has_logo !== undefined) patch.hasLogo = dto.has_logo;
     if (dto.logo_url !== undefined) patch.logoUrl = dto.logo_url;
+    if (dto.logo_width !== undefined) patch.logoWidth = dto.logo_width;
+    if (dto.has_brand_name !== undefined) patch.hasBrandName = dto.has_brand_name;
+    if (dto.brand_name !== undefined) patch.brandName = dto.brand_name.trim();
+    if (dto.brand_tagline !== undefined) patch.brandTagline = dto.brand_tagline.trim();
+    if (dto.brand_name_size !== undefined) patch.brandNameSize = dto.brand_name_size;
     if (dto.has_additional_image !== undefined) patch.hasAdditionalImage = dto.has_additional_image;
     if (dto.additional_image_url !== undefined) patch.additionalImageUrl = dto.additional_image_url;
     if (dto.footer_message !== undefined) patch.footerMessage = dto.footer_message;
@@ -582,6 +587,11 @@ export class ReceiptsService {
     itemDividers: boolean;
     hasLogo: boolean;
     logoUrl: string;
+    logoWidth: number;
+    hasBrandName: boolean;
+    brandName: string;
+    brandTagline: string;
+    brandNameSize: number;
     hasAdditionalImage: boolean;
     additionalImageUrl: string;
     footerMessage: string;
@@ -614,6 +624,11 @@ export class ReceiptsService {
       item_dividers: settings.itemDividers,
       has_logo: settings.hasLogo,
       logo_url: settings.logoUrl,
+      logo_width: settings.logoWidth,
+      has_brand_name: settings.hasBrandName,
+      brand_name: settings.brandName,
+      brand_tagline: settings.brandTagline,
+      brand_name_size: settings.brandNameSize,
       has_additional_image: settings.hasAdditionalImage,
       additional_image_url: settings.additionalImageUrl,
       footer_message: settings.footerMessage,

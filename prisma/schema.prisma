@@ -1015,7 +1015,13 @@ model ChequeSettings {
   itemDividers        Boolean  @default(false)
   // values with no other source
   hasLogo             Boolean  @default(false)
-  logoUrl             String   @default("")
+  logoUrl             String   @default("") // https URL or a data: URL of the pre-processed (B/W, ≤576 px) logo
+  logoWidth           Int      @default(60) // % of the printable width
+  // brand header shown at the very top of the receipt
+  hasBrandName        Boolean  @default(false)
+  brandName           String   @default("")
+  brandTagline        String   @default("")
+  brandNameSize       Int      @default(24)
   hasAdditionalImage  Boolean  @default(false)
   additionalImageUrl  String   @default("")
   footerMessage       String   @default("")
