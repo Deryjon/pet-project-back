@@ -4,7 +4,10 @@ import { SalesService } from '../sales/sales.service';
 import { ProductsService } from './products.service';
 
 function serviceOn(ledger: ReturnType<typeof createStockLedgerFake>) {
-  const prisma = { ...ledger.tx, $transaction: jest.fn((fn: any) => fn(ledger.tx)) };
+  const prisma = {
+    ...ledger.tx,
+    $transaction: jest.fn((fn: any) => fn(ledger.tx)),
+  };
   return new ProductsService(prisma as any, {} as any);
 }
 
@@ -17,9 +20,27 @@ describe('ProductsService variative product stock', () => {
         { id: 'blue', productId: 5, colorId: 'c-blue' },
       ],
       stocks: [
-        { productId: 5, variantId: 'red', shopId: 'shop-a', branchCode: 'A', quantity: 3 },
-        { productId: 5, variantId: 'blue', shopId: 'shop-a', branchCode: 'A', quantity: 2 },
-        { productId: 5, variantId: 'blue', shopId: 'shop-b', branchCode: 'B', quantity: 4 },
+        {
+          productId: 5,
+          variantId: 'red',
+          shopId: 'shop-a',
+          branchCode: 'A',
+          quantity: 3,
+        },
+        {
+          productId: 5,
+          variantId: 'blue',
+          shopId: 'shop-a',
+          branchCode: 'A',
+          quantity: 2,
+        },
+        {
+          productId: 5,
+          variantId: 'blue',
+          shopId: 'shop-b',
+          branchCode: 'B',
+          quantity: 4,
+        },
       ],
     });
     for (const stock of ledger.variantStocks) {
@@ -29,7 +50,12 @@ describe('ProductsService variative product stock', () => {
     await (serviceOn(ledger) as any).syncVariativeProductStocks(ledger.tx, 5);
 
     expect(
-      ledger.shopStocks.map((s) => [s.shopId, s.quantity, s.purchasePrice, s.salePrice]),
+      ledger.shopStocks.map((s) => [
+        s.shopId,
+        s.quantity,
+        s.purchasePrice,
+        s.salePrice,
+      ]),
     ).toEqual([
       ['shop-a', 5, 11, 21],
       ['shop-b', 4, 11, 21],
@@ -39,7 +65,11 @@ describe('ProductsService variative product stock', () => {
 });
 
 describe('ProductsService simple product stock edits', () => {
-  const shipment = (quantity: number, originalQuantity?: number, shopId = 'shop-a') => ({
+  const shipment = (
+    quantity: number,
+    originalQuantity?: number,
+    shopId = 'shop-a',
+  ) => ({
     shopId,
     branchCode: shopId === 'shop-a' ? 'A' : shopId === 'shop-b' ? 'B' : 'C',
     quantity,
@@ -64,11 +94,9 @@ describe('ProductsService simple product stock edits', () => {
     // Form opened at 13; 3 were sold meanwhile (row is now 10); user typed 15.
     const ledger = simpleProduct(['shop-a', 'A', 10]);
 
-    const result = await (serviceOn(ledger) as any).applySimpleProductStockEdits(
-      5,
-      'company-1',
-      [shipment(15, 13)],
-    );
+    const result = await (
+      serviceOn(ledger) as any
+    ).applySimpleProductStockEdits(5, 'company-1', [shipment(15, 13)]);
 
     expect(ledger.shopQuantity(5, 'shop-a')).toBe(12);
     expect(ledger.variantQuantity('default-5', 'shop-a')).toBe(12);
@@ -79,9 +107,11 @@ describe('ProductsService simple product stock edits', () => {
   it('sets the quantity absolutely when no original is sent (legacy clients)', async () => {
     const ledger = simpleProduct(['shop-a', 'A', 10]);
 
-    await (serviceOn(ledger) as any).applySimpleProductStockEdits(5, 'company-1', [
-      shipment(15),
-    ]);
+    await (serviceOn(ledger) as any).applySimpleProductStockEdits(
+      5,
+      'company-1',
+      [shipment(15)],
+    );
 
     expect(ledger.shopQuantity(5, 'shop-a')).toBe(15);
   });
@@ -89,9 +119,11 @@ describe('ProductsService simple product stock edits', () => {
   it('creates the stock of a shop that had none, with its prices', async () => {
     const ledger = simpleProduct(['shop-a', 'A', 10]);
 
-    await (serviceOn(ledger) as any).applySimpleProductStockEdits(5, 'company-1', [
-      shipment(3, undefined, 'shop-c'),
-    ]);
+    await (serviceOn(ledger) as any).applySimpleProductStockEdits(
+      5,
+      'company-1',
+      [shipment(3, undefined, 'shop-c')],
+    );
 
     expect(ledger.shopQuantity(5, 'shop-c')).toBe(3);
     expect(ledger.shopStocks.find((s) => s.shopId === 'shop-c')).toMatchObject({
@@ -104,9 +136,11 @@ describe('ProductsService simple product stock edits', () => {
   it('leaves shops missing from the payload untouched', async () => {
     const ledger = simpleProduct(['shop-a', 'A', 10], ['shop-b', 'B', 8]);
 
-    await (serviceOn(ledger) as any).applySimpleProductStockEdits(5, 'company-1', [
-      shipment(11, 10),
-    ]);
+    await (serviceOn(ledger) as any).applySimpleProductStockEdits(
+      5,
+      'company-1',
+      [shipment(11, 10)],
+    );
 
     expect(ledger.shopQuantity(5, 'shop-b')).toBe(8);
   });
@@ -162,9 +196,15 @@ describe('SalesService client purchase aggregates', () => {
     };
     const service = new SalesService({} as any, {} as any, {} as any);
 
-    await (service as any).refreshClientSalesAggregates(tx, 'company-1', 'client-1');
+    await (service as any).refreshClientSalesAggregates(
+      tx,
+      'company-1',
+      'client-1',
+    );
 
-    expect(tx.sale.count.mock.calls[0][0].where.status).toEqual({ not: 'cancelled' });
+    expect(tx.sale.count.mock.calls[0][0].where.status).toEqual({
+      not: 'cancelled',
+    });
     expect(tx.sale.aggregate.mock.calls[1][0].where).toMatchObject({
       saleType: 'return',
       status: { not: 'cancelled' },
@@ -176,19 +216,16 @@ describe('SalesService client purchase aggregates', () => {
 });
 
 describe('ProductsService size grid presets and variant codes', () => {
-  it('fills missing variant barcodes/SKUs and keeps existing ones', async () => {
+  it('fills missing variant barcodes and keeps existing codes', async () => {
     const prisma = {
       product: {
         findMany: jest.fn().mockResolvedValue([{ barcode: '2000000000017' }]),
-        findUnique: jest.fn().mockResolvedValue({ sku: 'TSH' }),
       },
       productVariant: {
         findMany: jest
           .fn()
           // barcodes already used by variants
-          .mockResolvedValueOnce([{ barcode: '2000000000024' }])
-          // SKUs already used with the TSH- prefix
-          .mockResolvedValueOnce([{ sku: 'TSH-01' }]),
+          .mockResolvedValueOnce([{ barcode: '2000000000024' }]),
       },
     };
     const service = new ProductsService(prisma as any, {} as any) as any;
@@ -198,17 +235,24 @@ describe('ProductsService size grid presets and variant codes', () => {
       {},
     ];
 
-    await service.fillMissingVariantCodes(5, 'company-1', items, [
+    await service.fillMissingVariantCodes('company-1', items, [
       { id: 'v-old', barcode: '2000000000031', sku: 'TSH-05' },
     ]);
 
-    expect(items[0]).toEqual({ id: 'v-old', barcode: '2000000000031', sku: 'TSH-05' });
+    expect(items[0]).toEqual({
+      id: 'v-old',
+      barcode: '2000000000031',
+      sku: 'TSH-05',
+    });
     expect(items[1].barcode).toBe('4600000000000');
     // New codes never collide with product or variant barcodes.
     expect(items[2].barcode).toMatch(/^2\d{12}$/);
-    expect(['2000000000017', '2000000000024', '2000000000031']).not.toContain(items[2].barcode);
-    expect(items[1].sku).toBe('TSH-02');
-    expect(items[2].sku).toBe('TSH-03');
+    expect(['2000000000017', '2000000000024', '2000000000031']).not.toContain(
+      items[2].barcode,
+    );
+    // Variants share the product article, so no own SKU is invented.
+    expect(items[1].sku).toBeUndefined();
+    expect(items[2].sku).toBeUndefined();
   });
 
   it('creates preset sizes and a basic palette on first use', async () => {
@@ -224,23 +268,36 @@ describe('ProductsService size grid presets and variant codes', () => {
       productColor: {
         count: jest.fn().mockResolvedValue(0),
         createMany: jest.fn(),
-        findMany: jest.fn().mockResolvedValue([{ id: 'c-black', name: 'Чёрный' }]),
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: 'c-black', name: 'Чёрный' }]),
       },
     };
     const service = new ProductsService(prisma as any, {} as any);
     const context = {
-      userId: 1, fullName: '', userType: 'company', role: null, crmRoleId: null,
-      crmRoleName: null, companyId: 'company-1', currentShopId: null,
-      currentBranchCode: null, allowedShopIds: [], allowedBranchCodes: [], canSwitchShops: false,
+      userId: 1,
+      fullName: '',
+      userType: 'company',
+      role: null,
+      crmRoleId: null,
+      crmRoleName: null,
+      companyId: 'company-1',
+      currentShopId: null,
+      currentBranchCode: null,
+      allowedShopIds: [],
+      allowedBranchCodes: [],
+      canSwitchShops: false,
     } as any;
 
     const result = await service.getSizeGridPresets(context);
 
-    expect(prisma.productSize.createMany.mock.calls[0][0].skipDuplicates).toBe(true);
+    expect(prisma.productSize.createMany.mock.calls[0][0].skipDuplicates).toBe(
+      true,
+    );
     expect(prisma.productColor.createMany).toHaveBeenCalled();
-    expect(result.grids.find((grid) => grid.key === 'clothing_letter')?.sizes).toEqual([
-      { id: 's-m', name: 'M' },
-    ]);
+    expect(
+      result.grids.find((grid) => grid.key === 'clothing_letter')?.sizes,
+    ).toEqual([{ id: 's-m', name: 'M' }]);
     expect(result.grids.find((grid) => grid.key === 'shoes')?.sizes).toEqual([
       { id: 's-42', name: '42' },
     ]);

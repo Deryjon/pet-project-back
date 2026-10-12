@@ -12,87 +12,112 @@ export function normalizeSizeCode(raw: string): string {
   return code;
 }
 
+/** Kind implied by a size code alone: 30–50 → shoes, letters or R+number → clothing. */
+export function sizeKindFromCode(code: string): ProductSizeKind | null {
+  const numMatch = code.match(/^(\d{2})(\.\d)?$/);
+  if (numMatch) {
+    const num = parseFloat(code);
+    if (num >= 30 && num <= 50) return 'SHOES';
+  }
+  if (/^[A-Z]+$/.test(code) || /^\d?XL$/.test(code) || /^R\d+$/.test(code)) {
+    return 'CLOTHING';
+  }
+  return null;
+}
+
+type StoredSize = {
+  id: string;
+  kind?: ProductSizeKind | null;
+  type?: string | null;
+  name?: string | null;
+};
+
+// Sizes from the size-grid presets carry only `type`, not `kind`.
+function storedSizeKind(size: StoredSize): ProductSizeKind | undefined {
+  if (size.kind) return size.kind;
+  if (size.type === 'SHOES' || size.type === 'CLOTHING') return size.type;
+  return sizeKindFromCode(normalizeSizeCode(size.name ?? '')) ?? undefined;
+}
+
 /**
- * Resolves size kind (CLOTHING vs SHOES) and optionally auto-creates.
+ * Resolves a size of the tenant and its kind (CLOTHING vs SHOES).
  *
- * Rules:
- * 1. Try exact match in tenant's ProductSize by code → return kind
- * 2. If not found:
- *    - Pure number 30–50 (with optional .5) → SHOES
- *    - Letter code or R+number → CLOTHING
- *    - Otherwise → error
- * 3. If kind determined but size not in DB → auto-create with correct kind
+ * 1. Exact match by code.
+ * 2. Match by name (sizes migrated with LEGACY… codes are named "M", "42").
+ *    Several matches are narrowed by the kind implied by the code; a still
+ *    ambiguous name is an error rather than a guess or a duplicate.
+ * 3. Otherwise the kind comes from the code pattern and, with `autoCreate`,
+ *    a new size is created.
+ *
+ * `kind` is undefined only for an existing size whose kind cannot be told.
  */
 export async function resolveSize(
   rawCode: string,
   companyId: string,
   prisma: any,
   options?: { autoCreate?: boolean },
-): Promise<{ kind: ProductSizeKind; sizeId?: string }> {
+): Promise<{ kind?: ProductSizeKind; sizeId?: string }> {
   const code = normalizeSizeCode(rawCode);
 
   if (!code) {
     throw new Error('Size code cannot be empty');
   }
 
-  // Step 1: try exact match in tenant's sizes
-  const existingSize = await prisma.productSize.findFirst({
+  const existingSize: StoredSize | null = await prisma.productSize.findFirst({
     where: { companyId, code },
   });
-
   if (existingSize) {
-    if (!existingSize.kind) {
-      throw new Error(`Size ${code} has no kind defined`);
-    }
+    return { kind: storedSizeKind(existingSize), sizeId: existingSize.id };
+  }
+
+  const patternKind = sizeKindFromCode(code);
+  const names = [...new Set([rawCode.trim(), code])];
+  const byName: StoredSize[] = await prisma.productSize.findMany({
+    where: {
+      companyId,
+      isActive: true,
+      OR: names.flatMap((name) => [
+        { name: { equals: name, mode: 'insensitive' } },
+        { nameRu: { equals: name, mode: 'insensitive' } },
+      ]),
+    },
+    orderBy: { sortOrder: 'asc' },
+  });
+  const candidates =
+    byName.length > 1 && patternKind
+      ? byName.filter((size) => storedSizeKind(size) === patternKind)
+      : byName;
+  if (candidates.length === 1) {
     return {
-      kind: existingSize.kind as ProductSizeKind,
-      sizeId: existingSize.id,
+      kind: storedSizeKind(candidates[0]),
+      sizeId: candidates[0].id,
     };
   }
-
-  // Step 2: determine kind by pattern
-  let determinedKind: ProductSizeKind | null = null;
-
-  // Check if it's a shoe size (30–50 with optional .5)
-  const numMatch = code.match(/^(\d{2})(\.\d)?$/);
-  if (numMatch) {
-    const num = parseFloat(code);
-    if (num >= 30 && num <= 50) {
-      determinedKind = 'SHOES';
-    }
+  if (candidates.length > 1) {
+    throw new Error(
+      `Размер ${code} неоднозначен: в справочнике несколько размеров с таким названием, укажите код размера`,
+    );
   }
 
-  // Check if it's a letter code or Russian size (R40, R42, etc.)
-  if (!determinedKind) {
-    if (code.match(/^[A-Z]+$/)) {
-      // All letters → clothing
-      determinedKind = 'CLOTHING';
-    } else if (code.match(/^R\d+$/)) {
-      // R + number → clothing
-      determinedKind = 'CLOTHING';
-    }
-  }
-
-  if (!determinedKind) {
+  if (!patternKind) {
     throw new Error(`Cannot determine size kind for code ${code}`);
   }
 
-  // Step 3: auto-create if enabled
   if (options?.autoCreate) {
     const created = await prisma.productSize.create({
       data: {
         companyId,
         code,
         name: code,
-        kind: determinedKind,
+        kind: patternKind,
         type: 'OTHER',
         isActive: true,
       },
     });
-    return { kind: determinedKind, sizeId: created.id };
+    return { kind: patternKind, sizeId: created.id };
   }
 
-  return { kind: determinedKind };
+  return { kind: patternKind };
 }
 
 /**

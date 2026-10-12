@@ -178,6 +178,165 @@ describe('ProductsService apparel import grouping', () => {
       ]),
     ).rejects.toThrow('различаются название или сезон');
   });
+
+  it('keeps colourless rows of one article/size apart by their barcode', async () => {
+    const rows = await (buildService() as any).normalizeApparelImportRows(
+      'company-1',
+      [
+        makeRow({ colorCode: '', barcode: '111' }),
+        makeRow({ colorCode: '', barcode: '222' }),
+      ],
+    );
+
+    expect(rows).toHaveLength(2);
+  });
+});
+
+describe('ProductsService import colours from the catalog', () => {
+  const variant = (color: string | null, size: string | null) => ({
+    color: color ? { code: color } : null,
+    size: size ? { code: size } : null,
+    product: { article: 'TS-1' },
+  });
+
+  const buildService = (prisma: {
+    findFirst?: jest.Mock;
+    findMany?: jest.Mock;
+  }) =>
+    new ProductsService(
+      {
+        company: {
+          findUnique: jest.fn().mockResolvedValue({ storeType: 'CLOTHING' }),
+        },
+        productVariant: {
+          findFirst: prisma.findFirst ?? jest.fn().mockResolvedValue(null),
+          findMany: prisma.findMany ?? jest.fn().mockResolvedValue([]),
+        },
+        productColor: {
+          findFirst: jest.fn(({ where }) =>
+            Promise.resolve(
+              ['BLK', 'WHT'].includes(where.code)
+                ? { id: `color-${where.code}`, code: where.code }
+                : null,
+            ),
+          ),
+          findMany: jest.fn(({ where }) =>
+            Promise.resolve(
+              where.OR.some(
+                (condition: any) => condition.nameRu?.equals === 'Чёрный',
+              )
+                ? [{ id: 'color-BLK', code: 'BLK' }]
+                : [],
+            ),
+          ),
+        },
+        productSize: {
+          findFirst: jest
+            .fn()
+            .mockResolvedValue({ id: 'size-1', kind: 'CLOTHING' }),
+        },
+      } as any,
+      {} as any,
+    ) as any;
+
+  const row = (overrides: Record<string, unknown> = {}) => ({
+    name: 'Футболка',
+    article: 'TS-1',
+    quantity: 1,
+    supplyPrice: 50,
+    retailPrice: 100,
+    ...overrides,
+  });
+
+  it('takes colour, size and article of an existing variant found by barcode', async () => {
+    const service = buildService({
+      findFirst: jest.fn().mockResolvedValue(variant('BLK', 'M')),
+    });
+    const input = row({ article: undefined, barcode: '4600000000017' });
+
+    const warnings = await service.validateImportReferences('company-1', input);
+
+    expect(warnings).toEqual([]);
+    expect(input).toMatchObject({
+      article: 'TS-1',
+      colorCode: 'BLK',
+      sizeName: 'M',
+    });
+  });
+
+  it('accepts a colour written by its name', async () => {
+    const service = buildService({});
+    const input = row({ colorCode: 'Чёрный', sizeName: 'M' });
+
+    await service.validateImportReferences('company-1', input);
+
+    expect(input).toMatchObject({ colorCode: 'BLK', colorName: 'BLK' });
+  });
+
+  it('takes the only colour an existing article has', async () => {
+    const service = buildService({
+      findMany: jest
+        .fn()
+        .mockResolvedValue([variant('BLK', 'M'), variant('BLK', 'L')]),
+    });
+    const input = row({ sizeName: 'XL' });
+
+    await service.validateImportReferences('company-1', input);
+
+    expect(input).toMatchObject({ colorCode: 'BLK', sizeName: 'XL' });
+  });
+
+  it('still requires a colour when the article has several in the catalog', async () => {
+    const service = buildService({
+      findMany: jest
+        .fn()
+        .mockResolvedValue([variant('BLK', 'M'), variant('WHT', 'M')]),
+    });
+
+    await expect(
+      service.validateImportReferences('company-1', row({ sizeName: 'M' })),
+    ).rejects.toThrow('несколько цветов (BLK, WHT)');
+  });
+
+  it('drops a variant SKU that only repeats the model article', () => {
+    const service = buildService({});
+
+    expect(
+      service.resolveImportVariantSku(row({ sku: ' ts-1 ', article: 'TS-1' })),
+    ).toBeNull();
+    expect(service.resolveImportVariantSku(row({ sku: 'TS-1-BLK-M' }))).toBe(
+      'TS-1-BLK-M',
+    );
+  });
+
+  it('still requires a colour for a new product', async () => {
+    const service = buildService({});
+
+    await expect(
+      service.validateImportReferences('company-1', row({ sizeName: 'M' })),
+    ).rejects.toThrow('Не указан код цвета');
+  });
+
+  it('warns without blocking when the file colour differs from the catalog', async () => {
+    const service = buildService({
+      findFirst: jest.fn().mockResolvedValue(variant('BLK', 'M')),
+    });
+    const input = row({ barcode: '111', colorCode: 'WHT', sizeName: 'M' });
+
+    const warnings = await service.validateImportReferences('company-1', input);
+
+    expect(warnings).toEqual([
+      expect.stringContaining('отличается от цвета в базе (BLK)'),
+    ]);
+    expect(input).toMatchObject({ colorCode: 'WHT', storeColorCode: 'BLK' });
+    expect(
+      service.collectDifferentFields(
+        { stocks: [], suppliers: [], name: 'Футболка', supplyPrice: 0 },
+        input,
+        'B1',
+      ),
+    ).toContain('color');
+  });
 });
 describe('Legacy product creation authorization', () => {
   it('rejects calls without authorization before writing a product', async () => {
@@ -283,15 +442,20 @@ describe('Excel import variant grouping', () => {
   };
 
   it('matches an identifier-less colour/size row to the variative product of the same company and name', async () => {
-    const prisma = { product: { findFirst: jest.fn().mockResolvedValue({ id: 7 }) } };
+    const prisma = {
+      product: { findFirst: jest.fn().mockResolvedValue({ id: 7 }) },
+    };
     const service = new ProductsService(prisma as any, {} as any);
 
-    const matched = await (service as any).findImportMatchedProduct('company-1', {
-      ...baseRow,
-      name: 'Nike Hoodie',
-      colorName: 'Black',
-      sizeName: 'M',
-    });
+    const matched = await (service as any).findImportMatchedProduct(
+      'company-1',
+      {
+        ...baseRow,
+        name: 'Nike Hoodie',
+        colorName: 'Black',
+        sizeName: 'M',
+      },
+    );
 
     expect(matched).toEqual({ id: 7 });
     expect(prisma.product.findFirst.mock.calls[0][0].where).toMatchObject({

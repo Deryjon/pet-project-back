@@ -347,10 +347,12 @@ export class ProductsController {
   @Permissions('import-check')
   commitImportDraft(
     @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     return this.productsService.commitImport(id, requestContext, {
       forceWithCheckAccept: true,
+      body: body ?? {},
     });
   }
 

@@ -107,6 +107,8 @@ type ImportRowInput = {
   description?: string;
   warnings?: string[];
   isApparel?: boolean;
+  // Colour of the matched existing variant when the file names another one.
+  storeColorCode?: string;
 };
 
 type ImportValidationIssue = {
@@ -326,6 +328,7 @@ type ImportOnMatchPolicy = {
   supplier: ImportFieldResolution;
   supplyPrice: ImportFieldResolution;
   retailPrice: ImportFieldResolution;
+  color: ImportFieldResolution;
 };
 
 type ImportDryRunSummary = {
@@ -2478,7 +2481,10 @@ export class ProductsService {
   async commitImport(
     id: string,
     requestContext: CompanyRequestContext,
-    options?: { forceWithCheckAccept?: boolean },
+    options?: {
+      forceWithCheckAccept?: boolean;
+      body?: Record<string, unknown>;
+    },
   ) {
     const session = await this.resolveImportSessionFromStore(id);
     if (!session) {
@@ -2509,6 +2515,21 @@ export class ProductsService {
     IMPORT_COMMIT_LOCKS.add(session.id);
 
     try {
+      // Conflict choices made on the review screen arrive with the commit.
+      const requested = options?.body?.on_match;
+      if (requested && typeof requested === 'object') {
+        const stored = this.toImportOnMatchPolicy(session.onMatchPolicy);
+        session.onMatchPolicy = this.extractImportOnMatchPolicy(
+          {
+            on_match: {
+              ...stored,
+              ...(requested as Record<string, unknown>),
+            },
+          },
+          true,
+          false,
+        ) as ImportOnMatchPolicy;
+      }
       session.status = 'importing';
       session.updatedAt = this.formatDateTime(new Date());
       await this.persistImportSession(session);
@@ -2539,7 +2560,12 @@ export class ProductsService {
               const item = session.items[auditRow.row - 1];
               if (!item) return null;
               const raw = item.raw;
-              const colorCode = (raw.colorCode ?? raw.colorName)
+              const colorCode = (
+                raw.storeColorCode &&
+                !this.shouldUseFileValue(session.onMatchPolicy.color)
+                  ? raw.storeColorCode
+                  : (raw.colorCode ?? raw.colorName)
+              )
                 ?.trim()
                 .toUpperCase();
               const sizeCode = raw.sizeName
@@ -2550,12 +2576,14 @@ export class ProductsService {
                   productId: auditRow.product_id,
                   ...(raw.barcode
                     ? { barcode: raw.barcode }
-                    : colorCode || sizeCode
-                      ? {
-                          color: colorCode ? { code: colorCode } : undefined,
-                          size: sizeCode ? { code: sizeCode } : undefined,
-                        }
-                      : { isDefault: true }),
+                    : raw.sku
+                      ? { sku: raw.sku }
+                      : colorCode || sizeCode
+                        ? {
+                            color: colorCode ? { code: colorCode } : undefined,
+                            size: sizeCode ? { code: sizeCode } : undefined,
+                          }
+                        : { isDefault: true }),
                 },
                 select: { id: true, barcode: true, sku: true },
               });
@@ -3368,6 +3396,7 @@ export class ProductsService {
       supplier: 'keep_store',
       supplyPrice: 'keep_store',
       retailPrice: 'keep_store',
+      color: 'keep_store',
     };
   }
 
@@ -3416,6 +3445,7 @@ export class ProductsService {
       'supplyPrice',
       'retail_price',
       'retailPrice',
+      'color',
     ]);
 
     for (const key of Object.keys(policy)) {
@@ -3457,6 +3487,7 @@ export class ProductsService {
         'retail_price',
         strict,
       ),
+      color: this.parseImportFieldResolution(policy.color, 'color', strict),
     };
   }
 
@@ -6856,7 +6887,7 @@ export class ProductsService {
       ? {
           ...product,
           name: variantDisplayName(product.name, variant),
-          sku: variant.sku,
+          sku: variant.sku ?? product.article ?? product.sku,
           barcode: variant.barcode,
           purchasePrice: variant.purchasePrice ?? product.purchasePrice,
           salePrice: variant.salePrice ?? product.salePrice,
@@ -6909,7 +6940,7 @@ export class ProductsService {
           ? {
               ...item.product,
               name: variantDisplayName(item.product.name, item.variant),
-              sku: item.variant.sku,
+              sku: item.variant.sku ?? item.product.article ?? item.product.sku,
               barcode: item.variant.barcode,
               purchasePrice:
                 item.variant.purchasePrice ?? item.product.purchasePrice,
@@ -7155,7 +7186,6 @@ export class ProductsService {
    * variant keeps its codes, a new one gets the next free codes.
    */
   private async fillMissingVariantCodes(
-    productId: number,
     companyId: string,
     items: Array<{ id?: string; barcode?: string; sku?: string }>,
     existing: Array<{ id: string; barcode: string | null; sku: string | null }>,
@@ -7180,32 +7210,8 @@ export class ProductsService {
       });
     }
 
-    const needSku = items.filter((item) => !item.sku);
-    if (needSku.length) {
-      const product = await this.prisma.product.findUnique({
-        where: { id: productId },
-        select: { sku: true },
-      });
-      const base = product?.sku || `P${productId}`;
-      const usedRows = await this.prisma.productVariant.findMany({
-        where: { companyId, sku: { startsWith: `${base}-` } },
-        select: { sku: true },
-      });
-      const used = new Set([
-        ...usedRows.map((row) => row.sku ?? ''),
-        ...items.flatMap((item) => (item.sku ? [item.sku] : [])),
-      ]);
-      let counter = 0;
-      for (const item of needSku) {
-        let candidate: string;
-        do {
-          counter += 1;
-          candidate = `${base}-${String(counter).padStart(2, '0')}`;
-        } while (used.has(candidate));
-        used.add(candidate);
-        item.sku = candidate;
-      }
-    }
+    // No SKU is generated: variants share the product article and differ by
+    // barcode; an explicit own code is still kept.
   }
 
   /**
@@ -7518,7 +7524,6 @@ export class ProductsService {
       existingVariants.filter((item) => !item.isDefault).map((item) => item.id),
     );
     await this.fillMissingVariantCodes(
-      productId,
       context.companyId,
       normalized,
       existingVariants.filter((item) => existingIds.has(item.id)),
@@ -9631,7 +9636,11 @@ export class ProductsService {
       }
       const color = (row.colorCode ?? row.colorName ?? '').trim().toUpperCase();
       const size = normalizeSizeCode(row.sizeName ?? '');
-      const key = `${article}\u0000${color}\u0000${size}`;
+      // Without colour or size the variant is only known by its own code,
+      // which is resolved against the catalog later; keep such rows apart.
+      const variantCode =
+        color && size ? '' : (row.barcode ?? row.sku ?? '').trim();
+      const key = `${article}\u0000${color}\u0000${size}\u0000${variantCode}`;
       const previous = consolidated.get(key);
       if (previous) {
         previous.quantity += row.quantity;
@@ -10016,6 +10025,10 @@ export class ProductsService {
       differentFields.push('description');
     }
 
+    if (row.storeColorCode) {
+      differentFields.push('color');
+    }
+
     return differentFields;
   }
 
@@ -10346,7 +10359,12 @@ export class ProductsService {
               companyId,
               colorId: dimensions.colorId,
               sizeId: dimensions.sizeId,
-              sku: identifiers.sku,
+              // Variants share the product article and differ by barcode, so
+              // they get no generated code of their own (mirrors the update path).
+              sku:
+                hasVariantDimensions && row.article
+                  ? this.resolveImportVariantSku(row)
+                  : identifiers.sku,
               barcode: identifiers.barcode,
               purchasePrice: row.supplyPrice,
               salePrice: row.retailPrice,
@@ -10425,17 +10443,17 @@ export class ProductsService {
     const requestedColorCode = (row.colorCode ?? row.colorName)
       ?.trim()
       .toUpperCase();
-    const color = requestedColorCode
-      ? await tx.productColor.findFirst({
-          where: apparel
-            ? { companyId, code: requestedColorCode, isActive: true }
-            : {
-                companyId,
-                OR: [{ code: requestedColorCode }, { name: row.colorName }],
-              },
-          select: { id: true },
-        })
-      : null;
+    const color = !requestedColorCode
+      ? null
+      : apparel
+        ? await this.findImportColor(tx, companyId, requestedColorCode)
+        : await tx.productColor.findFirst({
+            where: {
+              companyId,
+              OR: [{ code: requestedColorCode }, { name: row.colorName }],
+            },
+            select: { id: true },
+          });
     if (apparel && requestedColorCode && !color) {
       throw new BadRequestException(
         `Неизвестный код цвета: ${requestedColorCode}`,
@@ -10500,24 +10518,33 @@ export class ProductsService {
         ? row.retailPrice
         : previousRetailPrice;
 
+      const takeFileColor = this.shouldUseFileValue(onMatchPolicy.color);
       const dimensions = await this.resolveImportVariantDimensions(
         tx,
-        row,
+        row.storeColorCode && !takeFileColor
+          ? { ...row, colorCode: row.storeColorCode, colorName: undefined }
+          : row,
         companyId,
       );
       let importVariantId: string | null = null;
       if (dimensions.colorId || dimensions.sizeId) {
-        let variant = await tx.productVariant.findFirst({
+        // The variant's own code wins over colour/size, so a recoloured
+        // variant is not confused with a sibling that has the file colour.
+        let variant = row.barcode
+          ? await tx.productVariant.findFirst({
+              where: { productId, barcode: row.barcode },
+            })
+          : null;
+        if (!variant && row.sku) {
+          variant = await tx.productVariant.findFirst({
+            where: { productId, sku: row.sku },
+          });
+        }
+        variant ??= await tx.productVariant.findFirst({
           where: {
             productId,
-            OR: [
-              ...(row.sku ? [{ sku: row.sku }] : []),
-              ...(row.barcode ? [{ barcode: row.barcode }] : []),
-              {
-                colorId: dimensions.colorId ?? null,
-                sizeId: dimensions.sizeId ?? null,
-              },
-            ],
+            colorId: dimensions.colorId ?? null,
+            sizeId: dimensions.sizeId ?? null,
           },
         });
         if (!variant) {
@@ -10530,7 +10557,7 @@ export class ProductsService {
               productId,
               colorId: dimensions.colorId,
               sizeId: dimensions.sizeId,
-              sku: row.sku,
+              sku: this.resolveImportVariantSku(row),
               barcode: generatedBarcode,
               purchasePrice: appliedSupplyPrice,
               salePrice: appliedRetailPrice,
@@ -10545,10 +10572,33 @@ export class ProductsService {
           where: { variantId_shopId: { variantId: variant.id, shopId } },
         });
         importVariantId = variant.id;
+        const recolor = Boolean(
+          takeFileColor &&
+          dimensions.colorId &&
+          dimensions.colorId !== variant.colorId,
+        );
+        if (recolor) {
+          const sibling = await tx.productVariant.findFirst({
+            where: {
+              productId,
+              colorId: dimensions.colorId,
+              sizeId: variant.sizeId,
+              id: { not: variant.id },
+            },
+            select: { id: true },
+          });
+          if (sibling) {
+            throw new BadRequestException(
+              `Нельзя перекрасить вариант ${variant.barcode ?? variant.sku ?? ''}: у товара уже есть вариант с цветом ${row.colorCode ?? row.colorName} и этим размером`,
+            );
+          }
+          changedFields.push({ field: 'color', reason: 'from_file' });
+        }
         await tx.productVariant.update({
           where: { id: variant.id },
           data: {
-            sku: row.sku ?? variant.sku,
+            ...(recolor ? { colorId: dimensions.colorId } : {}),
+            sku: this.resolveImportVariantSku(row) ?? variant.sku,
             barcode: row.barcode ?? variant.barcode,
             purchasePrice: appliedSupplyPrice,
             salePrice: appliedRetailPrice,
@@ -11738,17 +11788,39 @@ export class ProductsService {
     )
       return [];
 
-    const warnings: string[] = [];
+    // A colour written by name or hex is turned into its dictionary code
+    // first, so it compares equal to the colour stored on the variant.
+    const fileColor = (row.colorCode ?? row.colorName)?.trim();
+    if (fileColor) {
+      const known = await this.findImportColor(
+        this.prisma,
+        companyId,
+        fileColor,
+      );
+      if (known) {
+        row.colorCode = known.code;
+        row.colorName = known.code;
+      }
+    }
+
+    const warnings = await this.fillImportDimensionsFromCatalog(companyId, row);
 
     if (!row.article?.trim())
       throw new BadRequestException('Не указан артикул');
 
     const colorCode = (row.colorCode ?? row.colorName)?.trim().toUpperCase();
-    if (!colorCode) throw new BadRequestException('Не указан код цвета');
-    const color = await this.prisma.productColor.findFirst({
-      where: { companyId, code: colorCode, isActive: true },
-      select: { id: true },
-    });
+    if (!colorCode) {
+      const storeColors = await this.listArticleColorCodes(
+        companyId,
+        row.article,
+      );
+      throw new BadRequestException(
+        storeColors.length > 1
+          ? `Не указан код цвета: у артикула ${row.article} в базе несколько цветов (${storeColors.join(', ')}), укажите цвет или баркод варианта`
+          : 'Не указан код цвета',
+      );
+    }
+    const color = await this.findImportColor(this.prisma, companyId, colorCode);
     if (!color)
       throw new BadRequestException(`Неизвестный код цвета: ${colorCode}`);
 
@@ -11780,6 +11852,153 @@ export class ProductsService {
         );
     }
     return warnings;
+  }
+
+  // Existing variants already know their colour and size, so a re-import only
+  // has to name the variant (barcode/sku) or an article with a single colour.
+  private async fillImportDimensionsFromCatalog(
+    companyId: string,
+    row: ImportRowInput,
+  ) {
+    const warnings: string[] = [];
+    row.storeColorCode = undefined;
+    const fileColor =
+      (row.colorCode ?? row.colorName)?.trim().toUpperCase() || '';
+    const fileSize = row.sizeName?.trim() || '';
+    const barcode = row.barcode?.trim();
+    const sku = row.sku?.trim();
+
+    let storeColor: string | undefined;
+    let storeSize: string | undefined;
+    let variantLabel: string | undefined;
+
+    if (barcode || sku) {
+      const variant = await this.prisma.productVariant.findFirst({
+        where: {
+          companyId,
+          OR: [...(barcode ? [{ barcode }] : []), ...(sku ? [{ sku }] : [])],
+        },
+        select: {
+          color: { select: { code: true } },
+          size: { select: { code: true } },
+          product: { select: { article: true } },
+        },
+      });
+      const sameArticle =
+        !row.article?.trim() ||
+        row.article.trim().toUpperCase() ===
+          (variant?.product.article ?? '').trim().toUpperCase();
+      // A code of another article is reported by product matching instead.
+      if (variant && sameArticle) {
+        storeColor = variant.color?.code ?? undefined;
+        storeSize = variant.size?.code ?? undefined;
+        variantLabel = barcode ? `баркода ${barcode}` : `SKU ${sku}`;
+        if (!row.article?.trim() && variant.product.article) {
+          row.article = variant.product.article;
+        }
+      }
+    }
+
+    if (!variantLabel && row.article?.trim() && (!fileColor || !fileSize)) {
+      const variants = await this.prisma.productVariant.findMany({
+        where: {
+          companyId,
+          isActive: true,
+          product: { article: row.article.trim() },
+        },
+        select: {
+          color: { select: { code: true } },
+          size: { select: { code: true } },
+        },
+      });
+      const colors = [
+        ...new Set(variants.map((v) => v.color?.code).filter(Boolean)),
+      ];
+      const sizes = [
+        ...new Set(variants.map((v) => v.size?.code).filter(Boolean)),
+      ];
+      // Only an unambiguous value can be taken over from the catalog.
+      if (colors.length === 1) storeColor = colors[0] ?? undefined;
+      if (sizes.length === 1) storeSize = sizes[0] ?? undefined;
+    }
+
+    if (!fileColor && storeColor) {
+      row.colorCode = storeColor;
+      row.colorName = storeColor;
+    } else if (
+      variantLabel &&
+      fileColor &&
+      storeColor &&
+      fileColor !== storeColor
+    ) {
+      row.storeColorCode = storeColor;
+      warnings.push(
+        `Цвет в файле (${fileColor}) отличается от цвета в базе (${storeColor}) для ${variantLabel}. По умолчанию останется цвет из базы.`,
+      );
+    }
+
+    if (!fileSize && storeSize) {
+      row.sizeName = storeSize;
+    }
+
+    return warnings;
+  }
+
+  // Colours migrated from the old catalog have LEGACY… or hex codes, so a
+  // file may name the colour instead: code first, then name or hex.
+  private async findImportColor(
+    db: Prisma.TransactionClient | PrismaService,
+    companyId: string,
+    value: string,
+  ) {
+    const trimmed = value.trim();
+    const byCode = await db.productColor.findFirst({
+      where: { companyId, code: trimmed.toUpperCase(), isActive: true },
+      select: { id: true, code: true },
+    });
+    if (byCode) return byCode;
+    const byName = await db.productColor.findMany({
+      where: {
+        companyId,
+        isActive: true,
+        OR: [
+          { name: { equals: trimmed, mode: 'insensitive' } },
+          { nameRu: { equals: trimmed, mode: 'insensitive' } },
+          { hex: { equals: trimmed, mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true, code: true },
+      take: 2,
+    });
+    if (byName.length > 1) {
+      throw new BadRequestException(
+        `Цвет ${trimmed} неоднозначен: в справочнике несколько цветов с таким названием, укажите код цвета`,
+      );
+    }
+    return byName[0] ?? null;
+  }
+
+  // A file often repeats the model article in the SKU column; that value is
+  // the product's and would collide between sibling variants.
+  private resolveImportVariantSku(row: ImportRowInput) {
+    const sku = row.sku?.trim();
+    if (!sku) return null;
+    const article = row.article?.trim();
+    return article && sku.toUpperCase() === article.toUpperCase() ? null : sku;
+  }
+
+  private async listArticleColorCodes(companyId: string, article: string) {
+    const variants = await this.prisma.productVariant.findMany({
+      where: { companyId, isActive: true, product: { article } },
+      select: { color: { select: { code: true } } },
+    });
+    return [
+      ...new Set(
+        variants
+          .map((v) => v.color?.code)
+          .filter((code): code is string => Boolean(code)),
+      ),
+    ];
   }
 
   private resolveProductType(value: unknown) {

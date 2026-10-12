@@ -18,6 +18,8 @@
     "prisma:seed": "ts-node prisma/seed.ts",
     "repair:orphaned-exchange-returns": "ts-node prisma/repair-orphaned-exchange-returns.ts",
     "repair:variant-readiness": "ts-node prisma/audit-variant-readiness.ts",
+    "audit:variant-articles": "ts-node prisma/audit-variant-articles.ts",
+    "repair:variant-own-codes": "ts-node prisma/repair-variant-own-codes.ts",
     "prisma:studio": "prisma studio",
     "start": "nest start",
     "start:dev": "nest start --watch",

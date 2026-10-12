@@ -5323,7 +5323,7 @@ export class SalesService {
       {
         ...product,
         name: label ? `${product.name} — ${label}` : product.name,
-        sku: variant.sku,
+        sku: variant.sku ?? product.sku,
         barcode: variant.barcode,
         purchasePrice: variant.purchasePrice ?? product.purchasePrice,
         salePrice: variant.salePrice ?? product.salePrice,
