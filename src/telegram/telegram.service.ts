@@ -475,6 +475,153 @@ export class TelegramService {
     }
   }
 
+  /** Text goes out with parse_mode HTML: names and reasons must not break it. */
+  private escapeHtml(value: unknown): string {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  private formatTashkentDateTime(date: Date) {
+    const day = date.toLocaleDateString('ru-RU', {
+      timeZone: 'Asia/Tashkent',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
+    const time = date.toLocaleTimeString('ru-RU', {
+      timeZone: 'Asia/Tashkent',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    return `${day} ${time}`;
+  }
+
+  private async userName(userId: number | null | undefined) {
+    if (!userId) return '';
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { firstName: true, lastName: true },
+    });
+    return user ? `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() : '';
+  }
+
+  private async shopName(companyId: string, branchCode: string | null) {
+    if (!branchCode) return '';
+    const shop = await this.prisma.shop.findFirst({
+      where: { companyId, branchCode },
+      select: { name: true },
+    });
+    return shop?.name ?? branchCode;
+  }
+
+  /** Same audience as sale notifications: the shop's (or company-wide) subscribers. */
+  private saleSubscribers(companyId: string, branchCode: string | null) {
+    return this.prisma.telegramSubscriber.findMany({
+      where: {
+        companyId,
+        notifyOnSale: true,
+        OR: [{ branchCode: branchCode ?? undefined }, { branchCode: null }],
+      },
+    });
+  }
+
+  async notifySaleCancelled(args: {
+    companyId: string | null;
+    branchCode: string | null;
+    number: string;
+    kind: 'sale' | 'return' | 'exchange';
+    amount: number;
+    reason: string;
+    cancelledById: number | null;
+    sellerId: number | null;
+    clientName?: string | null;
+    itemsCount: number;
+  }): Promise<void> {
+    if (!args.companyId) return;
+    try {
+      const subscribers = await this.saleSubscribers(args.companyId, args.branchCode);
+      if (!subscribers.length) return;
+      const [shop, cancelledBy, seller] = await Promise.all([
+        this.shopName(args.companyId, args.branchCode),
+        this.userName(args.cancelledById),
+        this.userName(args.sellerId),
+      ]);
+      const title =
+        args.kind === 'return'
+          ? 'Отменён возврат'
+          : args.kind === 'exchange'
+            ? 'Отменён обмен'
+            : 'Отменена продажа';
+      const lines = [
+        `❌ <b>${title} #${this.escapeHtml(args.number)}</b>`,
+        this.formatTashkentDateTime(new Date()),
+        '',
+        shop ? `🛒 Магазин: ${this.escapeHtml(shop)}` : '',
+        `💸 Сумма: ${this.fmt(args.amount)} UZS`,
+        `📦 Товаров: ${args.itemsCount}`,
+        seller ? `Продавец: ${this.escapeHtml(seller)}` : '',
+        args.clientName ? `Клиент: ${this.escapeHtml(args.clientName)}` : '',
+        cancelledBy ? `Отменил: ${this.escapeHtml(cancelledBy)}` : '',
+        '',
+        `📝 Причина: ${this.escapeHtml(args.reason)}`,
+      ].filter((line, index, all) => line !== '' || (all[index - 1] ?? '') !== '');
+      const text = lines.join('\n').trim();
+      await Promise.all(subscribers.map((sub) => this.sendMessage(sub.chatId, text)));
+    } catch (err) {
+      this.logger.error('notifySaleCancelled error', err);
+    }
+  }
+
+  async notifyDebtRepaid(args: {
+    companyId: string;
+    branchCode: string | null;
+    clientId: string;
+    amount: number;
+    remaining: number;
+    paymentMethodName: string;
+    acceptedById: number | null;
+    saleId: number | null;
+  }): Promise<void> {
+    try {
+      const subscribers = await this.saleSubscribers(args.companyId, args.branchCode);
+      if (!subscribers.length) return;
+      const [shop, acceptedBy, client, sale] = await Promise.all([
+        this.shopName(args.companyId, args.branchCode),
+        this.userName(args.acceptedById),
+        this.prisma.client.findFirst({
+          where: { id: args.clientId, companyId: args.companyId },
+          select: { firstName: true, lastName: true, phone: true },
+        }),
+        args.saleId
+          ? this.prisma.sale.findUnique({ where: { id: args.saleId }, select: { number: true } })
+          : null,
+      ]);
+      const clientName = client
+        ? `${client.firstName ?? ''} ${client.lastName ?? ''}`.trim() || client.phone || ''
+        : '';
+      const lines = [
+        `💰 <b>Погашение долга</b>`,
+        this.formatTashkentDateTime(new Date()),
+        '',
+        shop ? `🛒 Магазин: ${this.escapeHtml(shop)}` : '',
+        clientName ? `Клиент: ${this.escapeHtml(clientName)}` : '',
+        sale?.number ? `По продаже: #${this.escapeHtml(sale.number)}` : '',
+        `Погашено: ${this.fmt(args.amount)} UZS`,
+        `Способ оплаты: ${this.escapeHtml(args.paymentMethodName)}`,
+        args.remaining > 0
+          ? `Остаток долга: ${this.fmt(args.remaining)} UZS`
+          : '✅ Долг погашен полностью',
+        acceptedBy ? `Принял: ${this.escapeHtml(acceptedBy)}` : '',
+      ].filter((line, index, all) => line !== '' || (all[index - 1] ?? '') !== '');
+      const text = lines.join('\n').trim();
+      await Promise.all(subscribers.map((sub) => this.sendMessage(sub.chatId, text)));
+    } catch (err) {
+      this.logger.error('notifyDebtRepaid error', err);
+    }
+  }
+
   private fmt(value: number): string {
     return Math.round(value).toLocaleString('ru-RU').replace(/\s/g, ' ');
   }

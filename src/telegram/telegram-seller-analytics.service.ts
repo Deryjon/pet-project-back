@@ -57,8 +57,10 @@ export class TelegramSellerAnalyticsService {
     await this.runForAllCompanies(period, `за ${dateLabel}`);
   }
 
-  // Воскресенье 20:00 Ташкент = 15:00 UTC — за прошлую неделю (Пн–Вс)
-  @Cron('0 15 * * 0', { timeZone: 'UTC' })
+  // Понедельник 9:00 Ташкент = 04:00 UTC — за прошлую неделю (Пн–Вс), вместе
+  // с недельным отчётом. Раньше уходило в воскресенье в 20:00 и из-за этого
+  // охватывало Вс–Сб вместо Пн–Вс.
+  @Cron('0 4 * * 1', { timeZone: 'UTC' })
   async sendWeeklySellerAnalytics() {
     const today = tashkentToday();
     const lastMonday = shiftDays(today, -7);

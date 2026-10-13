@@ -126,16 +126,26 @@ describe('real PostgreSQL transaction invariants', () => {
       where: { id: f.customer.id },
       data: { debtUzs: 100 },
     });
+    const cashType = await db.companyPaymentType.create({
+      data: {
+        companyId: f.company.id,
+        name: 'Наличные',
+        isCashPaymentType: true,
+        paymentTypeId: 'cash',
+        paymentTypeName: 'Наличные',
+      },
+    });
     const service = new ClientsService(
       overlappingTransactions(db).prisma,
       new CompanySettingsService(prisma),
+      { notifyDebtRepaid: async () => undefined } as any,
     );
     const results = await Promise.allSettled(
       [1, 2].map(() =>
         service.repayDebt(
           f.customer.id,
           debt.id,
-          { amount_uzs: 60 },
+          { amount_uzs: 60, payment_method: cashType.id },
           f.context,
         ),
       ),
@@ -167,16 +177,26 @@ describe('real PostgreSQL transaction invariants', () => {
         remainingAmountUzs: 100,
       },
     });
+    const cashType = await db.companyPaymentType.create({
+      data: {
+        companyId: f.company.id,
+        name: 'Наличные',
+        isCashPaymentType: true,
+        paymentTypeId: 'cash',
+        paymentTypeName: 'Наличные',
+      },
+    });
     const service = new ClientsService(
       overlappingTransactions(db).prisma,
       new CompanySettingsService(prisma),
+      { notifyDebtRepaid: async () => undefined } as any,
     );
     const results = await Promise.allSettled(
       [1, 2].map(() =>
         service.repayDebt(
           f.customer.id,
           debt.id,
-          { amount_uzs: 60, idempotency_key: 'one-request' },
+          { amount_uzs: 60, payment_method: cashType.id, idempotency_key: 'one-request' },
           f.context,
         ),
       ),

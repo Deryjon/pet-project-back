@@ -76,7 +76,7 @@ describe('company context consumers', () => {
         Promise.all(operations),
       ),
     };
-    const service = new ClientsService(prisma as any, {} as any);
+    const service = new ClientsService(prisma as any, {} as any, { notifyDebtRepaid: jest.fn().mockResolvedValue(undefined) } as any);
 
     await service.getFilters(contextWithoutShops);
 

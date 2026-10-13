@@ -8,7 +8,7 @@ describe('ClientsService purchases ignore cancelled sales', () => {
       sale: { groupBy: jest.fn().mockResolvedValue([]) },
       shop: { findMany: jest.fn().mockResolvedValue([]) },
     };
-    const service = new ClientsService(prisma, {} as any);
+    const service = new ClientsService(prisma, {} as any, { notifyDebtRepaid: jest.fn().mockResolvedValue(undefined) } as any);
     return { service, prisma };
   }
 

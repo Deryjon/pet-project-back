@@ -51,25 +51,28 @@ describe('ClientsService.repayDebt concurrency guard', () => {
     };
     const prisma: any = {
       client: { findFirst: jest.fn(async () => ({ id: 'client-1' })) },
+      companyPaymentType: {
+        findFirst: jest.fn(async () => ({ id: 'pt-cash', name: 'Наличные' })),
+      },
       $transaction: jest.fn((operation) => operation(tx)),
     };
     const companySettings: any = {
       toIsoForCompany: jest.fn((date) => date.toISOString()),
     };
 
-    const service = new ClientsService(prisma, companySettings);
+    const service = new ClientsService(prisma, companySettings, { notifyDebtRepaid: jest.fn().mockResolvedValue(undefined) } as any);
 
     const results = await Promise.allSettled([
       service.repayDebt(
         'client-1',
         'debt-1',
-        { amount_uzs: 60 },
+        { amount_uzs: 60, payment_method: 'pt-cash' },
         testContext(),
       ),
       service.repayDebt(
         'client-1',
         'debt-1',
-        { amount_uzs: 60 },
+        { amount_uzs: 60, payment_method: 'pt-cash' },
         testContext(),
       ),
     ]);

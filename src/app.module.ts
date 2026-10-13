@@ -25,6 +25,7 @@ import { UsersModule } from './users/users.module';
 import { WarehouseModule } from './warehouse/warehouse.module';
 import { HealthController } from './health.controller';
 import { ImportsModule } from './imports/imports.module';
+import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { ImportsModule } from './imports/imports.module';
     PaymentsModule,
     OrdersModule,
     PriceTagsModule,
+    PurchaseOrdersModule,
     ProductsModule,
     ProductAttributesModule,
     ReceiptsModule,

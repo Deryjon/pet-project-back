@@ -10,7 +10,7 @@ describe('ClientsService debt input validation', () => {
       },
       $transaction: jest.fn(),
     };
-    const service = new ClientsService(prisma, {} as any);
+    const service = new ClientsService(prisma, {} as any, { notifyDebtRepaid: jest.fn().mockResolvedValue(undefined) } as any);
     return { service, prisma };
   }
 

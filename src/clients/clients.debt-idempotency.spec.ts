@@ -32,16 +32,21 @@ describe('ClientsService repayment idempotency', () => {
     };
     const prisma: any = {
       client: { findFirst: jest.fn(async () => ({ id: 'client-1' })) },
+      companyPaymentType: {
+        findFirst: jest.fn(async () => ({ id: 'pt-cash', name: 'Наличные' })),
+      },
       $transaction: jest.fn((operation) => operation(tx)),
     };
-    const service = new ClientsService(prisma, {
-      toIsoForCompany: (date: Date) => date.toISOString(),
-    } as any);
+    const service = new ClientsService(
+      prisma,
+      { toIsoForCompany: (date: Date) => date.toISOString() } as any,
+      { notifyDebtRepaid: jest.fn().mockResolvedValue(undefined) } as any,
+    );
 
     const result = await service.repayDebt(
       'client-1',
       'debt-1',
-      { amount_uzs: 60, idempotency_key: 'request-1' },
+      { amount_uzs: 60, payment_method: 'pt-cash', idempotency_key: 'request-1' },
       testContext({ allowedShopIds: [] }),
     );
 

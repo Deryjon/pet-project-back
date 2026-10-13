@@ -75,6 +75,14 @@ enum ProductTier {
   PREMIUM
 }
 
+enum PurchaseOrderStatus {
+  DRAFT
+  SENT
+  PARTIAL
+  RECEIVED
+  CANCELLED
+}
+
 enum SupplierInvoiceStatus {
   DRAFT
   PROCESSING
@@ -186,6 +194,7 @@ model Company {
   clientCards             ClientCard[]
   inventorySessions       InventorySession[]
   supplierInvoices        SupplierInvoice[]
+  purchaseOrders          PurchaseOrder[]
   supplierProductAliases  SupplierProductAlias[]
   supplyPriceStrategy     SupplyPriceStrategy      @default(LAST_PURCHASE)
   businessType            String                   @default("clothing_store")
@@ -230,6 +239,7 @@ model Shop {
   userAccesses         UserShopAccess[]
   cashboxes            Cashbox[]
   orders               Order[]
+  purchaseOrders       PurchaseOrder[]
   registeredClients    Client[]                    @relation("ClientRegistrationShop")
   clientDebts          ClientDebt[]
   stockMovements       StockMovement[]
@@ -444,6 +454,7 @@ model Supplier {
   isActive       Boolean                @default(true)
   invoices       SupplierInvoice[]
   productAliases SupplierProductAlias[]
+  purchaseOrders PurchaseOrder[]
   createdAt      DateTime               @default(now())
   updatedAt      DateTime               @updatedAt
 
@@ -511,6 +522,7 @@ model Product {
   brand                Brand?                      @relation(fields: [brandId], references: [id])
   suppliers            ProductSupplier[]
   stocks               ProductStock[]
+  purchaseOrderItems   PurchaseOrderItem[]
   variants             ProductVariant[]
   saleItems            SaleItem[]
   orderItems           OrderItem[]
@@ -1188,6 +1200,11 @@ model ClientDebtRepayment {
   createdById    Int?
   amountUzs      Decimal    @db.Decimal(12, 2)
   idempotencyKey String?
+  /// CompanyPaymentType id the money was taken with; name kept as a snapshot.
+  paymentMethod     String?
+  paymentMethodName String?
+  /// Shop (branch) where the repayment was accepted.
+  branchCode     String?
   company        Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
   client         Client     @relation(fields: [clientId], references: [id], onDelete: Cascade)
   debt           ClientDebt @relation(fields: [debtId], references: [id], onDelete: Cascade)
@@ -1196,6 +1213,7 @@ model ClientDebtRepayment {
 
   @@unique([companyId, debtId, idempotencyKey])
   @@index([companyId, clientId])
+  @@index([companyId, createdAt])
   @@index([debtId])
   @@index([createdById])
 }
@@ -1801,4 +1819,52 @@ model TelegramLinkToken {
   createdAt DateTime  @default(now())
 
   @@index([token])
+}
+
+// Order to a supplier ("Заказы поставщикам"): planned positions for one shop.
+// Receiving (in parts if needed) posts the stock like a supplier invoice.
+model PurchaseOrder {
+  id               String              @id @default(uuid())
+  number           Int                 @unique @default(autoincrement())
+  companyId        String
+  supplierId       Int
+  shopId           String
+  status           PurchaseOrderStatus @default(DRAFT)
+  comment          String?
+  expectedAt       DateTime?           @db.Date
+  createdById      Int
+  sentAt           DateTime?
+  receivedAt       DateTime?
+  receivedById     Int?
+  cancelledAt      DateTime?
+  cancelledById    Int?
+  cancelReason     String?
+  company          Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  supplier         Supplier            @relation(fields: [supplierId], references: [id])
+  shop             Shop                @relation(fields: [shopId], references: [id])
+  items            PurchaseOrderItem[]
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@index([companyId, status, createdAt])
+  @@index([supplierId])
+  @@index([shopId])
+}
+
+model PurchaseOrderItem {
+  id               String        @id @default(uuid())
+  orderId          String
+  productId        Int
+  variantId        String?
+  name             String
+  sku              String?
+  barcode          String?
+  quantity         Decimal       @db.Decimal(14, 3)
+  receivedQuantity Decimal       @default(0) @db.Decimal(14, 3)
+  supplyPrice      Decimal       @default(0) @db.Decimal(14, 2)
+  order            PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product          Product       @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+  @@index([productId])
 }

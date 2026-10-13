@@ -4036,6 +4036,11 @@ export class ProductsService {
       shopIds,
       context,
     );
+    const stockStatusProductIds = await this.resolveStockStatusProductIds(
+      status,
+      resolvedShopBranchCodes ?? context.allowedBranchCodes,
+      context.companyId,
+    );
     const where = this.applyProductScope(
       this.buildProductWhere(
         search,
@@ -4062,6 +4067,7 @@ export class ProductsService {
         gender,
         collection,
         stockState,
+        stockStatusProductIds,
       ),
       context,
     );
@@ -4185,6 +4191,11 @@ export class ProductsService {
       shopIds,
       context,
     );
+    const stockStatusProductIds = await this.resolveStockStatusProductIds(
+      status,
+      resolvedShopBranchCodes ?? context.allowedBranchCodes,
+      context.companyId,
+    );
     const where = this.applyProductScope(
       this.buildProductWhere(
         search,
@@ -4211,6 +4222,7 @@ export class ProductsService {
         gender,
         collection,
         stockState,
+        stockStatusProductIds,
       ),
       context,
     );
@@ -4250,7 +4262,113 @@ export class ProductsService {
       },
     });
 
-    return this.buildProductsStatistics(productsForStatistics);
+    const result = this.buildProductsStatistics(productsForStatistics);
+    // Tab counters ("Все", "Неактивные", "Малый остаток", "Нулевой остаток"):
+    // product counts under the same filters, independent of the open tab.
+    const branchCodes = resolvedShopBranchCodes ?? context.allowedBranchCodes;
+    const countFor = async (tabStatus: string | undefined) => {
+      const ids = await this.resolveStockStatusProductIds(
+        tabStatus,
+        branchCodes,
+        context.companyId,
+      );
+      return this.prisma.product.count({
+        where: this.applyProductScope(
+          this.buildProductWhere(
+            search,
+            brandIds,
+            supplierIds,
+            tabStatus,
+            tabStatus ? undefined : false,
+            resolvedShopBranchCodes,
+            categoryIds,
+            sku,
+            measurementType,
+            supplyPriceFrom,
+            supplyPriceTo,
+            retailPriceFrom,
+            retailPriceTo,
+            wholesalePriceFrom,
+            wholesalePriceTo,
+            wholesalePrice,
+            freePrice,
+            colorIds,
+            sizeIds,
+            season,
+            seasonYear,
+            gender,
+            collection,
+            stockState,
+            ids,
+          ),
+          context,
+        ),
+      });
+    };
+    const [all, inactive, smallLeft, zeroLeft] = await Promise.all([
+      countFor(undefined),
+      countFor('inactive'),
+      countFor('small_left'),
+      countFor('zero_left'),
+    ]);
+    return {
+      ...result,
+      statistics_by_status: {
+        ...result.statistics_by_status,
+        status_counts: {
+          all,
+          active: all,
+          inactive,
+          small_left: smallLeft,
+          zero_left: zeroLeft,
+        },
+      },
+    };
+  }
+
+  /**
+   * Low/zero stock is decided by the real per-branch stock (ProductStock) in
+   * the branches being looked at — Product.quantity is only a legacy
+   * aggregate and drifts from it. Products with no stock rows fall back to it.
+   */
+  private async resolveStockStatusProductIds(
+    status: string | undefined,
+    branchCodes: string[],
+    companyId: string,
+  ): Promise<number[] | undefined> {
+    const normalized = this.normalizeCatalogStatus(status);
+    if (normalized !== 'small_left' && normalized !== 'zero_left') {
+      return undefined;
+    }
+    const codes = branchCodes.map((code) => String(code ?? '').trim()).filter(Boolean);
+    if (!codes.length) return [];
+    const threshold = await this.getLowStockThreshold();
+    const having =
+      normalized === 'zero_left'
+        ? Prisma.sql`<= 0`
+        : Prisma.sql`> 0 AND CASE WHEN COUNT(s."id") > 0 THEN SUM(s."quantity") ELSE p."quantity" END <= ${threshold}`;
+    const rows = await this.prisma.$queryRaw<{ id: number }[]>`
+      SELECT p."id"
+      FROM "Product" p
+      LEFT JOIN "ProductStock" s
+        ON s."productId" = p."id" AND s."branchCode" IN (${Prisma.join(codes)})
+      WHERE p."companyId" = ${companyId}
+      GROUP BY p."id", p."quantity"
+      HAVING CASE WHEN COUNT(s."id") > 0 THEN SUM(s."quantity") ELSE p."quantity" END ${having}
+    `;
+    return rows.map((row) => Number(row.id));
+  }
+
+  /** Same threshold as the low-stock notification (platform setting, default 5). */
+  private async getLowStockThreshold() {
+    const settings = await this.prisma.platformSetting.findUnique({
+      where: { id: 'default' },
+      select: { data: true },
+    });
+    const value = Number(
+      (settings?.data as any)?.notifications?.lowStockThresholdValue,
+    );
+    return Number.isFinite(value) && value > 0 ? value : 5;
   }
 
   async getCatalogFilterOptions(requestContext: CompanyRequestContext) {
@@ -8775,6 +8893,8 @@ export class ProductsService {
     gender?: string,
     collection?: string,
     stockState?: 'in_stock' | 'out_of_stock',
+    /** Products matching small_left/zero_left by their real branch stock. */
+    stockStatusProductIds?: number[],
   ): Prisma.ProductWhereInput | undefined {
     const and: Prisma.ProductWhereInput[] = [];
     const normalizedStatus = this.normalizeCatalogStatus(status);
@@ -8894,7 +9014,12 @@ export class ProductsService {
       });
     }
 
-    if (normalizedStatus === 'small_left') {
+    if (
+      (normalizedStatus === 'small_left' || normalizedStatus === 'zero_left') &&
+      stockStatusProductIds
+    ) {
+      and.push({ id: { in: stockStatusProductIds } });
+    } else if (normalizedStatus === 'small_left') {
       and.push(
         resolvedShopIds.length
           ? {
@@ -8909,7 +9034,7 @@ export class ProductsService {
       );
     }
 
-    if (normalizedStatus === 'zero_left') {
+    else if (normalizedStatus === 'zero_left') {
       and.push(
         resolvedShopIds.length
           ? {

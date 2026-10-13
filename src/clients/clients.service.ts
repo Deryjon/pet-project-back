@@ -19,6 +19,7 @@ import { resolveProductPhotoUrl } from '../common/product-photo.util';
 import { runSerializableTransaction } from '../common/serializable-transaction';
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { TelegramService } from '../telegram/telegram.service';
 
 type CompanyClientContext = CompanyRequestContext;
 type ClientListRecord = Prisma.ClientGetPayload<{
@@ -37,6 +38,7 @@ export class ClientsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly companySettingsService: CompanySettingsService,
+    private readonly telegramService: TelegramService,
   ) {}
 
   async findAll(
@@ -803,6 +805,23 @@ export class ClientsService {
     if (idempotencyKey && idempotencyKey.length > 128) {
       throw new BadRequestException('idempotency_key is too long');
     }
+    // The money goes into a specific till (cash, card, …): without it the
+    // repayment cannot show up in the sales summary per payment method.
+    const paymentMethodId = this.optionalBodyString(
+      body.payment_method ?? body.paymentMethod,
+    );
+    if (!paymentMethodId) {
+      throw new BadRequestException('Выберите способ оплаты');
+    }
+    const paymentType = await this.prisma.companyPaymentType.findFirst({
+      where: { id: paymentMethodId, companyId: context.companyId },
+      select: { id: true, name: true },
+    });
+    if (!paymentType) {
+      throw new BadRequestException('Способ оплаты не найден');
+    }
+    let repaymentBranchCode: string | null = context.currentBranchCode ?? null;
+    let createdRepayment = false;
     const debt = await runSerializableTransaction(this.prisma, async (tx) => {
       const currentDebt = await tx.clientDebt.findFirst({
         where: { id: debtId, companyId: context.companyId, clientId },
@@ -823,6 +842,13 @@ export class ClientsService {
       }
       if (currentDebt.remainingAmountUzs.lte(0)) {
         throw new BadRequestException('Debt is already repaid');
+      }
+      if (!repaymentBranchCode && currentDebt.shopId) {
+        const shop = await tx.shop.findUnique({
+          where: { id: currentDebt.shopId },
+          select: { branchCode: true },
+        });
+        repaymentBranchCode = shop?.branchCode ?? null;
       }
       if (amount.gt(currentDebt.remainingAmountUzs)) {
         throw new BadRequestException(
@@ -859,8 +885,12 @@ export class ClientsService {
           createdById: context.userId,
           amountUzs: amount,
           idempotencyKey: idempotencyKey ?? null,
+          paymentMethod: paymentType.id,
+          paymentMethodName: paymentType.name,
+          branchCode: repaymentBranchCode,
         },
       });
+      createdRepayment = true;
       const updatedDebt = {
         ...currentDebt,
         remainingAmountUzs: remaining,
@@ -881,6 +911,21 @@ export class ClientsService {
       });
       return updatedDebt;
     });
+
+    if (createdRepayment) {
+      void this.telegramService
+        .notifyDebtRepaid({
+          companyId: context.companyId,
+          branchCode: repaymentBranchCode,
+          clientId,
+          amount: Number(amount),
+          remaining: this.decimalToNumber(debt.remainingAmountUzs),
+          paymentMethodName: paymentType.name,
+          acceptedById: context.userId ?? null,
+          saleId: debt.saleId ?? null,
+        })
+        .catch(() => undefined);
+    }
 
     return {
       id: debt.id,

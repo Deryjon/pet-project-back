@@ -56,19 +56,6 @@ export class WarehouseController {
     return this.warehouseService.listRevaluations(query, requestContext);
   }
 
-  @Get('v1/purchase-orders')
-  @Permissions('all-orders')
-  getPurchaseOrders(
-    @Query() query: Record<string, string>,
-    @CurrentCompanyContext() requestContext: CompanyRequestContext,
-  ) {
-    return this.warehouseService.listMovements(
-      'PURCHASE',
-      query,
-      requestContext,
-    );
-  }
-
   @Get('v1/inventory-sessions')
   listInventorySessions(
     @Query() query: Record<string, string>,

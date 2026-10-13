@@ -211,6 +211,11 @@ export class SalesService {
       (safePage - 1) * safeLimit,
       safePage * safeLimit,
     );
+    const debtRepayments = await this.buildDebtRepaymentStats(
+      context,
+      dateFilter,
+      query,
+    );
 
     return {
       data: pagedSales.map((sale) =>
@@ -219,7 +224,10 @@ export class SalesService {
       total: filteredSales.length,
       page: safePage,
       limit: safeLimit,
-      stats: this.buildSaleListStats(filteredSales, paymentTypeLookup),
+      stats: {
+        ...this.buildSaleListStats(filteredSales, paymentTypeLookup),
+        ...debtRepayments,
+      },
       filter_options: this.buildSaleListFilterOptions(
         sales,
         shopLookup,
@@ -2283,6 +2291,34 @@ export class SalesService {
       this.optionalString(body.cancelReason) ??
       this.optionalString(body.reason);
     const saleId = this.parseEntityId(id, 'order id');
+    // A paid document is never cancelled silently: the reason goes into the
+    // audit log, the sale card and the Telegram notification.
+    const requireCancelReason = () => {
+      if (!cancelReason || cancelReason.trim().length < 3) {
+        throw new BadRequestException('Укажите причину отмены (не короче 3 символов)');
+      }
+      return cancelReason.trim();
+    };
+    const notifyCancelled = (
+      document: any,
+      kind: 'sale' | 'return' | 'exchange',
+      reason: string,
+    ) => {
+      void this.telegramService
+        .notifySaleCancelled({
+          companyId: document.companyId ?? null,
+          branchCode: document.branchCode ?? null,
+          number: String(document.number ?? document.id),
+          kind,
+          amount: this.getSalePayableAmount(document),
+          reason,
+          cancelledById: context?.userId ?? null,
+          sellerId: document.sellerId ?? document.userId ?? null,
+          clientName: document.clientName ?? null,
+          itemsCount: Array.isArray(document.items) ? document.items.length : 0,
+        })
+        .catch((err) => this.logger.error('Telegram notifySaleCancelled failed', err));
+    };
     const sale = (await this.prisma.sale.findUnique({
       where: { id: saleId },
       include: {
@@ -2315,6 +2351,7 @@ export class SalesService {
         throw new BadRequestException('Unsupported adjustment document type');
       }
 
+      const adjustmentReason = requireCancelReason();
       const adjustmentSales = await this.resolveAdjustmentDeletionGroup(sale);
       const adjustmentIds = adjustmentSales.map((adjustment) => adjustment.id);
 
@@ -2328,7 +2365,7 @@ export class SalesService {
             isDraft: false,
             cancelledAt: new Date(),
             cancelledById: context?.userId ?? null,
-            cancelReason: cancelReason ?? 'Cancelled adjustment document',
+            cancelReason: adjustmentReason,
           },
         });
         if (claimed.count !== adjustmentIds.length) {
@@ -2368,7 +2405,7 @@ export class SalesService {
           'sale.adjustment_cancelled',
           sale,
           {
-            reason: cancelReason ?? 'Cancelled adjustment document',
+            reason: adjustmentReason,
             cancelledIds: adjustmentSales.map((adjustment) => adjustment.id),
             adjustmentTypes: adjustmentSales.map((adjustment) => ({
               id: adjustment.id,
@@ -2395,6 +2432,14 @@ export class SalesService {
           sale.clientId,
         );
       });
+
+      for (const adjustment of adjustmentSales) {
+        notifyCancelled(
+          adjustment,
+          adjustment.saleType === 'exchange' ? 'exchange' : 'return',
+          adjustmentReason,
+        );
+      }
 
       return {
         success: true,
@@ -2438,6 +2483,8 @@ export class SalesService {
       };
     }
 
+    const saleCancelReason = requireCancelReason();
+
     // One serializable transaction: the claim makes a concurrent second cancel
     // fail before it could restore the stock again, and a failure in any step
     // leaves the sale paid with its stock untouched.
@@ -2454,7 +2501,7 @@ export class SalesService {
           isDraft: false,
           cancelledAt: new Date(),
           cancelledById: context?.userId ?? null,
-          cancelReason: cancelReason ?? 'Cancelled sale document',
+          cancelReason: saleCancelReason,
         },
       });
       if (claimed.count !== 1) {
@@ -2469,7 +2516,7 @@ export class SalesService {
         sale.clientId,
       );
       await this.createSaleAuditLog(tx, context, 'sale.cancelled', sale, {
-        reason: cancelReason ?? 'Cancelled sale document',
+        reason: saleCancelReason,
         total: this.getSalePayableAmount(sale),
         items: sale.items.map((item: any) => ({
           productId: item.productId,
@@ -2480,6 +2527,8 @@ export class SalesService {
         })),
       });
     });
+
+    notifyCancelled(sale, 'sale', saleCancelReason);
 
     return {
       success: true,
@@ -5571,6 +5620,110 @@ export class SalesService {
 
       return true;
     });
+  }
+
+  /**
+   * Client debt repayments taken in the same period and shops as the sales
+   * list: the till also holds this money, so the summary shows the total, the
+   * split per payment method and the individual repayments.
+   */
+  private async buildDebtRepaymentStats(
+    context: any,
+    dateFilter: Record<string, unknown>[],
+    query: Record<string, string | undefined>,
+  ) {
+    const empty = {
+      debt_repayment_amount: 0,
+      debt_repayments_by_method: {} as Record<string, number>,
+      debt_repayments: [] as unknown[],
+    };
+    if (!context?.companyId) return empty;
+    const scope = this.normalizeFilterValue(query.scope);
+    if (scope === 'deleted') return empty;
+
+    const allowedBranchCodes: string[] = (context.allowedBranchCodes ?? [])
+      .map((code: unknown) => String(code ?? '').trim())
+      .filter(Boolean);
+    const shopFilter = this.normalizeFilterValue(query.shop_id ?? query.shop);
+    const paymentFilter = this.normalizeFilterValue(
+      query.payment_method ?? query.payment,
+    );
+
+    const repayments = await this.prisma.clientDebtRepayment.findMany({
+      where: {
+        companyId: context.companyId,
+        ...(dateFilter[0] ?? {}),
+        // Repayments made before the shop was recorded have no branch.
+        OR: [{ branchCode: { in: allowedBranchCodes } }, { branchCode: null }],
+      },
+      include: {
+        client: { select: { firstName: true, lastName: true, phone: true } },
+        createdBy: { select: { firstName: true, lastName: true } },
+        debt: { select: { sale: { select: { number: true } } } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const shopLookup = await this.buildShopLookupByBranchCodes(
+      repayments
+        .map((repayment) => repayment.branchCode)
+        .filter((value): value is string => !!value),
+      context.companyId,
+    );
+
+    const filtered = repayments.filter((repayment) => {
+      const shopInfo = repayment.branchCode
+        ? this.resolveShopByBranchCode(repayment.branchCode, shopLookup)
+        : null;
+      if (shopFilter && shopFilter !== 'all') {
+        const shopValues = [repayment.branchCode, shopInfo?.shop_id, shopInfo?.shop_name].map(
+          (value) => this.normalizeFilterValue(value),
+        );
+        if (!shopValues.includes(shopFilter)) return false;
+      }
+      if (paymentFilter && paymentFilter !== 'all') {
+        const methodValues = [repayment.paymentMethod, repayment.paymentMethodName].map(
+          (value) => this.normalizeFilterValue(value),
+        );
+        if (!methodValues.includes(paymentFilter)) return false;
+      }
+      return true;
+    });
+
+    const byMethod: Record<string, number> = {};
+    let total = 0;
+    for (const repayment of filtered) {
+      const amount = Number(repayment.amountUzs);
+      total += amount;
+      const method = repayment.paymentMethodName || 'Не указан';
+      byMethod[method] = Number(((byMethod[method] ?? 0) + amount).toFixed(2));
+    }
+
+    return {
+      debt_repayment_amount: Number(total.toFixed(2)),
+      debt_repayments_by_method: byMethod,
+      debt_repayments: filtered.slice(0, 100).map((repayment) => {
+        const shopInfo = repayment.branchCode
+          ? this.resolveShopByBranchCode(repayment.branchCode, shopLookup)
+          : null;
+        const clientName = repayment.client
+          ? `${repayment.client.firstName ?? ''} ${repayment.client.lastName ?? ''}`.trim() ||
+            repayment.client.phone
+          : '';
+        return {
+          id: repayment.id,
+          created_at: repayment.createdAt.toISOString(),
+          amount: Number(repayment.amountUzs),
+          payment_method_id: repayment.paymentMethod,
+          payment_method_name: repayment.paymentMethodName ?? 'Не указан',
+          client_id: repayment.clientId,
+          client_name: clientName,
+          accepted_by: this.buildSaleUserName(repayment.createdBy),
+          shop_name: shopInfo?.shop_name ?? '',
+          sale_number: repayment.debt?.sale?.number ?? null,
+        };
+      }),
+    };
   }
 
   private buildSaleListStats(

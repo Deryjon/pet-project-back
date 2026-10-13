@@ -56,7 +56,9 @@ describe('SalesService money calculations', () => {
         currentBranchCode: 'B1',
       }),
     } as unknown as UsersService;
-    const telegramService = {} as TelegramService;
+    const telegramService = {
+      notifySaleCancelled: jest.fn().mockResolvedValue(undefined),
+    } as unknown as TelegramService;
 
     const service = new SalesService(
       prisma,
@@ -931,6 +933,60 @@ describe('SalesService money calculations', () => {
   });
 
   describe('removeOrder cancellation safety', () => {
+    it('refuses to cancel a paid sale without a reason and notifies with it', async () => {
+      const sale = {
+        id: 111,
+        number: 'S-111',
+        companyId: 'company-1',
+        branchCode: 'B1',
+        userId: 7,
+        isDraft: false,
+        saleType: 'sale',
+        status: 'paid',
+        payableTotal: 250,
+        items: [{ productId: 1, quantity: 1, salePrice: 250 }],
+      };
+      const saleUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
+      const { service, prisma } = createService({
+        sale: {
+          findUnique: jest.fn().mockResolvedValue(sale),
+          count: jest.fn().mockResolvedValue(0),
+          updateMany: saleUpdateMany,
+        },
+      });
+      (prisma as any).$transaction = jest.fn((fn: any) => fn(prisma));
+      (prisma as any).$queryRaw = jest.fn().mockResolvedValue([]);
+      for (const method of ['restoreSaleStock', 'undoSaleCashback', 'annulSaleDebts', 'refreshClientSalesAggregates', 'createSaleAuditLog']) {
+        jest.spyOn(service as any, method).mockResolvedValue(undefined);
+      }
+
+      for (const body of [{}, { cancel_reason: '  ' }, { cancel_reason: 'ab' }]) {
+        await expect(
+          service.removeOrder(String(sale.id), testContext(), body),
+        ).rejects.toThrow('Укажите причину отмены');
+      }
+      expect(saleUpdateMany).not.toHaveBeenCalled();
+
+      await service.removeOrder(String(sale.id), testContext(), {
+        cancel_reason: ' Клиент отказался ',
+      });
+      expect(saleUpdateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ cancelReason: 'Клиент отказался' }),
+        }),
+      );
+      const telegram = (service as any).telegramService;
+      expect(telegram.notifySaleCancelled).toHaveBeenCalledWith(
+        expect.objectContaining({
+          number: 'S-111',
+          kind: 'sale',
+          reason: 'Клиент отказался',
+          companyId: 'company-1',
+          branchCode: 'B1',
+        }),
+      );
+    });
+
     it('cancels a paid sale instead of physically deleting it', async () => {
       const sale = {
         id: 101,
@@ -964,7 +1020,7 @@ describe('SalesService money calculations', () => {
         .spyOn(service as any, 'refreshClientSalesAggregates')
         .mockResolvedValue(undefined);
 
-      await service.removeOrder(String(sale.id), testContext());
+      await service.removeOrder(String(sale.id), testContext(), { cancel_reason: 'Ошибка кассира' });
 
       expect((prisma.sale as any).count).toHaveBeenCalledWith({
         where: {
@@ -979,7 +1035,7 @@ describe('SalesService money calculations', () => {
           isDraft: false,
           cancelledAt: expect.any(Date),
           cancelledById: 7,
-          cancelReason: 'Cancelled sale document',
+          cancelReason: 'Ошибка кассира',
         }),
       });
       expect(saleDelete).not.toHaveBeenCalled();
@@ -1040,7 +1096,7 @@ describe('SalesService money calculations', () => {
         const { service, clientDebt, clientUpdate } = setup([
           { repaidAmountUzs: 0 },
         ]);
-        await service.removeOrder(String(sale.id), testContext());
+        await service.removeOrder(String(sale.id), testContext(), { cancel_reason: 'Ошибка кассира' });
         expect(clientDebt.deleteMany).toHaveBeenCalledWith({
           where: { id: { in: ['debt-0'] } },
         });
@@ -1054,7 +1110,7 @@ describe('SalesService money calculations', () => {
           { repaidAmountUzs: 50 },
         ]);
         await expect(
-          service.removeOrder(String(sale.id), testContext()),
+          service.removeOrder(String(sale.id), testContext(), { cancel_reason: 'Ошибка кассира' }),
         ).rejects.toThrow('уже есть оплаты');
         expect(clientDebt.deleteMany).not.toHaveBeenCalled();
         expect(restore).not.toHaveBeenCalled();
@@ -1088,7 +1144,7 @@ describe('SalesService money calculations', () => {
         .mockResolvedValue(undefined);
 
       await expect(
-        service.removeOrder(String(sale.id), testContext()),
+        service.removeOrder(String(sale.id), testContext(), { cancel_reason: 'Ошибка кассира' }),
       ).rejects.toThrow('Документ уже отменён');
       expect(restore).not.toHaveBeenCalled();
     });
@@ -1229,6 +1285,7 @@ describe('SalesService money calculations', () => {
       const result = await service.removeOrder(
         String(adjustment.id),
         testContext(),
+        { cancel_reason: 'Клиент передумал' },
       );
 
       expect(saleUpdateMany).toHaveBeenCalledWith({
@@ -1238,7 +1295,7 @@ describe('SalesService money calculations', () => {
           isDraft: false,
           cancelledAt: expect.any(Date),
           cancelledById: 7,
-          cancelReason: 'Cancelled adjustment document',
+          cancelReason: 'Клиент передумал',
         }),
       });
       expect(saleDeleteMany).not.toHaveBeenCalled();
@@ -1316,7 +1373,7 @@ describe('SalesService money calculations', () => {
         .mockResolvedValue(undefined);
 
       await expect(
-        service.removeOrder(String(sale.id), testContext()),
+        service.removeOrder(String(sale.id), testContext(), { cancel_reason: 'Ошибка кассира' }),
       ).rejects.toThrow('Order with returns or exchanges cannot be deleted');
       expect((prisma as any).$queryRaw).toHaveBeenCalled();
       expect(updateMany).not.toHaveBeenCalled();
