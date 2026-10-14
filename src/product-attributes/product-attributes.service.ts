@@ -20,8 +20,9 @@ type ValueInput = {
 };
 
 // Tenant-defined attributes. Colour and size definitions are mirrored from
-// ProductColor/ProductSize by DB triggers (legacySource), so their options
-// are edited through the product-colors / product-sizes endpoints only.
+// ProductColor/ProductSize by DB triggers (legacySource): editing one of their
+// values here goes through the colour/size dictionary, and the trigger keeps
+// the attribute option in step.
 @Injectable()
 export class ProductAttributesService {
   constructor(private readonly prisma: PrismaService) {}
@@ -60,7 +61,7 @@ export class ProductAttributesService {
     const code = this.optionalText(body.code) ?? this.codeFromName(name);
     if (!/^[a-z0-9_]{1,40}$/.test(code)) {
       throw new BadRequestException(
-        'code must contain only latin letters, digits and _',
+        'Код атрибута: только латинские буквы, цифры и _',
       );
     }
     const kind = this.parseKind(body.kind);
@@ -138,6 +139,16 @@ export class ProductAttributesService {
     body: Record<string, unknown>,
     requestContext: CompanyRequestContext,
   ) {
+    const legacy = await this.findLegacyDefinition(definitionId, requestContext);
+    if (legacy) {
+      const value = this.requiredName(body.value);
+      const meta = (body.meta ?? {}) as Record<string, unknown>;
+      const created =
+        legacy.legacySource === 'color'
+          ? await this.createColor({ name: value, hex: meta?.hex, sort_order: body.sort_order }, requestContext)
+          : await this.createSize({ name: value, kind: meta?.kind, sort_order: body.sort_order }, requestContext);
+      return this.legacyOption(legacy.legacySource!, created.id, value);
+    }
     const definition = await this.findEditableSelect(
       definitionId,
       requestContext,
@@ -165,6 +176,20 @@ export class ProductAttributesService {
     body: Record<string, unknown>,
     requestContext: CompanyRequestContext,
   ) {
+    const legacy = await this.findLegacyDefinition(definitionId, requestContext);
+    if (legacy) {
+      const option = await this.findOption(legacy.id, optionId);
+      const sourceId = option.legacyColorId ?? option.legacySizeId;
+      if (!sourceId) throw new NotFoundException('Значение не связано со справочником');
+      const patch = {
+        ...(body.value !== undefined ? { name: body.value } : {}),
+        ...(body.sort_order !== undefined ? { sort_order: body.sort_order } : {}),
+        ...(body.is_active !== undefined ? { is_active: body.is_active } : {}),
+      };
+      if (legacy.legacySource === 'color') await this.updateColor(sourceId, patch, requestContext);
+      else await this.updateSize(sourceId, patch, requestContext);
+      return this.toOption(await this.findOption(legacy.id, optionId));
+    }
     const definition = await this.findEditableSelect(
       definitionId,
       requestContext,
@@ -200,6 +225,13 @@ export class ProductAttributesService {
     optionId: string,
     requestContext: CompanyRequestContext,
   ) {
+    const legacy = await this.findLegacyDefinition(definitionId, requestContext);
+    if (legacy) {
+      const option = await this.findOption(legacy.id, optionId);
+      if (option.legacyColorId) return this.deleteColor(option.legacyColorId, requestContext);
+      if (option.legacySizeId) return this.deleteSize(option.legacySizeId, requestContext);
+      throw new NotFoundException('Значение не связано со справочником');
+    }
     const definition = await this.findEditableSelect(
       definitionId,
       requestContext,
@@ -432,6 +464,23 @@ export class ProductAttributesService {
     });
     if (!definition) throw new NotFoundException('Attribute not found');
     return definition;
+  }
+
+  /** The built-in colour / size attribute, or null for a tenant one. */
+  private async findLegacyDefinition(id: string, requestContext: CompanyRequestContext) {
+    const definition = await this.findDefinition(id, requestContext);
+    return definition.legacySource === 'color' || definition.legacySource === 'size' ? definition : null;
+  }
+
+  /** The option the DB trigger mirrored from a new colour / size. */
+  private async legacyOption(source: string, sourceId: string, value: string) {
+    const option = await this.prisma.attributeOption.findFirst({
+      where: source === 'color' ? { legacyColorId: sourceId } : { legacySizeId: sourceId },
+    });
+    // Without the trigger (e.g. not migrated yet) the dictionary row still exists.
+    return option
+      ? this.toOption(option)
+      : { id: sourceId, value, sort_order: 0, is_active: true, meta: null };
   }
 
   private async findEditableSelect(

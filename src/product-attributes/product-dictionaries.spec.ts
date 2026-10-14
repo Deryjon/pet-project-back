@@ -74,3 +74,65 @@ describe('Colour / size dictionaries', () => {
     expect(sizeCreate).toHaveBeenCalledWith({ data: expect.objectContaining({ kind: 'SHOES', code: 'S42', name: '42' }) });
   });
 });
+
+describe('Values of the built-in colour / size attributes', () => {
+  function setup(legacySource: string | null) {
+    const colorCreate = jest.fn(async ({ data }: any) => ({ id: 'color-1', createdAt: new Date(), ...data }));
+    const optionCreate = jest.fn(async ({ data }: any) => ({ id: 'opt-9', isActive: true, meta: null, ...data }));
+    const colorUpdate = jest.fn(async ({ data }: any) => ({ id: 'color-1', createdAt: new Date(), name: 'Красный', code: 'KRASNYY', ...data }));
+    const prisma: any = {
+      company: { findUnique: jest.fn(async () => ({ storeType: 'CLOTHING' })) },
+      attributeDefinition: {
+        findFirst: jest.fn(async () => ({ id: 'def-1', companyId: 'company-1', kind: 'SELECT', legacySource })),
+      },
+      attributeOption: {
+        // The DB trigger mirrors the new colour into an option.
+        findFirst: jest.fn(async () => ({
+          id: 'opt-1',
+          value: 'Бордовый',
+          sortOrder: 0,
+          isActive: true,
+          meta: null,
+          legacyColorId: 'color-1',
+          legacySizeId: null,
+        })),
+        create: optionCreate,
+      },
+      productColor: {
+        findFirst: jest.fn(async ({ where }: any) => (where.id ? { id: 'color-1', name: 'Красный', nameRu: 'Красный', code: 'KRASNYY' } : null)),
+        create: colorCreate,
+        update: colorUpdate,
+        delete: jest.fn(),
+      },
+      productVariant: { count: jest.fn(async () => 0) },
+    };
+    return { service: new ProductAttributesService(prisma), prisma, colorCreate, optionCreate, colorUpdate };
+  }
+
+  it('adding a value to "Цвет" creates the colour with an automatic code', async () => {
+    const { service, colorCreate, optionCreate } = setup('color');
+    const option = await service.createOption('def-1', { value: 'Бордовый' }, testContext());
+    expect(colorCreate).toHaveBeenCalledWith({ data: expect.objectContaining({ name: 'Бордовый', code: 'BORDOVYY' }) });
+    expect(optionCreate).not.toHaveBeenCalled();
+    expect(option).toEqual(expect.objectContaining({ id: 'opt-1', value: 'Бордовый' }));
+  });
+
+  it('switching a colour value off goes through the colour dictionary', async () => {
+    const { service, colorUpdate } = setup('color');
+    await service.updateOption('def-1', 'opt-1', { is_active: false }, testContext());
+    expect(colorUpdate).toHaveBeenCalledWith({ where: { id: 'color-1' }, data: { isActive: false } });
+  });
+
+  it('removing a colour value deletes the unused colour', async () => {
+    const { service, prisma } = setup('color');
+    await service.removeOption('def-1', 'opt-1', testContext());
+    expect(prisma.productColor.delete).toHaveBeenCalledWith({ where: { id: 'color-1' } });
+  });
+
+  it('a tenant attribute still stores its own options', async () => {
+    const { service, colorCreate, optionCreate } = setup(null);
+    await service.createOption('def-1', { value: 'Хлопок' }, testContext());
+    expect(optionCreate).toHaveBeenCalled();
+    expect(colorCreate).not.toHaveBeenCalled();
+  });
+});
