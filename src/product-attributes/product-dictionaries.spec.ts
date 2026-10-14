@@ -136,3 +136,36 @@ describe('Values of the built-in colour / size attributes', () => {
     expect(colorCreate).not.toHaveBeenCalled();
   });
 });
+
+describe('Dictionary deletion safety', () => {
+  const company = { findUnique: jest.fn(async () => ({ storeType: 'CLOTHING' })) };
+
+  it('does not delete a colour referenced by a product variant', async () => {
+    const prisma: any = {
+      company,
+      productColor: { findFirst: jest.fn(async () => ({ id: 'color-1' })), delete: jest.fn() },
+      productVariant: { count: jest.fn(async () => 1) },
+    };
+    await expect(new ProductAttributesService(prisma).deleteColor('color-1', testContext())).rejects.toThrow(
+      'Цвет используется в товарах',
+    );
+    expect(prisma.productColor.delete).not.toHaveBeenCalled();
+  });
+
+  it('does not delete a size referenced by a product variant', async () => {
+    const prisma: any = {
+      company,
+      productSize: { findFirst: jest.fn(async () => ({ id: 'size-1' })), delete: jest.fn() },
+      productVariant: { count: jest.fn(async () => 1) },
+    };
+    await expect(new ProductAttributesService(prisma).deleteSize('size-1', testContext())).rejects.toThrow();
+    expect(prisma.productSize.delete).not.toHaveBeenCalled();
+  });
+
+  it('a size created from settings gets the clothing/shoe type the grids filter by', async () => {
+    const create = jest.fn(async ({ data }: any) => ({ id: 's', createdAt: new Date(), ...data }));
+    const prisma: any = { company, productSize: { findFirst: jest.fn(async () => null), create } };
+    await new ProductAttributesService(prisma).createSize({ name_ru: '44', kind: 'SHOES', code: '' }, testContext());
+    expect(create).toHaveBeenCalledWith({ data: expect.objectContaining({ kind: 'SHOES', type: 'SHOES', code: 'S44' }) });
+  });
+});

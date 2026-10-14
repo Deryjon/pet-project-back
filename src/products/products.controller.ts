@@ -86,33 +86,8 @@ export class ProductsController {
     );
   }
 
-  @Post('product-colors')
-  @Permissions('catalog-operations')
-  createProductColor(
-    @Body() body: Record<string, unknown>,
-    @CurrentCompanyContext() requestContext: CompanyRequestContext,
-  ) {
-    return this.productsService.createProductColor(body, requestContext);
-  }
 
-  @Patch('product-colors/:id')
-  @Permissions('catalog-operations')
-  updateProductColor(
-    @Param('id') id: string,
-    @Body() body: Record<string, unknown>,
-    @CurrentCompanyContext() requestContext: CompanyRequestContext,
-  ) {
-    return this.productsService.updateProductColor(id, body, requestContext);
-  }
 
-  @Delete('product-colors/:id')
-  @Permissions('catalog-operations')
-  deleteProductColor(
-    @Param('id') id: string,
-    @CurrentCompanyContext() requestContext: CompanyRequestContext,
-  ) {
-    return this.productsService.deleteProductColor(id, requestContext);
-  }
 
   @Get('product-size-grids')
   @Permissions('catalog-operations')
@@ -135,33 +110,8 @@ export class ProductsController {
     });
   }
 
-  @Post('product-sizes')
-  @Permissions('catalog-operations')
-  createProductSize(
-    @Body() body: Record<string, unknown>,
-    @CurrentCompanyContext() requestContext: CompanyRequestContext,
-  ) {
-    return this.productsService.createProductSize(body, requestContext);
-  }
 
-  @Patch('product-sizes/:id')
-  @Permissions('catalog-operations')
-  updateProductSize(
-    @Param('id') id: string,
-    @Body() body: Record<string, unknown>,
-    @CurrentCompanyContext() requestContext: CompanyRequestContext,
-  ) {
-    return this.productsService.updateProductSize(id, body, requestContext);
-  }
 
-  @Delete('product-sizes/:id')
-  @Permissions('catalog-operations')
-  deleteProductSize(
-    @Param('id') id: string,
-    @CurrentCompanyContext() requestContext: CompanyRequestContext,
-  ) {
-    return this.productsService.deleteProductSize(id, requestContext);
-  }
 
   @Get('products/:id/variants')
   @Permissions('catalog-operations')

@@ -39,7 +39,11 @@ import {
 import { parseRequestNumber } from '../common/parse-number';
 import { normalizeSizeCode, resolveSize } from '../common/resolve-size';
 import { PrismaService } from '../prisma/prisma.service';
-import { DEFAULT_PRODUCT_COLORS, SIZE_GRID_PRESETS } from './size-grid-presets';
+import {
+  DEFAULT_PRODUCT_COLORS,
+  SIZE_GRID_PRESETS,
+  presetSizeCode,
+} from './size-grid-presets';
 
 const ALLOWED_PRODUCT_PHOTO_MIME_TYPES = new Set([
   'image/jpeg',
@@ -771,109 +775,9 @@ export class ProductsService {
     const { companyId } = await this.getRequestContext(requestContext);
     return this.prisma.productColor.findMany({
       where: { companyId, ...(includeInactive ? {} : { isActive: true }) },
-      orderBy: [{ name: 'asc' }],
+      // The settings page orders colours with up/down arrows (sortOrder).
+      orderBy: [{ isActive: 'desc' }, { sortOrder: 'asc' }, { name: 'asc' }],
     });
-  }
-
-  async createProductColor(
-    body: Record<string, unknown>,
-    requestContext: CompanyRequestContext,
-  ) {
-    const { companyId } = this.requireCatalogWriteContext(
-      await this.getRequestContext(requestContext),
-    );
-    const name = this.requireString(body.name, 'name');
-    const code = this.requireString(
-      body.code ?? body.name,
-      'code',
-    ).toUpperCase();
-    if (!/^[A-Z0-9.]{1,20}$/.test(code)) {
-      throw new BadRequestException(
-        'code must contain only latin letters, digits and .',
-      );
-    }
-    try {
-      return await this.prisma.productColor.create({
-        data: { companyId, name, code, hex: this.optionalString(body.hex) },
-      });
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        throw new ConflictException('Цвет с таким названием уже существует');
-      }
-      throw error;
-    }
-  }
-
-  async updateProductColor(
-    id: string,
-    body: Record<string, unknown>,
-    requestContext: CompanyRequestContext,
-  ) {
-    const { companyId } = this.requireCatalogWriteContext(
-      await this.getRequestContext(requestContext),
-    );
-    const current = await this.prisma.productColor.findFirst({
-      where: { id, companyId },
-    });
-    if (!current) throw new NotFoundException('Color not found');
-    const code =
-      body.code === undefined
-        ? undefined
-        : this.requireString(body.code, 'code').toUpperCase();
-    if (code && !/^[A-Z0-9.]{1,20}$/.test(code)) {
-      throw new BadRequestException(
-        'code must contain only latin letters, digits and .',
-      );
-    }
-    try {
-      return await this.prisma.productColor.update({
-        where: { id },
-        data: {
-          ...(body.name !== undefined
-            ? { name: this.requireString(body.name, 'name') }
-            : {}),
-          ...(body.code !== undefined ? { code } : {}),
-          ...(body.hex !== undefined
-            ? { hex: this.optionalString(body.hex) }
-            : {}),
-          ...(typeof body.is_active === 'boolean'
-            ? { isActive: body.is_active }
-            : {}),
-        },
-      });
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        throw new ConflictException('Цвет с таким названием уже существует');
-      }
-      throw error;
-    }
-  }
-
-  async deleteProductColor(id: string, requestContext: CompanyRequestContext) {
-    const { companyId } = this.requireCatalogWriteContext(
-      await this.getRequestContext(requestContext),
-    );
-    const current = await this.prisma.productColor.findFirst({
-      where: { id, companyId },
-    });
-    if (!current) throw new NotFoundException('Color not found');
-    if (
-      await this.prisma.productVariant.count({
-        where: { companyId, colorId: id },
-      })
-    ) {
-      throw new ConflictException(
-        'Нельзя удалить цвет, который используется в вариантах товара',
-      );
-    }
-    await this.prisma.productColor.delete({ where: { id } });
-    return { success: true };
   }
 
   /**
@@ -889,7 +793,13 @@ export class ProductsService {
         grid.sizes.map((name, index) => ({
           companyId,
           name,
+          nameRu: name,
+          nameUz: name,
+          // Without a code every size but the first collided on the unique
+          // (companyId, code) and was silently skipped.
+          code: presetSizeCode(grid.type, name),
           type: grid.type,
+          kind: grid.type === 'SHOES' ? ('SHOES' as const) : ('CLOTHING' as const),
           system: grid.system,
           sortOrder: index,
         })),
@@ -900,7 +810,15 @@ export class ProductsService {
       (await this.prisma.productColor.count({ where: { companyId } })) === 0
     ) {
       await this.prisma.productColor.createMany({
-        data: DEFAULT_PRODUCT_COLORS.map((color) => ({ companyId, ...color })),
+        data: DEFAULT_PRODUCT_COLORS.map((color, index) => ({
+          companyId,
+          name: color.name,
+          nameRu: color.name,
+          nameUz: color.name,
+          code: color.code,
+          hex: color.hex,
+          sortOrder: index,
+        })),
         skipDuplicates: true,
       });
     }
@@ -958,120 +876,6 @@ export class ProductsService {
       },
       orderBy: [{ type: 'asc' }, { sortOrder: 'asc' }, { name: 'asc' }],
     });
-  }
-
-  async createProductSize(
-    body: Record<string, unknown>,
-    requestContext: CompanyRequestContext,
-  ) {
-    const { companyId } = this.requireCatalogWriteContext(
-      await this.getRequestContext(requestContext),
-    );
-    const name = this.requireString(body.name, 'name');
-    const type = this.requireString(body.type, 'type').toUpperCase();
-    const system = this.optionalString(body.system)?.toUpperCase();
-    if (!['CLOTHING', 'SHOES', 'OTHER'].includes(type)) {
-      throw new BadRequestException('type must be CLOTHING, SHOES or OTHER');
-    }
-    if (system && !['EU', 'US', 'UK', 'OTHER'].includes(system)) {
-      throw new BadRequestException('system must be EU, US, UK or OTHER');
-    }
-    try {
-      return await this.prisma.productSize.create({
-        data: {
-          companyId,
-          name,
-          type: type as 'CLOTHING' | 'SHOES' | 'OTHER',
-          system: system as 'EU' | 'US' | 'UK' | 'OTHER' | undefined,
-          sortOrder: this.toInt(body.sort_order) ?? 0,
-        },
-      });
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        throw new ConflictException('Такой размер уже существует');
-      }
-      throw error;
-    }
-  }
-
-  async updateProductSize(
-    id: string,
-    body: Record<string, unknown>,
-    requestContext: CompanyRequestContext,
-  ) {
-    const { companyId } = this.requireCatalogWriteContext(
-      await this.getRequestContext(requestContext),
-    );
-    const current = await this.prisma.productSize.findFirst({
-      where: { id, companyId },
-    });
-    if (!current) throw new NotFoundException('Size not found');
-    const type =
-      body.type === undefined
-        ? undefined
-        : this.requireString(body.type, 'type').toUpperCase();
-    const system =
-      body.system === null
-        ? null
-        : this.optionalString(body.system)?.toUpperCase();
-    if (type && !['CLOTHING', 'SHOES', 'OTHER'].includes(type)) {
-      throw new BadRequestException('type must be CLOTHING, SHOES or OTHER');
-    }
-    if (system && !['EU', 'US', 'UK', 'OTHER'].includes(system)) {
-      throw new BadRequestException('system must be EU, US, UK or OTHER');
-    }
-    try {
-      return await this.prisma.productSize.update({
-        where: { id },
-        data: {
-          ...(body.name !== undefined
-            ? { name: this.requireString(body.name, 'name') }
-            : {}),
-          ...(type ? { type: type as 'CLOTHING' | 'SHOES' | 'OTHER' } : {}),
-          ...(body.system !== undefined
-            ? { system: system as 'EU' | 'US' | 'UK' | 'OTHER' | null }
-            : {}),
-          ...(body.sort_order !== undefined
-            ? { sortOrder: this.toInt(body.sort_order) ?? 0 }
-            : {}),
-          ...(typeof body.is_active === 'boolean'
-            ? { isActive: body.is_active }
-            : {}),
-        },
-      });
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        throw new ConflictException('Такой размер уже существует');
-      }
-      throw error;
-    }
-  }
-
-  async deleteProductSize(id: string, requestContext: CompanyRequestContext) {
-    const { companyId } = this.requireCatalogWriteContext(
-      await this.getRequestContext(requestContext),
-    );
-    const current = await this.prisma.productSize.findFirst({
-      where: { id, companyId },
-    });
-    if (!current) throw new NotFoundException('Size not found');
-    if (
-      await this.prisma.productVariant.count({
-        where: { companyId, sizeId: id },
-      })
-    ) {
-      throw new ConflictException(
-        'Нельзя удалить размер, который используется в вариантах товара',
-      );
-    }
-    await this.prisma.productSize.delete({ where: { id } });
-    return { success: true };
   }
 
   async listProductVariants(

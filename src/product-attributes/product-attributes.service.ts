@@ -690,6 +690,15 @@ export class ProductAttributesService {
     return error;
   }
 
+  private sizeSystem(value: unknown): 'EU' | 'US' | 'UK' | 'OTHER' | undefined {
+    const system = String(value ?? '').trim().toUpperCase();
+    if (!system) return undefined;
+    if (!['EU', 'US', 'UK', 'OTHER'].includes(system)) {
+      throw new BadRequestException('Система размеров: EU, US, UK или OTHER');
+    }
+    return system as 'EU' | 'US' | 'UK' | 'OTHER';
+  }
+
   private hexColor(value: unknown) {
     const hex = String(value ?? '').trim();
     if (!hex) return undefined;
@@ -853,7 +862,9 @@ export class ProductAttributesService {
           nameRu,
           nameUz,
           kind,
-          type: 'OTHER',
+          // The size grids and the GET filter work by type.
+          type: kind,
+          system: this.sizeSystem(body.system),
           sortOrder: this.optionalInt(body.sort_order) ?? 100,
           isActive: body.is_active !== false,
         },
@@ -885,6 +896,12 @@ export class ProductAttributesService {
       data.nameUz = this.optionalText(body.name_uz) || (data.nameRu as string) || size.nameRu;
     if (body.code !== undefined && String(body.code).trim())
       data.code = this.dictionaryCode(body.code);
+    if (body.kind !== undefined || body.type !== undefined) {
+      const kind = (body.kind ?? body.type) === 'SHOES' ? 'SHOES' : 'CLOTHING';
+      data.kind = kind;
+      data.type = kind;
+    }
+    if (body.system !== undefined) data.system = this.sizeSystem(body.system) ?? null;
     if (body.sort_order !== undefined)
       data.sortOrder = this.optionalInt(body.sort_order) ?? 0;
     if (body.is_active !== undefined) data.isActive = body.is_active === true;

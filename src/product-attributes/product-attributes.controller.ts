@@ -121,10 +121,6 @@ export class ProductAttributesController {
     return this.attributes.setProductValues(id, body, requestContext);
   }
 
-  @Get('product-colors')
-  listColors(@CurrentCompanyContext() requestContext: CompanyRequestContext) {
-    return this.attributes.listColors(requestContext);
-  }
 
   @Post('product-colors')
   createColor(
@@ -151,10 +147,6 @@ export class ProductAttributesController {
     return this.attributes.deleteColor(id, requestContext);
   }
 
-  @Get('product-sizes')
-  listSizes(@CurrentCompanyContext() requestContext: CompanyRequestContext) {
-    return this.attributes.listSizes(requestContext);
-  }
 
   @Post('product-sizes')
   createSize(
