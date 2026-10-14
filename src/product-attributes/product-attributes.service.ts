@@ -533,6 +533,13 @@ export class ProductAttributesService {
     return code || `attr_${Date.now().toString(36)}`;
   }
 
+  private requiredName(value: unknown) {
+    const name = this.optionalText(value);
+    if (!name) throw new BadRequestException('Укажите название');
+    if (name.length > 60) throw new BadRequestException('Название не длиннее 60 символов');
+    return name;
+  }
+
   private requireText(value: unknown, field: string) {
     const text = this.optionalText(value);
     if (!text) throw new BadRequestException(`${field} is required`);
@@ -576,14 +583,71 @@ export class ProductAttributesService {
     return { companyId, storeType: company.storeType };
   }
 
-  private dictionaryCode(value: unknown, field = 'code') {
-    const code = this.requireText(value, field).toUpperCase();
+  private dictionaryCode(value: unknown) {
+    const code = String(value ?? '').trim().toUpperCase();
     if (!/^[A-Z0-9.]{1,20}$/.test(code)) {
       throw new BadRequestException(
-        `${field} must contain only latin letters, digits and .`,
+        'Код может содержать только латинские буквы, цифры и точку (до 20 символов)',
       );
     }
     return code;
+  }
+
+  /**
+   * The code the user typed, or one built from the name ("Тёмно-синий" →
+   * "TEMNOSINIY", "42" → "42") and made unique with a number. Quick adds from
+   * the product form send no code at all.
+   */
+  private async resolveDictionaryCode(
+    value: unknown,
+    name: string,
+    taken: (code: string) => Promise<boolean>,
+  ) {
+    const typed = String(value ?? '').trim();
+    if (typed && !typed.startsWith('#')) return this.dictionaryCode(typed);
+    const map: Record<string, string> = {
+      а: 'A', б: 'B', в: 'V', г: 'G', д: 'D', е: 'E', ё: 'E', ж: 'ZH', з: 'Z', и: 'I',
+      й: 'Y', к: 'K', л: 'L', м: 'M', н: 'N', о: 'O', п: 'P', р: 'R', с: 'S', т: 'T',
+      у: 'U', ф: 'F', х: 'H', ц: 'TS', ч: 'CH', ш: 'SH', щ: 'SCH', ы: 'Y', э: 'E',
+      ю: 'YU', я: 'YA', ў: 'O', қ: 'Q', ғ: 'G', ҳ: 'H',
+    };
+    const base =
+      [...name.toLowerCase()]
+        .map((char) => map[char] ?? char)
+        .join('')
+        .toUpperCase()
+        .replace(/[^A-Z0-9.]/g, '')
+        .slice(0, 16) || 'X';
+    for (let index = 1; index < 1000; index += 1) {
+      const candidate = index === 1 ? base : `${base}.${index}`;
+      if (!(await taken(candidate))) return candidate;
+    }
+    throw new ConflictException('Не удалось подобрать код — укажите его вручную');
+  }
+
+  /** P2002 on a dictionary: say which field collides, the name or the code. */
+  private dictionaryConflict(error: unknown, what: string, name: string, code: string) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === 'P2002'
+    ) {
+      const target = String((error.meta as any)?.target ?? '');
+      return new ConflictException(
+        target.includes('code')
+          ? `${what} с кодом ${code} уже есть`
+          : `${what} «${name}» уже есть`,
+      );
+    }
+    return error;
+  }
+
+  private hexColor(value: unknown) {
+    const hex = String(value ?? '').trim();
+    if (!hex) return undefined;
+    if (!/^#[0-9a-f]{6}$/i.test(hex)) {
+      throw new BadRequestException('Цвет должен быть в формате #RRGGBB');
+    }
+    return hex.toUpperCase();
   }
 
   async listColors(requestContext: CompanyRequestContext) {
@@ -610,12 +674,13 @@ export class ProductAttributesService {
     requestContext: CompanyRequestContext,
   ) {
     const { companyId } = await this.requireApparelCompany(requestContext);
-    const nameRu = this.requireText(body.name_ru ?? body.name, 'name_ru');
-    const nameUz = this.requireText(
-      body.name_uz ?? body.name ?? nameRu,
-      'name_uz',
+    const nameRu = this.requiredName(body.name_ru ?? body.name);
+    const nameUz = this.optionalText(body.name_uz) || nameRu;
+    const code = await this.resolveDictionaryCode(body.code, nameRu, async (candidate) =>
+      Boolean(await this.prisma.productColor.findFirst({ where: { companyId, code: candidate }, select: { id: true } })),
     );
-    const code = this.dictionaryCode(body.code);
+    // Older clients sent the colour picker value as "code".
+    const hex = this.hexColor(body.hex ?? (String(body.code ?? '').startsWith('#') ? body.code : undefined));
 
     try {
       const created = await this.prisma.productColor.create({
@@ -625,14 +690,14 @@ export class ProductAttributesService {
           name: nameRu,
           nameRu,
           nameUz,
-          hex: this.optionalText(body.hex),
+          hex: hex ?? null,
           sortOrder: this.optionalInt(body.sort_order) ?? 100,
           isActive: body.is_active !== false,
         },
       });
       return this.toColor(created);
     } catch (error) {
-      throw this.uniqueConflict(error, `Цвет с кодом ${code} уже существует`);
+      throw this.dictionaryConflict(error, 'Цвет', nameRu, code);
     }
   }
 
@@ -649,22 +714,28 @@ export class ProductAttributesService {
 
     const data: Prisma.ProductColorUpdateInput = {};
     if (body.name !== undefined || body.name_ru !== undefined) {
-      const nameRu = this.requireText(body.name_ru ?? body.name, 'name_ru');
+      const nameRu = this.requiredName(body.name_ru ?? body.name);
       data.name = nameRu;
       data.nameRu = nameRu;
     }
     if (body.name_uz !== undefined)
-      data.nameUz = this.requireText(body.name_uz, 'name_uz');
-    if (body.hex !== undefined) data.hex = this.optionalText(body.hex);
+      data.nameUz = this.optionalText(body.name_uz) || (data.nameRu as string) || color.nameRu;
+    if (body.code !== undefined && String(body.code).trim())
+      data.code = this.dictionaryCode(body.code);
+    if (body.hex !== undefined) data.hex = this.hexColor(body.hex) ?? null;
     if (body.sort_order !== undefined)
       data.sortOrder = this.optionalInt(body.sort_order) ?? 0;
     if (body.is_active !== undefined) data.isActive = body.is_active === true;
 
-    const updated = await this.prisma.productColor.update({
-      where: { id },
-      data,
-    });
-    return this.toColor(updated);
+    try {
+      const updated = await this.prisma.productColor.update({
+        where: { id },
+        data,
+      });
+      return this.toColor(updated);
+    } catch (error) {
+      throw this.dictionaryConflict(error, 'Цвет', String(data.nameRu ?? color.name), String(data.code ?? color.code));
+    }
   }
 
   async deleteColor(id: string, requestContext: CompanyRequestContext) {
@@ -712,14 +783,17 @@ export class ProductAttributesService {
     requestContext: CompanyRequestContext,
   ) {
     const { companyId } = await this.requireApparelCompany(requestContext);
-    const nameRu = this.requireText(body.name_ru ?? body.name, 'name_ru');
-    const nameUz = this.requireText(
-      body.name_uz ?? body.name ?? nameRu,
-      'name_uz',
+    const nameRu = this.requiredName(body.name_ru ?? body.name);
+    const nameUz = this.optionalText(body.name_uz) || nameRu;
+    // The product form's quick add sends the grid as "type".
+    const kind = (body.kind ?? body.type) === 'SHOES' ? 'SHOES' : 'CLOTHING';
+    const code = await this.resolveDictionaryCode(
+      body.code,
+      // Shoe 42 and clothing 42 share the company's code space.
+      kind === 'SHOES' && /^\d/.test(nameRu) ? `S${nameRu}` : nameRu,
+      async (candidate) =>
+        Boolean(await this.prisma.productSize.findFirst({ where: { companyId, code: candidate }, select: { id: true } })),
     );
-    const code = this.dictionaryCode(body.code);
-
-    const kind = body.kind === 'SHOES' ? 'SHOES' : 'CLOTHING';
 
     try {
       const created = await this.prisma.productSize.create({
@@ -737,7 +811,7 @@ export class ProductAttributesService {
       });
       return this.toSize(created);
     } catch (error) {
-      throw this.uniqueConflict(error, `Размер с кодом ${code} уже существует`);
+      throw this.dictionaryConflict(error, 'Размер', nameRu, code);
     }
   }
 
@@ -754,21 +828,27 @@ export class ProductAttributesService {
 
     const data: Prisma.ProductSizeUpdateInput = {};
     if (body.name !== undefined || body.name_ru !== undefined) {
-      const nameRu = this.requireText(body.name_ru ?? body.name, 'name_ru');
+      const nameRu = this.requiredName(body.name_ru ?? body.name);
       data.name = nameRu;
       data.nameRu = nameRu;
     }
     if (body.name_uz !== undefined)
-      data.nameUz = this.requireText(body.name_uz, 'name_uz');
+      data.nameUz = this.optionalText(body.name_uz) || (data.nameRu as string) || size.nameRu;
+    if (body.code !== undefined && String(body.code).trim())
+      data.code = this.dictionaryCode(body.code);
     if (body.sort_order !== undefined)
       data.sortOrder = this.optionalInt(body.sort_order) ?? 0;
     if (body.is_active !== undefined) data.isActive = body.is_active === true;
 
-    const updated = await this.prisma.productSize.update({
-      where: { id },
-      data,
-    });
-    return this.toSize(updated);
+    try {
+      const updated = await this.prisma.productSize.update({
+        where: { id },
+        data,
+      });
+      return this.toSize(updated);
+    } catch (error) {
+      throw this.dictionaryConflict(error, 'Размер', String(data.nameRu ?? size.name), String(data.code ?? size.code));
+    }
   }
 
   async deleteSize(id: string, requestContext: CompanyRequestContext) {
@@ -832,21 +912,26 @@ export class ProductAttributesService {
     requestContext: CompanyRequestContext,
   ) {
     const { companyId } = await this.requireApparelCompany(requestContext);
-    const code = this.dictionaryCode(body.code);
+    const nameRu = this.requiredName(body.name_ru ?? body.name);
+    const code = await this.resolveDictionaryCode(body.code, nameRu, async (candidate) =>
+      Boolean(
+        await this.prisma.productSeasonOption.findFirst({ where: { companyId, code: candidate }, select: { id: true } }),
+      ),
+    );
     try {
       const row = await this.prisma.productSeasonOption.create({
         data: {
           companyId,
           code,
-          nameRu: this.requireText(body.name_ru ?? body.name, 'name_ru'),
-          nameUz: this.requireText(body.name_uz ?? body.name, 'name_uz'),
+          nameRu,
+          nameUz: this.optionalText(body.name_uz) || nameRu,
           sortOrder: this.optionalInt(body.sort_order) ?? 100,
           isActive: body.is_active !== false,
         },
       });
       return this.toSeason(row);
     } catch (error) {
-      throw this.uniqueConflict(error, `Сезон с кодом ${code} уже существует`);
+      throw this.dictionaryConflict(error, 'Сезон', nameRu, code);
     }
   }
 
@@ -862,9 +947,9 @@ export class ProductAttributesService {
     if (!current) throw new NotFoundException('Season not found');
     const data: Prisma.ProductSeasonOptionUpdateInput = {};
     if (body.name_ru !== undefined || body.name !== undefined)
-      data.nameRu = this.requireText(body.name_ru ?? body.name, 'name_ru');
+      data.nameRu = this.requiredName(body.name_ru ?? body.name);
     if (body.name_uz !== undefined)
-      data.nameUz = this.requireText(body.name_uz, 'name_uz');
+      data.nameUz = this.optionalText(body.name_uz) || (data.nameRu as string) || current.nameRu;
     if (body.sort_order !== undefined)
       data.sortOrder = this.optionalInt(body.sort_order) ?? 0;
     if (body.is_active !== undefined) data.isActive = body.is_active === true;
