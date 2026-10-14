@@ -344,7 +344,24 @@ describe('ProductsService import colours from the catalog', () => {
         'company-1',
         row({ colorCode: 'BLK', sizeName: 'M', seasonCode: 'UNKNOWN' }),
       ),
-    ).rejects.toThrow('Неизвестный код сезона: UNKNOWN');
+    ).rejects.toThrow('Сезон «UNKNOWN» не найден');
+  });
+
+  it('finds a dictionary season written by its name and links it by code', async () => {
+    const service = buildService({});
+    const findFirst = jest.fn().mockResolvedValue({ id: 'season-1', code: 'LETO2026' });
+    service.prisma.productSeasonOption = { findFirst };
+    const input = row({ colorCode: 'BLK', sizeName: 'M', seasonCode: 'Лето 2026' });
+
+    await expect(service.validateImportReferences('company-1', input)).resolves.toEqual([]);
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: expect.arrayContaining([{ nameRu: { equals: 'Лето 2026', mode: 'insensitive' } }]),
+        }),
+      }),
+    );
+    expect((input as { seasonCode?: string }).seasonCode).toBe('LETO2026');
   });
 
   it('still requires a colour for a new product', async () => {
@@ -487,6 +504,10 @@ describe('Excel import variant grouping', () => {
     ['Зима', 'AW'],
     ['Summer', 'SS'],
     ['Лето', 'SS'],
+    ['LETO2026', 'SS'],
+    ['Осень-зима', 'AW'],
+    ['Демисезон', 'NO_SEASON'],
+    ['SPECIAL', 'NO_SEASON'],
   ])('maps season %s to %s', (input, expected) => {
     const service = new ProductsService({} as any, {} as any);
     expect((service as any).resolveProductSeason(input)).toBe(expected);

@@ -11634,21 +11634,44 @@ export class ProductsService {
     return undefined;
   }
 
+  /**
+   * The legacy SS/AW field from whatever the user wrote: an enum value, a
+   * season word in Russian/Uzbek/English or a dictionary code that contains
+   * one ("LETO2026", "WINTER25"). Anything else is "no season" — the season
+   * itself is linked from the dictionary, so this must never fail an import.
+   */
   private resolveProductSeason(value: unknown): ProductSeason {
-    const normalized = this.optionalString(value)?.toUpperCase();
-    if (
-      !normalized ||
-      normalized === ProductSeason.NO_SEASON ||
-      normalized === 'ALL' ||
-      normalized === 'DEMI'
-    ) {
-      return ProductSeason.NO_SEASON;
-    }
-    if (normalized === ProductSeason.SS || normalized === 'SUMMER')
-      return ProductSeason.SS;
-    if (normalized === ProductSeason.AW || normalized === 'WINTER')
-      return ProductSeason.AW;
-    throw new BadRequestException('Неизвестный код сезона');
+    const normalized = (this.optionalString(value) ?? '').toUpperCase();
+    if (!normalized) return ProductSeason.NO_SEASON;
+    if (normalized === ProductSeason.SS) return ProductSeason.SS;
+    if (normalized === ProductSeason.AW) return ProductSeason.AW;
+    if (/SUMMER|SPRING|ЛЕТ|ВЕСН|YOZ|BAHOR|LETO|VESNA/.test(normalized)) return ProductSeason.SS;
+    if (/WINTER|AUTUMN|FALL|ЗИМ|ОСЕН|QISH|KUZ|ZIMA|OSEN/.test(normalized)) return ProductSeason.AW;
+    return ProductSeason.NO_SEASON;
+  }
+
+  /** A dictionary season written in the file / form by its code or its name. */
+  private async findSeasonOption(
+    client: Prisma.TransactionClient | PrismaService,
+    companyId: string,
+    value: string | null | undefined,
+  ) {
+    const text = value?.trim();
+    if (!text) return null;
+    const code = text.toUpperCase();
+    const aliases = code === 'SS' ? ['SUMMER', 'SS'] : code === 'AW' ? ['WINTER', 'AW'] : [code];
+    return client.productSeasonOption.findFirst({
+      where: {
+        companyId,
+        isActive: true,
+        OR: [
+          { code: { in: aliases } },
+          { nameRu: { equals: text, mode: 'insensitive' } },
+          { nameUz: { equals: text, mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true, code: true },
+    });
   }
 
   /**
@@ -11661,20 +11684,13 @@ export class ProductsService {
     companyId: string,
     code?: string | null,
   ) {
-    const normalized = code?.trim().toUpperCase();
-    if (!normalized) return undefined;
-    const season = await tx.productSeasonOption.findFirst({
-      where: { companyId, code: normalized, isActive: true },
-      select: { id: true },
-    });
+    const season = await this.findSeasonOption(tx, companyId, code);
     return season ? { connect: { id: season.id } } : undefined;
   }
 
   private async resolveSeasonOptionRelation(companyId: string, value: unknown) {
-    let code = this.optionalString(value)?.toUpperCase();
-    if (!code || code === 'NO_SEASON') return undefined;
-    if (code === 'SS') code = 'SUMMER';
-    if (code === 'AW') code = 'WINTER';
+    const code = this.optionalString(value);
+    if (!code || ['NO_SEASON', 'ALL', 'DEMI'].includes(code.toUpperCase())) return undefined;
     const company = await this.prisma.company.findUnique({
       where: { id: companyId },
       select: { storeType: true },
@@ -11684,23 +11700,17 @@ export class ProductsService {
       !['CLOTHING', 'SHOES', 'CLOTHING_SHOES'].includes(company.storeType)
     )
       return undefined;
-    const season = await this.prisma.productSeasonOption.findUnique({
-      where: { companyId_code: { companyId, code } },
-      select: { id: true, isActive: true },
-    });
-    if (!season?.isActive)
-      throw new BadRequestException(`Неизвестный код сезона: ${code}`);
-    return { connect: { id: season.id } };
+    const season = await this.findSeasonOption(this.prisma, companyId, code);
+    if (season) return { connect: { id: season.id } };
+    // The bare SS/AW markers without a matching dictionary season are fine.
+    if (['SS', 'AW'].includes(code.toUpperCase())) return undefined;
+    throw new BadRequestException(
+      `Сезон «${code}» не найден — добавьте его в «Цвета, размеры, сезоны»`,
+    );
   }
 
   private resolveImportLegacySeason(value: unknown): ProductSeason {
-    const code = this.optionalString(value)?.toUpperCase();
-    if (!code || code === 'ALL' || code === 'DEMI' || code === 'NO_SEASON') {
-      return ProductSeason.NO_SEASON;
-    }
-    if (code === 'SUMMER' || code === ProductSeason.SS) return ProductSeason.SS;
-    if (code === 'WINTER' || code === ProductSeason.AW) return ProductSeason.AW;
-    throw new BadRequestException('Неизвестный код сезона');
+    return this.resolveProductSeason(value);
   }
 
   private async validateImportReferences(
@@ -11778,12 +11788,13 @@ export class ProductsService {
       !seasonCode ||
       ['NO_SEASON', 'ALL', 'DEMI', 'SS', 'AW'].includes(seasonCode);
     if (!matchedVariant && !isSeasonMarker) {
-      const season = await this.prisma.productSeasonOption.findFirst({
-        where: { companyId, code: seasonCode, isActive: true },
-        select: { id: true },
-      });
+      const season = await this.findSeasonOption(this.prisma, companyId, row.seasonCode);
       if (!season)
-        throw new BadRequestException(`Неизвестный код сезона: ${seasonCode}`);
+        throw new BadRequestException(
+          `Сезон «${row.seasonCode?.trim()}» не найден: укажите код или название сезона из «Цвета, размеры, сезоны»`,
+        );
+      // Later steps link the season by its code.
+      row.seasonCode = season.code;
     }
     return warnings;
   }
