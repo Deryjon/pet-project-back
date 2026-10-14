@@ -169,3 +169,25 @@ describe('Dictionary deletion safety', () => {
     expect(create).toHaveBeenCalledWith({ data: expect.objectContaining({ kind: 'SHOES', type: 'SHOES', code: 'S44' }) });
   });
 });
+
+describe('Seasons and settings-form sizes', () => {
+  const company = { findUnique: jest.fn(async () => ({ storeType: 'CLOTHING' })) };
+
+  it('creates a season without a code', async () => {
+    const create = jest.fn(async ({ data }: any) => ({ id: 'se-1', isActive: true, sortOrder: 1, ...data }));
+    const prisma: any = { company, productSeasonOption: { findFirst: jest.fn(async () => null), create } };
+    const season = await new ProductAttributesService(prisma).createSeason({ name_ru: 'Лето 2026', sort_order: 1 }, testContext());
+    expect(create).toHaveBeenCalledWith({ data: expect.objectContaining({ code: 'LETO2026', nameRu: 'Лето 2026', nameUz: 'Лето 2026' }) });
+    expect(season.code).toBe('LETO2026');
+  });
+
+  it('creates a clothing size from the settings form payload', async () => {
+    const create = jest.fn(async ({ data }: any) => ({ id: 's', createdAt: new Date(), ...data }));
+    const prisma: any = { company, productSize: { findFirst: jest.fn(async () => null), create } };
+    await new ProductAttributesService(prisma).createSize(
+      { name_ru: 'XL', name_uz: 'XL', sort_order: 5, is_active: true, kind: 'CLOTHING' },
+      testContext(),
+    );
+    expect(create).toHaveBeenCalledWith({ data: expect.objectContaining({ code: 'XL', type: 'CLOTHING', kind: 'CLOTHING', sortOrder: 5 }) });
+  });
+});
