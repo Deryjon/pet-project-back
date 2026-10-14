@@ -1,8 +1,10 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
+  OnApplicationBootstrap,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { UAParser } from 'ua-parser-js';
@@ -29,13 +31,136 @@ function randomToken(length = 8): string {
 }
 
 @Injectable()
-export class TelegramService {
+export class TelegramService implements OnApplicationBootstrap {
   private readonly logger = new Logger(TelegramService.name);
   private get token() {
-    return process.env.TELEGRAM_BOT_TOKEN ?? '';
+    return (process.env.TELEGRAM_BOT_TOKEN ?? '').trim();
   }
   private get botUsername() {
-    return process.env.TELEGRAM_BOT_USERNAME ?? '';
+    // "@konkurent_bot" and "https://t.me/konkurent_bot" both mean konkurent_bot.
+    return (process.env.TELEGRAM_BOT_USERNAME ?? '')
+      .trim()
+      .replace(/^https?:\/\/t\.me\//i, '')
+      .replace(/^@/, '');
+  }
+  private get webhookSecret() {
+    return (process.env.TELEGRAM_WEBHOOK_SECRET ?? '').trim();
+  }
+  /** Public URL Telegram must call; the API runs under the global /api prefix. */
+  get expectedWebhookUrl() {
+    const base = (process.env.TELEGRAM_WEBHOOK_URL ?? '').trim();
+    if (base) return base;
+    const appUrl = (process.env.APP_URL ?? '').trim().replace(/\/+$/, '');
+    return appUrl ? `${appUrl}/api/telegram/webhook` : '';
+  }
+
+  /**
+   * Registers the webhook with the secret the controller checks. Done on every
+   * start, so a changed secret, domain or a webhook set by hand without
+   * secret_token cannot silently turn every update into a 401.
+   */
+  async onApplicationBootstrap() {
+    if (process.env.NODE_ENV === 'test') return;
+    if (!this.token || !this.webhookSecret) return;
+    const url = this.expectedWebhookUrl;
+    if (!url.startsWith('https://')) {
+      this.logger.warn(
+        `Telegram webhook not registered: ${url || 'APP_URL is not set'} is not a public https URL`,
+      );
+      return;
+    }
+    try {
+      const res = await fetch(`${this.apiBase}/setWebhook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url,
+          secret_token: this.webhookSecret,
+          allowed_updates: ['message'],
+        }),
+      });
+      const body: any = await res.json().catch(() => null);
+      if (!body?.ok) {
+        this.logger.error(`Telegram setWebhook failed: ${body?.description ?? res.status}`);
+      } else {
+        this.logger.log(`Telegram webhook registered: ${url}`);
+      }
+    } catch (err) {
+      this.logger.error('Telegram setWebhook error', err);
+    }
+  }
+
+  /** Diagnostics for the notifications page: why linking may not work. */
+  async getStatus() {
+    const problems: string[] = [];
+    if (!this.token) problems.push('На сервере не задан TELEGRAM_BOT_TOKEN — бот не может отвечать.');
+    if (!this.botUsername) problems.push('На сервере не задан TELEGRAM_BOT_USERNAME — ссылка на бота не строится.');
+    if (!this.webhookSecret) problems.push('На сервере не задан TELEGRAM_WEBHOOK_SECRET — сервер отклоняет все сообщения бота.');
+    const expectedUrl = this.expectedWebhookUrl;
+    if (!expectedUrl.startsWith('https://')) {
+      problems.push('APP_URL должен быть публичным https-адресом API — иначе Telegram не может достучаться до сервера.');
+    }
+
+    let bot: { username: string } | null = null;
+    let webhook: {
+      url: string;
+      pendingUpdates: number;
+      lastError: string | null;
+      lastErrorAt: string | null;
+    } | null = null;
+    if (this.token) {
+      try {
+        const [me, info]: any[] = await Promise.all([
+          fetch(`${this.apiBase}/getMe`).then((res) => res.json()),
+          fetch(`${this.apiBase}/getWebhookInfo`).then((res) => res.json()),
+        ]);
+        if (!me?.ok) {
+          problems.push('Telegram не принимает TELEGRAM_BOT_TOKEN — токен неверный или бот удалён.');
+        } else {
+          bot = { username: String(me.result?.username ?? '') };
+          if (this.botUsername && bot.username.toLowerCase() !== this.botUsername.toLowerCase()) {
+            problems.push(
+              `TELEGRAM_BOT_USERNAME (${this.botUsername}) не совпадает с ботом токена (@${bot.username}) — ссылка ведёт не в тот бот.`,
+            );
+          }
+        }
+        if (info?.ok) {
+          const result = info.result ?? {};
+          webhook = {
+            url: String(result.url ?? ''),
+            pendingUpdates: Number(result.pending_update_count ?? 0),
+            lastError: result.last_error_message ? String(result.last_error_message) : null,
+            lastErrorAt: result.last_error_date
+              ? new Date(Number(result.last_error_date) * 1000).toISOString()
+              : null,
+          };
+          if (!webhook.url) {
+            problems.push('Вебхук бота не зарегистрирован — сообщения боту не доходят до сервера.');
+          } else if (expectedUrl && webhook.url !== expectedUrl) {
+            problems.push(`Вебхук указывает на ${webhook.url}, а должен на ${expectedUrl}.`);
+          }
+          if (webhook.lastError) {
+            problems.push(`Последняя ошибка доставки от Telegram: ${webhook.lastError}.`);
+          }
+        }
+      } catch {
+        problems.push('Сервер не может связаться с api.telegram.org.');
+      }
+    }
+
+    return {
+      ok: problems.length === 0,
+      bot_username: bot?.username ?? (this.botUsername || null),
+      expected_webhook_url: expectedUrl || null,
+      webhook,
+      problems,
+    };
+  }
+
+  /** Re-registers the webhook on demand (button on the notifications page). */
+  async repairWebhook() {
+    await this.onApplicationBootstrap();
+    return this.getStatus();
   }
   private get apiBase() {
     return `https://api.telegram.org/bot${this.token}`;
@@ -67,23 +192,20 @@ export class TelegramService {
   ): Promise<{ link: string }> {
     const context = await requireCompanyContext(requestContext);
 
+    if (!this.token || !this.botUsername) {
+      throw new BadRequestException(
+        'Telegram-бот не настроен на сервере (TELEGRAM_BOT_TOKEN / TELEGRAM_BOT_USERNAME)',
+      );
+    }
+
+    // Who may subscribe is decided by the "telegram-notification" permission
+    // (checked by the guard); an extra admin-only check here also locked out
+    // the managers the role was given to.
     const user = await this.prisma.user.findUnique({
       where: { id: Number(context.userId) },
-      include: { crmRole: true },
     });
 
     if (!user) throw new NotFoundException('Пользователь не найден');
-
-    const isAdminOrManager =
-      user.crmRole?.isAdmin === true ||
-      user.userType === 'platform' ||
-      user.platformRole === 'admin';
-
-    if (!isAdminOrManager) {
-      throw new ForbiddenException(
-        'Только владельцы и менеджеры могут подписаться на уведомления',
-      );
-    }
 
     const token = randomToken(12);
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
@@ -105,13 +227,24 @@ export class TelegramService {
     if (!message) return;
 
     const chatId = String(message?.chat?.id ?? '');
-    const text: string = message?.text ?? '';
+    const text: string = String(message?.text ?? '').trim();
 
-    if (!chatId || !text.startsWith('/start')) return;
+    if (!chatId || !/^\/start(@\w+)?(\s|$)/i.test(text)) return;
 
-    const parts = text.trim().split(' ');
-    const token = parts[1]?.trim();
+    // Any error is answered in the chat and swallowed: a failed webhook makes
+    // Telegram resend the same update again and again.
+    try {
+      await this.linkChat(chatId, text.split(/\s+/)[1]?.trim());
+    } catch (err) {
+      this.logger.error('Telegram link failed', err);
+      await this.sendMessage(
+        chatId,
+        '⚠️ Не удалось подключить уведомления. Запросите новую ссылку в CRM и попробуйте ещё раз.',
+      );
+    }
+  }
 
+  private async linkChat(chatId: string, token: string | undefined) {
     if (!token) {
       await this.sendMessage(
         chatId,
@@ -141,6 +274,11 @@ export class TelegramService {
         where: { id: linkToken.id },
         data: { usedAt: new Date() },
       }),
+      // One Telegram chat belongs to one employee (chatId is unique): linking
+      // it again moves the chat over instead of failing on the constraint.
+      this.prisma.telegramSubscriber.deleteMany({
+        where: { chatId, userId: { not: linkToken.userId } },
+      }),
       this.prisma.telegramSubscriber.upsert({
         where: { userId: linkToken.userId },
         create: {
@@ -149,7 +287,7 @@ export class TelegramService {
           companyId: linkToken.companyId,
           notifyOnSale: true,
         },
-        update: { chatId, notifyOnSale: true },
+        update: { chatId, companyId: linkToken.companyId, notifyOnSale: true },
       }),
     ]);
 

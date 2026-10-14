@@ -10,6 +10,7 @@ import {
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { timingSafeEqual } from 'crypto';
 import { CurrentCompanyContext } from '../auth/company-context.decorator';
 import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
@@ -23,8 +24,10 @@ import { TelegramService } from './telegram.service';
 export class TelegramController {
   constructor(private readonly telegramService: TelegramService) {}
 
-  // Public — called by Telegram servers (no /api prefix)
+  // Public — called by Telegram servers at /api/telegram/webhook. Not
+  // throttled: Telegram delivers all bots' updates from a few shared IPs.
   @Post('telegram/webhook')
+  @SkipThrottle()
   async webhook(
     @Body() body: Record<string, any>,
     @Headers('x-telegram-bot-api-secret-token') providedSecret?: string,
@@ -53,6 +56,20 @@ export class TelegramController {
   @Permissions('telegram-notification')
   generateLink(@CurrentCompanyContext() requestContext: CompanyRequestContext) {
     return this.telegramService.generateLinkToken(requestContext);
+  }
+
+  @Get('telegram/status')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('telegram-notification')
+  getStatus() {
+    return this.telegramService.getStatus();
+  }
+
+  @Post('telegram/repair-webhook')
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard, PermissionsGuard)
+  @Permissions('telegram-notification')
+  repairWebhook() {
+    return this.telegramService.repairWebhook();
   }
 
   @Get('telegram/subscribers')
