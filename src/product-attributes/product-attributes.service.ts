@@ -10,6 +10,15 @@ import {
   requireCompanyContext,
 } from '../auth/request-context';
 import { PrismaService } from '../prisma/prisma.service';
+import { cleanName, hexKey, nameKey } from '../common/dictionary-names';
+import { normalizeSizeCode } from '../common/resolve-size';
+import {
+  AttributeCodeError,
+  SIMILAR_COLOR_DISTANCE,
+  colorDistance,
+  normalizeSeasonCode,
+  normalizeSizeCode as normalizeAttributeSizeCode,
+} from '../attribute-dictionaries/normalize-attribute-code';
 
 const KINDS: AttributeKind[] = ['SELECT', 'TEXT', 'NUMBER'];
 
@@ -57,7 +66,22 @@ export class ProductAttributesService {
     requestContext: CompanyRequestContext,
   ) {
     const { companyId } = requireCompanyContext(requestContext);
-    const name = this.requireText(body.name, 'name');
+    const name = cleanName(this.requireText(body.name, 'name'));
+    // A Cyrillic name gets a generated code, so the name itself is what must
+    // not repeat: «Материал» and «материал» are one attribute.
+    const twin = (
+      await this.prisma.attributeDefinition.findMany({
+        where: { companyId },
+        include: { options: true },
+      })
+    ).find((definition) => nameKey(definition.name) === nameKey(name));
+    if (twin) {
+      throw new ConflictException({
+        statusCode: 409,
+        message: `Атрибут «${twin.name}» уже есть`,
+        existing: this.toDefinition(twin),
+      });
+    }
     const code = this.optionalText(body.code) ?? this.codeFromName(name);
     if (!/^[a-z0-9_]{1,40}$/.test(code)) {
       throw new BadRequestException(
@@ -91,8 +115,17 @@ export class ProductAttributesService {
   ) {
     const definition = await this.findDefinition(id, requestContext);
     const data: Prisma.AttributeDefinitionUpdateInput = {};
-    if (body.name !== undefined)
-      data.name = this.requireText(body.name, 'name');
+    if (body.name !== undefined) {
+      const name = cleanName(this.requireText(body.name, 'name'));
+      const twin = await this.prisma.attributeDefinition.findMany({
+        where: { companyId: definition.companyId, id: { not: definition.id } },
+        select: { name: true },
+      });
+      if (twin.some((item) => nameKey(item.name) === nameKey(name))) {
+        throw new ConflictException(`Атрибут «${name}» уже есть`);
+      }
+      data.name = name;
+    }
     if (body.sort_order !== undefined)
       data.sortOrder = this.optionalInt(body.sort_order) ?? 0;
     if (body.is_active !== undefined) data.isActive = body.is_active === true;
@@ -153,13 +186,15 @@ export class ProductAttributesService {
       definitionId,
       requestContext,
     );
+    const value = cleanName(this.requireText(body.value, 'value'));
+    await this.rejectOptionTwin(definition.id, value);
     try {
       return this.toOption(
         await this.prisma.attributeOption.create({
           data: {
             companyId: definition.companyId,
             definitionId: definition.id,
-            value: this.requireText(body.value, 'value'),
+            value,
             sortOrder: this.optionalInt(body.sort_order) ?? 0,
             meta: this.optionalJson(body.meta),
           },
@@ -195,14 +230,17 @@ export class ProductAttributesService {
       requestContext,
     );
     const option = await this.findOption(definition.id, optionId);
+    const value =
+      body.value !== undefined
+        ? cleanName(this.requireText(body.value, 'value'))
+        : undefined;
+    if (value !== undefined) await this.rejectOptionTwin(definition.id, value, option.id);
     try {
       return this.toOption(
         await this.prisma.attributeOption.update({
           where: { id: option.id },
           data: {
-            ...(body.value !== undefined
-              ? { value: this.requireText(body.value, 'value') }
-              : {}),
+            ...(value !== undefined ? { value } : {}),
             ...(body.sort_order !== undefined
               ? { sortOrder: this.optionalInt(body.sort_order) ?? 0 }
               : {}),
@@ -501,6 +539,28 @@ export class ProductAttributesService {
     return definition;
   }
 
+  /** «Хлопок», «хлопок» and «Хлопок » are one value of an attribute. */
+  private async rejectOptionTwin(
+    definitionId: string,
+    value: string,
+    exceptId?: string,
+  ) {
+    const twin = (
+      await this.prisma.attributeOption.findMany({ where: { definitionId } })
+    ).find(
+      (option) => option.id !== exceptId && nameKey(option.value) === nameKey(value),
+    );
+    if (twin) {
+      throw new ConflictException({
+        statusCode: 409,
+        message: twin.isActive
+          ? `Значение «${twin.value}» уже есть`
+          : `Значение «${twin.value}» уже есть, но отключено — включите его`,
+        existing: this.toOption(twin),
+      });
+    }
+  }
+
   private async findOption(definitionId: string, optionId: string) {
     const option = await this.prisma.attributeOption.findFirst({
       where: { id: optionId, definitionId },
@@ -728,36 +788,84 @@ export class ProductAttributesService {
     });
   }
 
+  /**
+   * A store's own colour is only a picked #RRGGBB: no typed name (free names
+   * gave "красный" next to "Красный"), the HEX is the identity and the label.
+   * The same HEX again is a 409 carrying the existing colour to select.
+   */
   async createColor(
     body: Record<string, unknown>,
     requestContext: CompanyRequestContext,
   ) {
     const { companyId } = await this.requireApparelCompany(requestContext);
-    const nameRu = this.requiredName(body.name_ru ?? body.name);
-    const nameUz = this.optionalText(body.name_uz) || nameRu;
-    const code = await this.resolveDictionaryCode(body.code, nameRu, async (candidate) =>
-      Boolean(await this.prisma.productColor.findFirst({ where: { companyId, code: candidate }, select: { id: true } })),
-    );
     // Older clients sent the colour picker value as "code".
-    const hex = this.hexColor(body.hex ?? (String(body.code ?? '').startsWith('#') ? body.code : undefined));
+    const raw =
+      body.hex ?? (String(body.code ?? '').trim().startsWith('#') ? body.code : undefined);
+    const hex = hexKey(raw);
+    if (!hex) {
+      throw new BadRequestException(
+        String(raw ?? '').trim()
+          ? 'Цвет должен быть в формате #RRGGBB'
+          : 'Выберите цвет',
+      );
+    }
+
+    const colors = await this.prisma.productColor.findMany({
+      where: { companyId },
+      orderBy: [{ isActive: 'desc' }, { sortOrder: 'asc' }],
+    });
+    const existing = colors.find((color) => hexKey(color.hex) === hex);
+    if (existing) {
+      throw new ConflictException({
+        statusCode: 409,
+        message: existing.isActive
+          ? `Такой цвет уже есть: ${this.colorLabel(existing)}`
+          : `Такой цвет уже есть, но отключён: ${this.colorLabel(existing)} — включите его`,
+        existing: this.toColor(existing),
+      });
+    }
+    const similar = colors.find(
+      (color) =>
+        color.isActive &&
+        hexKey(color.hex) &&
+        colorDistance(hexKey(color.hex)!, hex) < SIMILAR_COLOR_DISTANCE,
+    );
+
+    const takenCodes = new Set(colors.map((color) => color.code));
+    const base = `D${hex.slice(1)}`;
+    const code = takenCodes.has(base)
+      ? [2, 3, 4, 5].map((index) => `${base}.${index}`).find((item) => !takenCodes.has(item))
+      : base;
+    if (!code) throw new ConflictException('Не удалось подобрать код цвета');
 
     try {
       const created = await this.prisma.productColor.create({
         data: {
           companyId,
           code,
-          name: nameRu,
-          nameRu,
-          nameUz,
-          hex: hex ?? null,
-          sortOrder: this.optionalInt(body.sort_order) ?? 100,
+          name: hex,
+          nameRu: hex,
+          nameUz: hex,
+          hex,
+          sortOrder: this.optionalInt(body.sort_order) ?? 1000,
           isActive: body.is_active !== false,
         },
       });
-      return this.toColor(created);
+      return {
+        ...this.toColor(created),
+        // Not blocking: a near-identical colour is only pointed out.
+        warning: similar
+          ? `Похожий цвет уже есть: ${this.colorLabel(similar)}`
+          : null,
+      };
     } catch (error) {
-      throw this.dictionaryConflict(error, 'Цвет', nameRu, code);
+      throw this.dictionaryConflict(error, 'Цвет', hex, code);
     }
+  }
+
+  private colorLabel(color: { name: string; hex: string | null }) {
+    const hex = hexKey(color.hex);
+    return hex && hexKey(color.name) !== hex ? `${color.name} (${hex})` : (hex ?? color.name);
   }
 
   async updateColor(
@@ -773,7 +881,19 @@ export class ProductAttributesService {
 
     const data: Prisma.ProductColorUpdateInput = {};
     if (body.name !== undefined || body.name_ru !== undefined) {
-      const nameRu = this.requiredName(body.name_ru ?? body.name);
+      const nameRu = cleanName(this.requiredName(body.name_ru ?? body.name));
+      const twin = (
+        await this.prisma.productColor.findMany({
+          where: { companyId, id: { not: id } },
+        })
+      ).find((item) => nameKey(item.name) === nameKey(nameRu));
+      if (twin) {
+        throw new ConflictException({
+          statusCode: 409,
+          message: `Цвет «${twin.name}» уже есть`,
+          existing: this.toColor(twin),
+        });
+      }
       data.name = nameRu;
       data.nameRu = nameRu;
     }
@@ -781,7 +901,31 @@ export class ProductAttributesService {
       data.nameUz = this.optionalText(body.name_uz) || (data.nameRu as string) || color.nameRu;
     if (body.code !== undefined && String(body.code).trim())
       data.code = this.dictionaryCode(body.code);
-    if (body.hex !== undefined) data.hex = this.hexColor(body.hex) ?? null;
+    if (body.hex !== undefined) {
+      const hex = hexKey(body.hex);
+      if (String(body.hex ?? '').trim() && !hex)
+        throw new BadRequestException('Цвет должен быть в формате #RRGGBB');
+      if (hex && hex !== hexKey(color.hex)) {
+        const other = await this.prisma.productColor.findMany({
+          where: { companyId, id: { not: id }, hex: { not: null } },
+        });
+        const existing = other.find((item) => hexKey(item.hex) === hex);
+        if (existing) {
+          throw new ConflictException({
+            statusCode: 409,
+            message: `Такой цвет уже есть: ${this.colorLabel(existing)}`,
+            existing: this.toColor(existing),
+          });
+        }
+        // A colour named by its HEX keeps being named by it.
+        if (hexKey(color.name) && data.name === undefined) {
+          data.name = hex;
+          data.nameRu = hex;
+          data.nameUz = hex;
+        }
+      }
+      data.hex = hex ?? null;
+    }
     if (body.sort_order !== undefined)
       data.sortOrder = this.optionalInt(body.sort_order) ?? 0;
     if (body.is_active !== undefined) data.isActive = body.is_active === true;
@@ -843,17 +987,51 @@ export class ProductAttributesService {
     requestContext: CompanyRequestContext,
   ) {
     const { companyId } = await this.requireApparelCompany(requestContext);
-    const nameRu = this.requiredName(body.name_ru ?? body.name);
-    const nameUz = this.optionalText(body.name_uz) || nameRu;
     // The product form's quick add sends the grid as "type".
     const kind = (body.kind ?? body.type) === 'SHOES' ? 'SHOES' : 'CLOTHING';
-    const code = await this.resolveDictionaryCode(
-      body.code,
-      // Shoe 42 and clothing 42 share the company's code space.
-      kind === 'SHOES' && /^\d/.test(nameRu) ? `S${nameRu}` : nameRu,
-      async (candidate) =>
-        Boolean(await this.prisma.productSize.findFirst({ where: { companyId, code: candidate }, select: { id: true } })),
+    // A size is its code ("xxl", "ХХЛ", "2 XL" → 2XL; "42.0" → 42), the same
+    // rule as the import, so it cannot be added twice under other spellings.
+    const typed = this.optionalText(body.code) ?? this.optionalText(body.name_ru ?? body.name);
+    if (!typed) throw new BadRequestException('Укажите размер');
+    let sizeCode: string;
+    try {
+      sizeCode = normalizeAttributeSizeCode(typed);
+    } catch (error) {
+      throw new BadRequestException(
+        error instanceof AttributeCodeError ? error.message : 'Неверный размер',
+      );
+    }
+
+    const sizes = await this.prisma.productSize.findMany({ where: { companyId } });
+    const sameKind = (size: { kind: string | null; type: string }) =>
+      (size.kind ?? (size.type === 'SHOES' ? 'SHOES' : size.type === 'CLOTHING' ? 'CLOTHING' : null)) !==
+      (kind === 'SHOES' ? 'CLOTHING' : 'SHOES');
+    const existing = sizes.find(
+      (size) =>
+        sameKind(size) &&
+        [size.code.replace(/^S(?=\d)/, ''), size.name, size.nameRu].some(
+          (value) => value && normalizeSizeCode(value) === sizeCode,
+        ),
     );
+    if (existing) {
+      throw new ConflictException({
+        statusCode: 409,
+        message: existing.isActive
+          ? `Размер ${existing.name} уже есть`
+          : `Размер ${existing.name} уже есть, но отключён — включите его`,
+        existing: this.toSize(existing),
+      });
+    }
+
+    // Shoe 42 and clothing 42 share the company's code space.
+    const takenCodes = new Set(sizes.map((size) => size.code));
+    const code = [
+      kind === 'SHOES' && /^\d/.test(sizeCode) ? `S${sizeCode}` : sizeCode,
+      `${kind === 'SHOES' ? 'S' : 'C'}${sizeCode}`,
+    ].find((candidate) => !takenCodes.has(candidate));
+    if (!code) throw new ConflictException(`Размер ${sizeCode} уже есть`);
+    const nameRu = sizeCode;
+    const nameUz = sizeCode;
 
     try {
       const created = await this.prisma.productSize.create({
@@ -890,11 +1068,37 @@ export class ProductAttributesService {
 
     const data: Prisma.ProductSizeUpdateInput = {};
     if (body.name !== undefined || body.name_ru !== undefined) {
-      const nameRu = this.requiredName(body.name_ru ?? body.name);
-      data.name = nameRu;
-      data.nameRu = nameRu;
+      // Renamed by the same rule as a new size: "xxl" → 2XL, no twins.
+      let sizeCode: string;
+      try {
+        sizeCode = normalizeAttributeSizeCode(this.requiredName(body.name_ru ?? body.name));
+      } catch (error) {
+        throw new BadRequestException(
+          error instanceof AttributeCodeError ? error.message : 'Неверный размер',
+        );
+      }
+      const kind = size.kind ?? (size.type === 'SHOES' ? 'SHOES' : 'CLOTHING');
+      const twin = (
+        await this.prisma.productSize.findMany({ where: { companyId, id: { not: id } } })
+      ).find(
+        (other) =>
+          (other.kind ?? other.type) !== (kind === 'SHOES' ? 'CLOTHING' : 'SHOES') &&
+          [other.name, other.nameRu].some(
+            (value) => value && normalizeSizeCode(value) === sizeCode,
+          ),
+      );
+      if (twin) {
+        throw new ConflictException({
+          statusCode: 409,
+          message: `Размер ${twin.name} уже есть`,
+          existing: this.toSize(twin),
+        });
+      }
+      data.name = sizeCode;
+      data.nameRu = sizeCode;
+      data.nameUz = sizeCode;
     }
-    if (body.name_uz !== undefined)
+    if (body.name_uz !== undefined && data.nameUz === undefined)
       data.nameUz = this.optionalText(body.name_uz) || (data.nameRu as string) || size.nameRu;
     if (body.code !== undefined && String(body.code).trim())
       data.code = this.dictionaryCode(body.code);
@@ -982,7 +1186,36 @@ export class ProductAttributesService {
     requestContext: CompanyRequestContext,
   ) {
     const { companyId } = await this.requireApparelCompany(requestContext);
-    const nameRu = this.requiredName(body.name_ru ?? body.name);
+    const nameRu = cleanName(this.requiredName(body.name_ru ?? body.name));
+    // "лето", "Лето " or "summer" next to the existing «Лето» (SUMMER) is the
+    // same season: answer with it instead of creating a twin.
+    const seasonCodeOf = (value: unknown) => {
+      try {
+        return normalizeSeasonCode(value);
+      } catch {
+        return null;
+      }
+    };
+    const typedCodes = [body.code, nameRu]
+      .map(seasonCodeOf)
+      .filter((item): item is string => Boolean(item));
+    const twin = (
+      await this.prisma.productSeasonOption.findMany({ where: { companyId } })
+    ).find(
+      (season) =>
+        [season.nameRu, season.nameUz].some(
+          (name) => nameKey(name) === nameKey(nameRu),
+        ) || typedCodes.includes(season.code.toUpperCase()),
+    );
+    if (twin) {
+      throw new ConflictException({
+        statusCode: 409,
+        message: twin.isActive
+          ? `Сезон «${twin.nameRu}» уже есть`
+          : `Сезон «${twin.nameRu}» уже есть, но отключён — включите его`,
+        existing: this.toSeason(twin),
+      });
+    }
     const code = await this.resolveDictionaryCode(body.code, nameRu, async (candidate) =>
       Boolean(
         await this.prisma.productSeasonOption.findFirst({ where: { companyId, code: candidate }, select: { id: true } }),
@@ -1016,8 +1249,22 @@ export class ProductAttributesService {
     });
     if (!current) throw new NotFoundException('Season not found');
     const data: Prisma.ProductSeasonOptionUpdateInput = {};
-    if (body.name_ru !== undefined || body.name !== undefined)
-      data.nameRu = this.requiredName(body.name_ru ?? body.name);
+    if (body.name_ru !== undefined || body.name !== undefined) {
+      const nameRu = cleanName(this.requiredName(body.name_ru ?? body.name));
+      const twin = (
+        await this.prisma.productSeasonOption.findMany({
+          where: { companyId, id: { not: id } },
+        })
+      ).find((season) => nameKey(season.nameRu) === nameKey(nameRu));
+      if (twin) {
+        throw new ConflictException({
+          statusCode: 409,
+          message: `Сезон «${twin.nameRu}» уже есть`,
+          existing: this.toSeason(twin),
+        });
+      }
+      data.nameRu = nameRu;
+    }
     if (body.name_uz !== undefined)
       data.nameUz = this.optionalText(body.name_uz) || (data.nameRu as string) || current.nameRu;
     if (body.sort_order !== undefined)

@@ -1,4 +1,10 @@
 import { Prisma, StoreType } from '@prisma/client';
+import {
+  SIMILAR_COLOR_DISTANCE,
+  colorDistance,
+} from '../attribute-dictionaries/normalize-attribute-code';
+import { SYSTEM_COLORS } from '../attribute-dictionaries/system-values';
+import { hexKey, nameKey } from './dictionary-names';
 
 export const APPAREL_STORE_TYPES: StoreType[] = [
   'CLOTHING',
@@ -50,6 +56,73 @@ function shoeSizes() {
   });
 }
 
+type StoredColor = { id: string; name: string; nameRu: string | null; hex: string | null };
+
+/**
+ * The 50 system colours (TZ 15.10.2026) a store is missing. A system colour
+ * the store already has — same name, same HEX or a near-identical HEX — is
+ * not added again; existing colours are never changed.
+ */
+export function missingSystemColors(stored: StoredColor[]) {
+  const added: Array<{ name: string; hex: string }> = [];
+  const skipped: Array<{ name: string; hex: string; existing: string }> = [];
+  const known = stored.map((color) => ({
+    label: color.name,
+    keys: [color.name, color.nameRu].filter(Boolean).map(nameKey),
+    hex: hexKey(color.hex),
+  }));
+  for (const [name, hex] of SYSTEM_COLORS) {
+    const twin = known.find(
+      (color) =>
+        color.keys.includes(nameKey(name)) ||
+        (color.hex &&
+          (color.hex === hex || colorDistance(color.hex, hex) < SIMILAR_COLOR_DISTANCE)),
+    );
+    if (twin) {
+      skipped.push({ name, hex, existing: twin.label });
+      continue;
+    }
+    // Not added to `known`: several system colours are close to each other on
+    // purpose, only the store's own colours count as "already there".
+    added.push({ name, hex });
+  }
+  return { added, skipped };
+}
+
+/** Adds the missing system colours; returns what was added and skipped. */
+export async function ensureSystemColors(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  options: { write: boolean } = { write: true },
+) {
+  const stored = await tx.productColor.findMany({
+    where: { companyId },
+    select: { id: true, name: true, nameRu: true, hex: true, code: true, sortOrder: true },
+  });
+  const result = missingSystemColors(stored);
+  if (!options.write || !result.added.length) return result;
+  const takenCodes = new Set(stored.map((color) => color.code));
+  const order = Math.max(0, ...stored.map((color) => color.sortOrder)) + 10;
+  await tx.productColor.createMany({
+    data: result.added.map(({ name, hex }, index) => {
+      // Same code scheme as the dictionary link (legacy-link.ts).
+      const base = `D${hex.slice(1)}`;
+      return {
+        companyId,
+        code: takenCodes.has(base) ? `${base}.2` : base,
+        name,
+        nameRu: name,
+        nameUz: name,
+        hex,
+        sortOrder: order + index * 10,
+        isActive: true,
+      };
+    }),
+    skipDuplicates: true,
+  });
+  return result;
+}
+
 export async function seedStoreDefaults(
   tx: Prisma.TransactionClient,
   companyId: string,
@@ -72,6 +145,7 @@ export async function seedStoreDefaults(
     ),
     skipDuplicates: true,
   });
+  await ensureSystemColors(tx, companyId);
 
   const sizes = [
     ...((['CLOTHING', 'CLOTHING_SHOES'] as StoreType[]).includes(storeType)

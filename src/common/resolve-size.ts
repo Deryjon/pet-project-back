@@ -1,15 +1,18 @@
 import { ProductSizeKind } from '@prisma/client';
+import { normalizeSizeCode as normalizeDictionarySizeCode } from '../attribute-dictionaries/normalize-attribute-code';
 
 /**
- * Normalizes a size code: trim, uppercase, XXL→2XL, XXXL→3XL, comma→period
+ * Normalizes a size code with the one rule of the dictionaries: "xxl", "ХХЛ",
+ * "2 XL", "2-xl" → 2XL, "XXXXL" → 4XL, "42.0", "42 " → 42, "42,5" → 42.5.
+ * A value that rule rejects is only trimmed and upper-cased.
  */
 export function normalizeSizeCode(raw: string): string {
-  if (!raw) return '';
-  let code = raw.trim().toUpperCase();
-  code = code.replace(/,/g, '.');
-  code = code.replace(/^XXL$/, '2XL');
-  code = code.replace(/^XXXL$/, '3XL');
-  return code;
+  if (!raw?.trim()) return '';
+  try {
+    return normalizeDictionarySizeCode(raw);
+  } catch {
+    return raw.trim().toUpperCase().replace(/,/g, '.');
+  }
 }
 
 /** Kind implied by a size code alone: 30–50 → shoes, letters or R+number → clothing. */
@@ -56,11 +59,11 @@ export async function resolveSize(
   companyId: string,
   prisma: any,
   options?: { autoCreate?: boolean },
-): Promise<{ kind?: ProductSizeKind; sizeId?: string }> {
+): Promise<{ kind?: ProductSizeKind; sizeId?: string; created?: boolean }> {
   const code = normalizeSizeCode(rawCode);
 
   if (!code) {
-    throw new Error('Size code cannot be empty');
+    throw new Error('Не указан размер');
   }
 
   const existingSize: StoredSize | null = await prisma.productSize.findFirst({
@@ -70,19 +73,19 @@ export async function resolveSize(
     return { kind: storedSizeKind(existingSize), sizeId: existingSize.id };
   }
 
+  // Stored sizes compared by the same rule, so "XXL", "xxl" or "42.0" saved
+  // earlier are found instead of getting another duplicate.
   const patternKind = sizeKindFromCode(code);
-  const names = [...new Set([rawCode.trim(), code])];
-  const byName: StoredSize[] = await prisma.productSize.findMany({
-    where: {
-      companyId,
-      isActive: true,
-      OR: names.flatMap((name) => [
-        { name: { equals: name, mode: 'insensitive' } },
-        { nameRu: { equals: name, mode: 'insensitive' } },
-      ]),
-    },
-    orderBy: { sortOrder: 'asc' },
-  });
+  const stored: Array<StoredSize & { code?: string | null; nameRu?: string | null }> =
+    await prisma.productSize.findMany({
+      where: { companyId, isActive: true },
+      orderBy: { sortOrder: 'asc' },
+    });
+  const byName = stored.filter((size) =>
+    [size.code, size.name, size.nameRu].some(
+      (value) => value && normalizeSizeCode(value) === code,
+    ),
+  );
   const candidates =
     byName.length > 1 && patternKind
       ? byName.filter((size) => storedSizeKind(size) === patternKind)
@@ -100,7 +103,9 @@ export async function resolveSize(
   }
 
   if (!patternKind) {
-    throw new Error(`Cannot determine size kind for code ${code}`);
+    throw new Error(
+      `Размер «${rawCode.trim()}» не распознан: укажите размер из справочника (например M, 2XL, 42)`,
+    );
   }
 
   if (options?.autoCreate) {
@@ -110,11 +115,12 @@ export async function resolveSize(
         code,
         name: code,
         kind: patternKind,
-        type: 'OTHER',
+        // The size grids and the GET filter work by type.
+        type: patternKind,
         isActive: true,
       },
     });
-    return { kind: patternKind, sizeId: created.id };
+    return { kind: patternKind, sizeId: created.id, created: true };
   }
 
   return { kind: patternKind };

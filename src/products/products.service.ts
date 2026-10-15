@@ -48,6 +48,7 @@ import {
   unitKey,
   unitStoredSpellings,
 } from '../common/measurement-units';
+import { cleanName, hexKey, nameKey } from '../common/dictionary-names';
 import { applyDictionaryToImportRow } from '../attribute-dictionaries/import-dictionary';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -4308,23 +4309,43 @@ export class ProductsService {
         ? (body.metadata as Record<string, unknown>)
         : undefined;
 
-    const categoryName = this.optionalString(metadataObject?.category);
-    const brandName = this.optionalString(
-      (metadataObject?.attributes as Record<string, unknown> | undefined)
-        ?.brand,
+    const categoryName = await this.existingRefName(
+      this.prisma,
+      'category',
+      productCompanyId,
+      this.optionalString(metadataObject?.category),
+    );
+    const brandName = await this.existingRefName(
+      this.prisma,
+      'brand',
+      productCompanyId,
+      this.optionalString(
+        (metadataObject?.attributes as Record<string, unknown> | undefined)
+          ?.brand,
+      ),
     );
     const supplierNames = new Set<string>();
 
     for (const supplierId of supplierIds) {
-      const supplierName = this.optionalString(supplierId);
+      const supplierName = await this.existingRefName(
+        this.prisma,
+        'supplier',
+        productCompanyId,
+        this.optionalString(supplierId),
+      );
       if (supplierName) {
         supplierNames.add(supplierName);
       }
     }
 
-    const metadataSupplier = this.optionalString(
-      (metadataObject?.attributes as Record<string, unknown> | undefined)
-        ?.supplier,
+    const metadataSupplier = await this.existingRefName(
+      this.prisma,
+      'supplier',
+      productCompanyId,
+      this.optionalString(
+        (metadataObject?.attributes as Record<string, unknown> | undefined)
+          ?.supplier,
+      ),
     );
     if (metadataSupplier) {
       supplierNames.add(metadataSupplier);
@@ -4520,8 +4541,18 @@ export class ProductsService {
     const collection = this.optionalString(body.collection);
     const markupPercent = this.toNumber(body.profit_margin);
     const description = this.optionalString(body.description);
-    const brandName = this.optionalString(body.brand_name);
-    const supplierName = this.optionalString(body.supplier_name);
+    const brandName = await this.existingRefName(
+      this.prisma,
+      'brand',
+      productCompanyId,
+      this.optionalString(body.brand_name),
+    );
+    const supplierName = await this.existingRefName(
+      this.prisma,
+      'supplier',
+      productCompanyId,
+      this.optionalString(body.supplier_name),
+    );
     const imageUrl = this.extractFirstImage(body.images);
     const supplierIds = this.toStringArrayValue(body.supplier_ids);
     const supplierIdNumbers = supplierIds
@@ -5029,8 +5060,18 @@ export class ProductsService {
     if (categoryReference && !category) {
       throw new BadRequestException('Выбранная категория не найдена');
     }
-    const brandName = this.optionalString(body.brand_name);
-    const supplierName = this.optionalString(body.supplier_name);
+    const brandName = await this.existingRefName(
+      this.prisma,
+      'brand',
+      writeContext.companyId,
+      this.optionalString(body.brand_name),
+    );
+    const supplierName = await this.existingRefName(
+      this.prisma,
+      'supplier',
+      writeContext.companyId,
+      this.optionalString(body.supplier_name),
+    );
     const stockPayloadSent =
       body.shipments !== undefined ||
       body.shop_measurement_values !== undefined;
@@ -9667,6 +9708,7 @@ export class ProductsService {
     for (let index = 0; index < rows.length; index += 1) {
       const row = rows[index];
       this.applyImportMeasurementUnit(row, companyUnits);
+      await this.canonicalizeImportNames(this.prisma, companyId, row);
       let existingProduct: CatalogProductWithRelations | null = null;
       let matchError: string | null = null;
       let warnings = [...(row.warnings ?? [])];
@@ -10115,6 +10157,7 @@ export class ProductsService {
     sessionId: string,
   ) {
     let applyingRow = 0;
+    const companyUnits = await this.loadCompanyUnits(companyId);
     try {
       return await this.withImportProductLock(
         `${companyId}:import-commit`,
@@ -10128,6 +10171,10 @@ export class ProductsService {
               for (let index = 0; index < rows.length; index += 1) {
                 applyingRow = index + 1;
                 const row = rows[index];
+                // Same rules as the preview, in case the session was saved
+                // before them: unit spelling and existing brand/category names.
+                this.applyImportMeasurementUnit(row, companyUnits);
+                await this.canonicalizeImportNames(tx, companyId, row);
                 const error = this.validateImportRow(row);
                 if (error) {
                   throw new BadRequestException(
@@ -11649,6 +11696,43 @@ export class ProductsService {
     }
   }
 
+  /**
+   * The stored spelling of a category / brand / supplier typed in another
+   * case, with ё or extra spaces ("nike" → "Nike"), so it links to the
+   * existing row instead of creating a second one. A new name is only cleaned.
+   */
+  private async existingRefName(
+    db: Prisma.TransactionClient | PrismaService,
+    model: 'category' | 'brand' | 'supplier',
+    companyId: string | null | undefined,
+    name: string | null | undefined,
+  ): Promise<string | undefined> {
+    const clean = cleanName(name);
+    if (!clean || !companyId) return clean || undefined;
+    const delegate = (db as any)[model];
+    const exact = await delegate.findFirst({
+      where: { companyId, name: { equals: clean, mode: 'insensitive' } },
+      select: { name: true },
+    });
+    if (exact) return exact.name;
+    const key = nameKey(clean);
+    const all: Array<{ name: string }> = await delegate.findMany({
+      where: { companyId },
+      select: { name: true },
+    });
+    return all.find((item) => nameKey(item.name) === key)?.name ?? clean;
+  }
+
+  private async canonicalizeImportNames(
+    db: Prisma.TransactionClient | PrismaService,
+    companyId: string,
+    row: ImportRowInput,
+  ) {
+    row.categoryName = await this.existingRefName(db, 'category', companyId, row.categoryName);
+    row.brandName = await this.existingRefName(db, 'brand', companyId, row.brandName);
+    row.supplier = await this.existingRefName(db, 'supplier', companyId, row.supplier);
+  }
+
   private async loadCompanyUnits(companyId: string): Promise<CompanyUnit[]> {
     return this.prisma.measurementUnitSetting.findMany({
       where: { companyId },
@@ -11882,6 +11966,11 @@ export class ProductsService {
       companyId,
       this.prisma,
     );
+    if (!resolvedSize.sizeId && !dictionary.sizePending) {
+      warnings.push(
+        `Размера ${normalizeSizeCode(row.sizeName)} нет в справочнике — он будет добавлен`,
+      );
+    }
     if (company.storeType === 'CLOTHING' && resolvedSize.kind === 'SHOES') {
       warnings.push(
         `Размер ${normalizeSizeCode(row.sizeName)} похож на обувной для магазина одежды`,
@@ -12016,19 +12105,25 @@ export class ProductsService {
       select: { id: true, code: true },
     });
     if (byCode) return byCode;
-    const byName = await db.productColor.findMany({
-      where: {
-        companyId,
-        isActive: true,
-        OR: [
-          { name: { equals: trimmed, mode: 'insensitive' } },
-          { nameRu: { equals: trimmed, mode: 'insensitive' } },
-          { hex: { equals: trimmed, mode: 'insensitive' } },
-        ],
-      },
-      select: { id: true, code: true },
-      take: 2,
+    // Same rule as the dictionaries: "#fff" is #FFFFFF, "Темно синий" is
+    // "Тёмно-синий".
+    const hex = hexKey(trimmed);
+    const key = nameKey(trimmed);
+    const colors = await db.productColor.findMany({
+      where: { companyId, isActive: true },
+      select: { id: true, code: true, name: true, nameRu: true, nameUz: true, hex: true },
+      orderBy: { sortOrder: 'asc' },
     });
+    const byHex = hex ? colors.filter((color) => hexKey(color.hex) === hex) : [];
+    const byName = (
+      byHex.length
+        ? byHex
+        : colors.filter((color) =>
+            [color.name, color.nameRu, color.nameUz].some(
+              (name) => name && nameKey(name) === key,
+            ),
+          )
+    ).map(({ id, code }) => ({ id, code }));
     if (byName.length > 1) {
       throw new BadRequestException(
         `Цвет ${trimmed} неоднозначен: в справочнике несколько цветов с таким названием, укажите код цвета`,

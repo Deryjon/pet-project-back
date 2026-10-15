@@ -21,6 +21,8 @@
     "audit:variant-articles": "ts-node prisma/audit-variant-articles.ts",
     "repair:variant-own-codes": "ts-node prisma/repair-variant-own-codes.ts",
     "units:audit": "ts-node prisma/units-audit.ts",
+    "colors:add-system": "ts-node prisma/colors-add-system.ts",
+    "dictionaries:duplicates": "ts-node prisma/dictionary-duplicates-audit.ts",
     "attributes:seed": "ts-node prisma/seed-attribute-dictionaries.ts",
     "attributes:audit": "ts-node prisma/attributes-audit.ts",
     "attributes:apply": "ts-node prisma/attributes-apply.ts",

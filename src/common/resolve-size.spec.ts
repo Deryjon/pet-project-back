@@ -6,16 +6,9 @@ describe('resolveSize', () => {
       findFirst: jest.fn(({ where }) =>
         Promise.resolve(sizes.find((size) => size.code === where.code) ?? null),
       ),
-      findMany: jest.fn(({ where }) =>
-        Promise.resolve(
-          sizes.filter((size) =>
-            where.OR.some(
-              (condition: any) =>
-                String(size.name).toLowerCase() ===
-                String(condition.name?.equals ?? '').toLowerCase(),
-            ),
-          ),
-        ),
+      // The company's active sizes; resolveSize compares them itself.
+      findMany: jest.fn(() =>
+        Promise.resolve(sizes.filter((size) => size.isActive !== false)),
       ),
       create: jest.fn(({ data }) => Promise.resolve({ id: 'new', ...data })),
     },
@@ -69,7 +62,47 @@ describe('resolveSize', () => {
 
     await expect(
       resolveSize('xxl', 'c1', db, { autoCreate: true }),
-    ).resolves.toEqual({ kind: 'CLOTHING', sizeId: 'new' });
+    ).resolves.toEqual({ kind: 'CLOTHING', sizeId: 'new', created: true });
+    expect(db.productSize.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ code: '2XL', type: 'CLOTHING' }),
+    });
+  });
+
+  it.each(['XXL', 'xxl', 'ХХЛ', '2 XL', '2-xl'])(
+    'finds the existing 2XL for %p instead of creating a duplicate',
+    async (value) => {
+      const db = prisma([
+        { id: 's-2xl', code: '2XL', name: '2XL', kind: 'CLOTHING', type: 'CLOTHING' },
+      ]);
+      await expect(
+        resolveSize(value, 'c1', db, { autoCreate: true }),
+      ).resolves.toEqual({ kind: 'CLOTHING', sizeId: 's-2xl' });
+      expect(db.productSize.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it('finds a size saved earlier as "XXL" by its name', async () => {
+    const db = prisma([
+      { id: 's-old', code: 'XXL', name: 'XXL', type: 'CLOTHING' },
+    ]);
+    await expect(
+      resolveSize('2xl', 'c1', db, { autoCreate: true }),
+    ).resolves.toEqual({ kind: 'CLOTHING', sizeId: 's-old' });
+  });
+
+  it('finds shoe size 42 for "42.0"', async () => {
+    const db = prisma([
+      { id: 's-42', code: 'S42', name: '42', kind: 'SHOES', type: 'SHOES' },
+    ]);
+    await expect(
+      resolveSize('42.0', 'c1', db, { autoCreate: true }),
+    ).resolves.toEqual({ kind: 'SHOES', sizeId: 's-42' });
+  });
+
+  it('explains an unreadable size in Russian', async () => {
+    await expect(resolveSize('???', 'c1', prisma([]))).rejects.toThrow(
+      'не распознан',
+    );
   });
 });
 

@@ -215,19 +215,17 @@ describe('ProductsService import colours from the catalog', () => {
         productColor: {
           findFirst: jest.fn(({ where }) =>
             Promise.resolve(
-              ['BLK', 'WHT'].includes(where.code)
+              ['BLK', 'WHT', 'NVY'].includes(where.code)
                 ? { id: `color-${where.code}`, code: where.code }
                 : null,
             ),
           ),
-          findMany: jest.fn(({ where }) =>
-            Promise.resolve(
-              where.OR.some(
-                (condition: any) => condition.nameRu?.equals === 'Чёрный',
-              )
-                ? [{ id: 'color-BLK', code: 'BLK' }]
-                : [],
-            ),
+          // The company's colours; findImportColor compares them itself.
+          findMany: jest.fn(() =>
+            Promise.resolve([
+              { id: 'color-BLK', code: 'BLK', name: 'Чёрный', nameRu: 'Чёрный', nameUz: 'Qora', hex: '#000000' },
+              { id: 'color-NVY', code: 'NVY', name: 'Тёмно-синий', nameRu: 'Тёмно-синий', nameUz: null, hex: '#1F2A44' },
+            ]),
           ),
         },
         productSize: {
@@ -271,6 +269,20 @@ describe('ProductsService import colours from the catalog', () => {
     await service.validateImportReferences('company-1', input);
 
     expect(input).toMatchObject({ colorCode: 'BLK', colorName: 'BLK' });
+  });
+
+  it.each([
+    ['чёрный', 'BLK'],
+    ['#000', 'BLK'],
+    ['Темно синий', 'NVY'],
+    ['#1f2a44', 'NVY'],
+  ])('accepts the colour %p written another way', async (value, code) => {
+    const service = buildService({});
+    const input = row({ colorCode: value, sizeName: 'M' });
+
+    await service.validateImportReferences('company-1', input);
+
+    expect(input).toMatchObject({ colorCode: code });
   });
 
   it('takes the only colour an existing article has', async () => {
