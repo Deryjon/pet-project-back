@@ -38,6 +38,16 @@ import {
 } from '../common/variant-attributes';
 import { parseRequestNumber } from '../common/parse-number';
 import { normalizeSizeCode, resolveSize } from '../common/resolve-size';
+import {
+  CompanyUnit,
+  PIECE_UNIT,
+  canonicalUnit,
+  normalizeUnit,
+  resolveCompanyUnit,
+  sameUnit,
+  unitKey,
+  unitStoredSpellings,
+} from '../common/measurement-units';
 import { applyDictionaryToImportRow } from '../attribute-dictionaries/import-dictionary';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -108,6 +118,10 @@ type ImportRowInput = {
   categoryName?: string;
   brandName?: string;
   measurementUnit?: string;
+  // The unit as written in the file; measurementUnit holds the company's
+  // spelling of it. measurementUnitError: not one of the company's units.
+  measurementUnitRaw?: string;
+  measurementUnitError?: string;
   supplier?: string;
   description?: string;
   warnings?: string[];
@@ -125,6 +139,7 @@ type ImportValidationIssue = {
     | 'missing_supply_price'
     | 'missing_retail_price'
     | 'retail_below_supply'
+    | 'invalid_measurement_unit'
     | 'match_error';
   field?: string;
   message: string;
@@ -3128,6 +3143,14 @@ export class ProductsService {
       });
     }
 
+    if (row.measurementUnitError) {
+      issues.push({
+        code: 'invalid_measurement_unit',
+        field: 'measurement_unit',
+        message: row.measurementUnitError,
+      });
+    }
+
     if (!row.name && !sku && !barcode) {
       issues.push({
         code: 'missing_identifier',
@@ -4215,10 +4238,15 @@ export class ProductsService {
         value: String(item.id),
         label: item.name,
       })),
-      units: units.map((item) => ({
-        value: String(item.unit),
-        label: String(item.unit),
-      })),
+      // One option per unit, whatever spellings the products were saved with.
+      units: [
+        ...new Map(
+          units
+            .map((item) => normalizeUnit(item.unit))
+            .filter((unit): unit is string => Boolean(unit))
+            .map((unit) => [unitKey(unit), unit] as const),
+        ).values(),
+      ].map((unit) => ({ value: unit, label: unit })),
     };
   }
 
@@ -4238,7 +4266,7 @@ export class ProductsService {
     );
     const productType = this.optionalString(body.product_type);
     const variantType = this.optionalString(body.variant_type);
-    const unit = this.optionalString(body.unit);
+    const unit = normalizeUnit(body.unit) ?? undefined;
     const purchasePrice = this.toNumber(body.purchase_price);
     const markupPercent = this.toNumber(body.markup_percent);
     const salePrice = this.toNumber(body.sale_price);
@@ -8786,11 +8814,11 @@ export class ProductsService {
     }
 
     if (measurementType) {
+      // "шт" also finds products stored as "штука", "шт.", "pcs".
       and.push({
-        unit: {
-          equals: measurementType,
-          mode: 'insensitive',
-        },
+        OR: unitStoredSpellings(measurementType).map((spelling) => ({
+          unit: { equals: spelling, mode: 'insensitive' as const },
+        })),
       });
     }
 
@@ -9633,13 +9661,24 @@ export class ProductsService {
       contextCompanyId ?? companyId,
     );
     const { skuCounts, barcodeCounts } = this.buildImportDuplicateCounts(rows);
+    const companyUnits = await this.loadCompanyUnits(companyId);
 
     const items: PreparedImportItem[] = [];
     for (let index = 0; index < rows.length; index += 1) {
       const row = rows[index];
+      this.applyImportMeasurementUnit(row, companyUnits);
       let existingProduct: CatalogProductWithRelations | null = null;
       let matchError: string | null = null;
       let warnings = [...(row.warnings ?? [])];
+      if (
+        row.measurementUnitRaw &&
+        row.measurementUnit &&
+        row.measurementUnitRaw !== row.measurementUnit
+      ) {
+        warnings.push(
+          `Единица измерения «${row.measurementUnitRaw}» записана как «${row.measurementUnit}»`,
+        );
+      }
 
       if (!matchError) {
         try {
@@ -9954,7 +9993,10 @@ export class ProductsService {
       differentFields.push('retail_price');
     }
 
-    if (fileMeasurementUnit && currentMeasurementUnit !== fileMeasurementUnit) {
+    if (
+      fileMeasurementUnit &&
+      !sameUnit(currentMeasurementUnit, fileMeasurementUnit)
+    ) {
       differentFields.push('measurement_unit');
     }
 
@@ -10235,7 +10277,7 @@ export class ProductsService {
           salePrice: row.retailPrice,
           // Shop stock reaches Product.quantity through the ledger trigger.
           quantity: 0,
-          unit: row.measurementUnit,
+          unit: normalizeUnit(row.measurementUnit) ?? PIECE_UNIT,
           metadata: this.buildImportMetadata(
             companyId,
             row.description ?? '',
@@ -10426,6 +10468,7 @@ export class ProductsService {
     sessionId: string,
   ): Promise<Array<{ field: string; reason: string }>> {
     const changedFields: Array<{ field: string; reason: string }> = [];
+    let unitChanged = false;
 
     await (async () => {
       const existingProduct = await tx.product.findUnique({
@@ -10439,6 +10482,12 @@ export class ProductsService {
       if (!existingProduct) {
         throw new NotFoundException(`Product ${productId} not found`);
       }
+      // "штука" in the store and "шт" in the file is the same unit: leave
+      // the stored value alone.
+      unitChanged =
+        this.shouldUseFileValue(onMatchPolicy.measurementUnit) &&
+        Boolean(row.measurementUnit) &&
+        !sameUnit(row.measurementUnit, existingProduct.unit);
 
       const existingStock = await tx.productStock.findFirst({
         where: {
@@ -10622,11 +10671,9 @@ export class ProductsService {
             row.seasonCode,
           ).then((seasonOption) => (seasonOption ? { seasonOption } : {}))),
           quantity: allStocks.reduce((sum, stock) => sum + stock.quantity, 0),
-          unit:
-            this.shouldUseFileValue(onMatchPolicy.measurementUnit) &&
-            row.measurementUnit
-              ? row.measurementUnit
-              : undefined,
+          unit: unitChanged
+            ? (normalizeUnit(row.measurementUnit) ?? undefined)
+            : undefined,
           archivedAt: null,
           archivedByUserId: null,
           archivedByName: null,
@@ -10754,10 +10801,7 @@ export class ProductsService {
         reason: 'updated_from_file_by_policy',
       });
     }
-    if (
-      this.shouldUseFileValue(onMatchPolicy.measurementUnit) &&
-      row.measurementUnit
-    ) {
+    if (unitChanged) {
       changedFields.push({
         field: 'measurementUnit',
         reason: 'updated_from_file_by_policy',
@@ -11603,6 +11647,45 @@ export class ProductsService {
     } finally {
       PRODUCT_IMPORT_LOCKS.delete(key);
     }
+  }
+
+  private async loadCompanyUnits(companyId: string): Promise<CompanyUnit[]> {
+    return this.prisma.measurementUnitSetting.findMany({
+      where: { companyId },
+      select: { name: true, shortName: true },
+    });
+  }
+
+  /**
+   * Strict unit rule of the import: an empty cell means "шт", any spelling of
+   * one of the company's units ("штука", "шт.", "pcs") is stored as that
+   * unit's short name, anything else blocks the row. Safe to call again on an
+   * already resolved row.
+   */
+  private applyImportMeasurementUnit(
+    row: ImportRowInput,
+    companyUnits: CompanyUnit[],
+  ) {
+    const raw = row.measurementUnitRaw ?? row.measurementUnit;
+    row.measurementUnitRaw = raw;
+    row.measurementUnitError = undefined;
+    if (!raw?.trim()) {
+      row.measurementUnit = undefined;
+      return;
+    }
+    const unit = resolveCompanyUnit(raw, companyUnits);
+    if (unit) {
+      row.measurementUnit = unit;
+      return;
+    }
+    const allowed = [
+      ...new Set([
+        PIECE_UNIT,
+        ...companyUnits.map((item) => normalizeUnit(item.shortName) ?? ''),
+      ]),
+    ].filter(Boolean);
+    row.measurementUnit = undefined;
+    row.measurementUnitError = `Неизвестная единица измерения «${raw.trim()}». Допустимые: ${allowed.join(', ')}. Новую единицу сначала добавьте в Настройки → Товары`;
   }
 
   private buildImportMeasurementUnit(
@@ -12722,24 +12805,12 @@ export class ProductsService {
       return normalizedShortName ?? normalizedValue ?? '';
     }
 
-    return normalizedValue;
+    return normalizeUnit(normalizedValue) ?? normalizedValue;
   }
 
+  // "штука", "шт.", "pcs" … → "шт"; see common/measurement-units.
   private normalizeMeasurementUnitShortName(value?: string | null) {
-    const normalizedValue = this.optionalString(value);
-    if (!normalizedValue) {
-      return null;
-    }
-
-    if (
-      ['unit', 'countable', 'piece', 'pieces', 'pcs', 'pc'].includes(
-        normalizedValue.toLowerCase(),
-      )
-    ) {
-      return DEFAULT_MEASUREMENT_UNIT.short_name;
-    }
-
-    return normalizedValue;
+    return normalizeUnit(this.optionalString(value));
   }
 
   private normalizeMeasurementUnitName(value?: string | null) {
@@ -12748,11 +12819,7 @@ export class ProductsService {
       return null;
     }
 
-    if (
-      ['unit', 'countable', 'piece', 'pieces', 'pcs', 'pc'].includes(
-        normalizedValue.toLowerCase(),
-      )
-    ) {
+    if (canonicalUnit(normalizedValue) === DEFAULT_MEASUREMENT_UNIT.short_name) {
       return DEFAULT_MEASUREMENT_UNIT.name;
     }
 

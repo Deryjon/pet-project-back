@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { sameUnit } from '../common/measurement-units';
 import { PrismaService } from '../prisma/prisma.service';
 import { barcodeTypeIdFor } from './price-tag-element.constant';
 import {
@@ -1160,17 +1161,20 @@ export class CompanySettingsService {
 
     await this.ensureMeasurementUnitsSeeded(companyId);
 
-    const duplicate = await this.db.measurementUnitSetting.findFirst({
-      where: {
-        companyId,
-        OR: [{ name }, { shortName }],
-      },
-      select: { id: true },
+    // "Штука", "шт." or "ШТ" next to an existing "шт" is the same unit.
+    const existing = await this.db.measurementUnitSetting.findMany({
+      where: { companyId },
+      select: { name: true, shortName: true },
     });
+    const duplicate = existing.find((unit: { name: string; shortName: string }) =>
+      [unit.name, unit.shortName].some(
+        (spelling) => sameUnit(spelling, name) || sameUnit(spelling, shortName),
+      ),
+    );
 
     if (duplicate) {
       throw new ConflictException(
-        'Measurement unit with the same name or short_name already exists',
+        `Единица измерения «${duplicate.name}» (${duplicate.shortName}) уже есть`,
       );
     }
 
