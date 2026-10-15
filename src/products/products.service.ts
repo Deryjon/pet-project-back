@@ -37,7 +37,7 @@ import {
   variantLabel,
 } from '../common/variant-attributes';
 import { parseRequestNumber } from '../common/parse-number';
-import { normalizeSizeCode, resolveSize } from '../common/resolve-size';
+import { isNoSizeMarker, normalizeSizeCode, resolveSize } from '../common/resolve-size';
 import {
   CompanyUnit,
   PIECE_UNIT,
@@ -9569,7 +9569,10 @@ export class ProductsService {
           barcode: this.optionalString(item.barcode),
           colorName: this.optionalString(item.color_name ?? item.color),
           colorCode: this.optionalString(item.color_code),
-          sizeName: this.optionalString(item.size_name ?? item.size),
+          // "-", "без размера", "one size" and a blank cell: no size.
+          sizeName: isNoSizeMarker(item.size_name ?? item.size)
+            ? undefined
+            : this.optionalString(item.size_name ?? item.size),
           sizeType: this.optionalString(item.size_type),
           season:
             item.season !== undefined
@@ -11960,25 +11963,45 @@ export class ProductsService {
     if (!color && !dictionary.colorPending)
       throw new BadRequestException(`Неизвестный код цвета: ${colorCode}`);
 
-    if (!row.sizeName) throw new BadRequestException('Не указан код размера');
-    const resolvedSize = await resolveSize(
-      row.sizeName,
-      companyId,
-      this.prisma,
-    );
-    if (!resolvedSize.sizeId && !dictionary.sizePending) {
+    // No size (blank, "-", "без размера", "one size"): a colour-only variant,
+    // like «Без размера» in the product grid — unless the article already
+    // has sized variants, where a missing size is a mistake in the file.
+    if (!row.sizeName) {
+      const sized = row.article?.trim()
+        ? await this.prisma.productVariant.findMany({
+            where: {
+              companyId,
+              isActive: true,
+              sizeId: { not: null },
+              product: { article: row.article.trim() },
+            },
+            select: { size: { select: { name: true } } },
+            take: 20,
+          })
+        : [];
+      if (sized.length) {
+        const names = [...new Set(sized.map((v) => v.size?.name).filter(Boolean))];
+        throw new BadRequestException(
+          `Не указан размер: у артикула ${row.article?.trim()} в базе есть размеры (${names.join(', ')}). Укажите размер или баркод варианта`,
+        );
+      }
+    }
+    const resolvedSize = row.sizeName
+      ? await resolveSize(row.sizeName, companyId, this.prisma)
+      : { kind: undefined, sizeId: undefined };
+    if (row.sizeName && !resolvedSize.sizeId && !dictionary.sizePending) {
       warnings.push(
         `Размера ${normalizeSizeCode(row.sizeName)} нет в справочнике — он будет добавлен`,
       );
     }
     if (company.storeType === 'CLOTHING' && resolvedSize.kind === 'SHOES') {
       warnings.push(
-        `Размер ${normalizeSizeCode(row.sizeName)} похож на обувной для магазина одежды`,
+        `Размер ${normalizeSizeCode(row.sizeName ?? '')} похож на обувной для магазина одежды`,
       );
     }
     if (company.storeType === 'SHOES' && resolvedSize.kind === 'CLOTHING') {
       warnings.push(
-        `Размер ${normalizeSizeCode(row.sizeName)} похож на размер одежды для обувного магазина`,
+        `Размер ${normalizeSizeCode(row.sizeName ?? '')} похож на размер одежды для обувного магазина`,
       );
     }
 

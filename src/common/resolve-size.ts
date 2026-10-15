@@ -15,6 +15,20 @@ export function normalizeSizeCode(raw: string): string {
   }
 }
 
+/**
+ * Cells that mean "this product has no size" in an import file: a colour-only
+ * variant, like «Без размера» in the product grid.
+ */
+const NO_SIZE_MARKERS = new Set([
+  '', '-', '—', '–', 'нет', 'без размера', 'безразмера', 'б/р', 'бр',
+  'one size', 'onesize', 'one-size', 'os', 'free size', 'freesize', 'универсальный', 'единый',
+]);
+
+export function isNoSizeMarker(value: unknown): boolean {
+  const key = String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return NO_SIZE_MARKERS.has(key);
+}
+
 /** Kind implied by a size code alone: 30–50 → shoes, letters or R+number → clothing. */
 export function sizeKindFromCode(code: string): ProductSizeKind | null {
   const numMatch = code.match(/^(\d{2})(\.\d)?$/);

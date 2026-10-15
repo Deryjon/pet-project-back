@@ -1,4 +1,4 @@
-import { normalizeSizeCode, generateEAN13, resolveSize } from './resolve-size';
+import { isNoSizeMarker, normalizeSizeCode, generateEAN13, resolveSize } from './resolve-size';
 
 describe('resolveSize', () => {
   const prisma = (sizes: Array<Record<string, unknown>>) => ({
@@ -169,5 +169,18 @@ describe('resolve-size', () => {
       const ean2 = generateEAN13();
       expect(ean1).not.toBe(ean2);
     });
+  });
+});
+
+describe('no-size cells of the import', () => {
+  it.each(['', '  ', '-', '—', 'Без размера', 'one size', 'ONE SIZE', 'OS', 'б/р', 'Единый'])(
+    '%p means no size',
+    (value) => {
+      expect(isNoSizeMarker(value)).toBe(true);
+    },
+  );
+
+  it.each(['M', '42', 'XL', '2XL', 'S/M'])('%p is a size', (value) => {
+    expect(isNoSizeMarker(value)).toBe(false);
   });
 });
