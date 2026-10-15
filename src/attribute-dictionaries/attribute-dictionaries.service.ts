@@ -202,8 +202,23 @@ export class AttributeDictionariesService {
         'Своё значение отключается через is_active или удаляется',
       );
     }
-    this.assertCodeUnchanged(value, body);
     const data: Prisma.AttributeValueUpdateInput = {};
+    // A store's own colour may be recoloured: its HEX is its code, and a code
+    // that never changed made a mis-picked colour unfixable. Another value
+    // with that HEX is a 409 with it, as on create. Sizes/seasons keep codes.
+    const newHex = value.type === 'COLOR' ? (body.code ?? body.hex) : undefined;
+    let recolor: string | null = null;
+    if (newHex !== undefined) {
+      const hex = this.code('COLOR', newHex);
+      if (hex !== value.code) {
+        const existing = await this.findExisting('COLOR', hex, null, store);
+        if (existing && existing.id !== value.id) throw this.duplicate(existing);
+        data.code = hex;
+        recolor = hex;
+      }
+    } else {
+      this.assertCodeUnchanged(value, body);
+    }
     if (body.name !== undefined) data.name = this.name(body.name);
     if (body.sort_order !== undefined)
       data.sortOrder = this.int(body.sort_order) ?? 0;
@@ -217,10 +232,22 @@ export class AttributeDictionariesService {
     if (body.group !== undefined) {
       throw new BadRequestException('Группу значения изменить нельзя');
     }
-    const updated = await this.prisma.attributeValue.update({
-      where: { id },
-      data,
-    });
+    const updated = recolor
+      ? await this.prisma.$transaction(async (tx) => {
+          const row = await tx.attributeValue.update({ where: { id }, data });
+          // The legacy colour standing for it (the grid, receipts, import
+          // codes) takes the new shade; one named by its old HEX is renamed.
+          await tx.productColor.updateMany({
+            where: { companyId: store.companyId, attributeValueId: id, name: value.code },
+            data: { name: recolor!, nameRu: recolor!, nameUz: recolor! },
+          });
+          await tx.productColor.updateMany({
+            where: { companyId: store.companyId, attributeValueId: id },
+            data: { hex: recolor },
+          });
+          return row;
+        })
+      : await this.prisma.attributeValue.update({ where: { id }, data });
     return this.toDto(updated);
   }
 
