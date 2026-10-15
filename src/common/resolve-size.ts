@@ -29,6 +29,16 @@ export function isNoSizeMarker(value: unknown): boolean {
   return NO_SIZE_MARKERS.has(key);
 }
 
+/** Cells that mean "no colour": a size-only variant. */
+const NO_COLOR_MARKERS = new Set([
+  '', '-', '—', '–', 'нет', 'без цвета', 'безцвета', 'б/ц', 'бц', 'no color', 'no colour',
+]);
+
+export function isNoColorMarker(value: unknown): boolean {
+  const key = String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return NO_COLOR_MARKERS.has(key);
+}
+
 /** Kind implied by a size code alone: 30–50 → shoes, letters or R+number → clothing. */
 export function sizeKindFromCode(code: string): ProductSizeKind | null {
   const numMatch = code.match(/^(\d{2})(\.\d)?$/);

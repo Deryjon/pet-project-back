@@ -1,4 +1,4 @@
-import { isNoSizeMarker, normalizeSizeCode, generateEAN13, resolveSize } from './resolve-size';
+import { isNoColorMarker, isNoSizeMarker, normalizeSizeCode, generateEAN13, resolveSize } from './resolve-size';
 
 describe('resolveSize', () => {
   const prisma = (sizes: Array<Record<string, unknown>>) => ({
@@ -182,5 +182,15 @@ describe('no-size cells of the import', () => {
 
   it.each(['M', '42', 'XL', '2XL', 'S/M'])('%p is a size', (value) => {
     expect(isNoSizeMarker(value)).toBe(false);
+  });
+});
+
+describe('no-colour cells of the import', () => {
+  it.each(['', '-', 'Без цвета', 'б/ц', 'нет'])('%p means no colour', (value) => {
+    expect(isNoColorMarker(value)).toBe(true);
+  });
+
+  it.each(['Чёрный', 'BLK', '#000000'])('%p is a colour', (value) => {
+    expect(isNoColorMarker(value)).toBe(false);
   });
 });

@@ -37,7 +37,12 @@ import {
   variantLabel,
 } from '../common/variant-attributes';
 import { parseRequestNumber } from '../common/parse-number';
-import { isNoSizeMarker, normalizeSizeCode, resolveSize } from '../common/resolve-size';
+import {
+  isNoColorMarker,
+  isNoSizeMarker,
+  normalizeSizeCode,
+  resolveSize,
+} from '../common/resolve-size';
 import {
   CompanyUnit,
   PIECE_UNIT,
@@ -9567,8 +9572,13 @@ export class ProductsService {
           article: this.optionalString(item.article),
           sku: this.optionalString(item.sku),
           barcode: this.optionalString(item.barcode),
-          colorName: this.optionalString(item.color_name ?? item.color),
-          colorCode: this.optionalString(item.color_code),
+          // "-", "без цвета" and a blank cell: no colour.
+          colorName: isNoColorMarker(item.color_name ?? item.color)
+            ? undefined
+            : this.optionalString(item.color_name ?? item.color),
+          colorCode: isNoColorMarker(item.color_code)
+            ? undefined
+            : this.optionalString(item.color_code),
           // "-", "без размера", "one size" and a blank cell: no size.
           sizeName: isNoSizeMarker(item.size_name ?? item.size)
             ? undefined
@@ -11948,20 +11958,24 @@ export class ProductsService {
       throw new BadRequestException('Не указан артикул');
 
     const colorCode = (row.colorCode ?? row.colorName)?.trim().toUpperCase();
+    // No colour (blank, "-", "без цвета"): a size-only variant — unless the
+    // article already has colours, where a missing colour is a mistake.
+    // (An article with exactly one colour got it filled in above.)
     if (!colorCode) {
       const storeColors = await this.listArticleColorCodes(
         companyId,
         row.article,
       );
-      throw new BadRequestException(
-        storeColors.length > 1
-          ? `Не указан код цвета: у артикула ${row.article} в базе несколько цветов (${storeColors.join(', ')}), укажите цвет или баркод варианта`
-          : 'Не указан код цвета',
-      );
+      if (storeColors.length) {
+        throw new BadRequestException(
+          `Не указан цвет: у артикула ${row.article} в базе есть цвета (${storeColors.join(', ')}), укажите цвет или баркод варианта`,
+        );
+      }
+    } else {
+      const color = await this.findImportColor(this.prisma, companyId, colorCode);
+      if (!color && !dictionary.colorPending)
+        throw new BadRequestException(`Неизвестный код цвета: ${colorCode}`);
     }
-    const color = await this.findImportColor(this.prisma, companyId, colorCode);
-    if (!color && !dictionary.colorPending)
-      throw new BadRequestException(`Неизвестный код цвета: ${colorCode}`);
 
     // No size (blank, "-", "без размера", "one size"): a colour-only variant,
     // like «Без размера» in the product grid — unless the article already

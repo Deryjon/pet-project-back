@@ -307,7 +307,7 @@ describe('ProductsService import colours from the catalog', () => {
 
     await expect(
       service.validateImportReferences('company-1', row({ sizeName: 'M' })),
-    ).rejects.toThrow('несколько цветов (BLK, WHT)');
+    ).rejects.toThrow('в базе есть цвета (BLK, WHT)');
   });
 
   it('drops a variant SKU that only repeats the model article', () => {
@@ -376,12 +376,13 @@ describe('ProductsService import colours from the catalog', () => {
     expect((input as { seasonCode?: string }).seasonCode).toBe('LETO2026');
   });
 
-  it('still requires a colour for a new product', async () => {
+  it('a new product without a colour gets a size-only variant', async () => {
     const service = buildService({});
+    const input = row({ sizeName: 'M' });
 
-    await expect(
-      service.validateImportReferences('company-1', row({ sizeName: 'M' })),
-    ).rejects.toThrow('Не указан код цвета');
+    await expect(service.validateImportReferences('company-1', input)).resolves.toEqual([]);
+    expect(input).toMatchObject({ sizeName: 'M' });
+    expect((input as { colorCode?: string }).colorCode).toBeUndefined();
   });
 
   it('warns without blocking when the file colour differs from the catalog', async () => {
