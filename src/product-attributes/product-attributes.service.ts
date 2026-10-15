@@ -722,6 +722,7 @@ export class ProductAttributesService {
         hex: true,
         sortOrder: true,
         isActive: true,
+        attributeValueId: true,
         createdAt: true,
       },
     });
@@ -831,6 +832,7 @@ export class ProductAttributesService {
         kind: true,
         sortOrder: true,
         isActive: true,
+        attributeValueId: true,
         createdAt: true,
       },
     });
@@ -946,6 +948,7 @@ export class ProductAttributesService {
       hex: color.hex,
       sort_order: color.sortOrder,
       is_active: color.isActive,
+      attribute_value_id: color.attributeValueId,
       created_at: color.createdAt,
     };
   }
@@ -960,6 +963,7 @@ export class ProductAttributesService {
       kind: size.kind,
       sort_order: size.sortOrder,
       is_active: size.isActive,
+      attribute_value_id: size.attributeValueId,
       created_at: size.createdAt,
     };
   }
@@ -1051,6 +1055,7 @@ export class ProductAttributesService {
       name_uz: season.nameUz,
       sort_order: season.sortOrder,
       is_active: season.isActive,
+      attribute_value_id: season.attributeValueId,
       created_at: season.createdAt,
     };
   }

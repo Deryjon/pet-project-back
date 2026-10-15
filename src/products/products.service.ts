@@ -38,6 +38,7 @@ import {
 } from '../common/variant-attributes';
 import { parseRequestNumber } from '../common/parse-number';
 import { normalizeSizeCode, resolveSize } from '../common/resolve-size';
+import { applyDictionaryToImportRow } from '../attribute-dictionaries/import-dictionary';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   DEFAULT_PRODUCT_COLORS,
@@ -7839,6 +7840,8 @@ export class ProductsService {
       season?: ProductSeason;
       seasonYear?: number | null;
       collection?: string | null;
+      seasonValueId?: string | null;
+      collectionValueId?: string | null;
       photo: string | null;
       quantity: number;
       metadata?: unknown;
@@ -7934,6 +7937,9 @@ export class ProductsService {
       season: product.season,
       season_year: product.seasonYear,
       collection: product.collection,
+      // Shared dictionaries (null until the company is bound to them).
+      season_value_id: product.seasonValueId ?? null,
+      collection_value_id: product.collectionValueId ?? null,
       additional_barcodes: null,
       measurement_values: {
         total_measurement_value: totalMeasurementValue,
@@ -8246,6 +8252,9 @@ export class ProductsService {
       season: product.season,
       season_year: product.seasonYear,
       collection: product.collection,
+      // Shared dictionaries (null until the company is bound to them).
+      season_value_id: product.seasonValueId ?? null,
+      collection_value_id: product.collectionValueId ?? null,
       description,
       measurement_type: this.resolveMeasurementTypeValue(
         product.unit,
@@ -8548,6 +8557,9 @@ export class ProductsService {
       season: product.season,
       season_year: product.seasonYear,
       collection: product.collection,
+      // Shared dictionaries (null until the company is bound to them).
+      season_value_id: product.seasonValueId ?? null,
+      collection_value_id: product.collectionValueId ?? null,
       barcode_lower: '',
       barcode_upper: '',
       base_name: product.name,
@@ -10369,6 +10381,8 @@ export class ProductsService {
     const apparel =
       company &&
       ['CLOTHING', 'SHOES', 'CLOTHING_SHOES'].includes(company.storeType);
+    // Shared dictionaries (flag on): file values become legacy codes first.
+    await applyDictionaryToImportRow(tx, companyId, row, { write: true });
     const requestedColorCode = (row.colorCode ?? row.colorName)
       ?.trim()
       .toUpperCase();
@@ -11690,11 +11704,17 @@ export class ProductsService {
 
   private async resolveSeasonOptionRelation(companyId: string, value: unknown) {
     const code = this.optionalString(value);
-    if (!code || ['NO_SEASON', 'ALL', 'DEMI'].includes(code.toUpperCase())) return undefined;
+    if (!code || code.toUpperCase() === 'NO_SEASON') return undefined;
     const company = await this.prisma.company.findUnique({
       where: { id: companyId },
-      select: { storeType: true },
+      select: { storeType: true, useAttributeDictionaries: true },
     });
+    // Without the shared dictionaries ALL/DEMI stay plain markers, as before.
+    if (
+      ['ALL', 'DEMI'].includes(code.toUpperCase()) &&
+      !company?.useAttributeDictionaries
+    )
+      return undefined;
     if (
       !company ||
       !['CLOTHING', 'SHOES', 'CLOTHING_SHOES'].includes(company.storeType)
@@ -11726,6 +11746,15 @@ export class ProductsService {
       !['CLOTHING', 'SHOES', 'CLOTHING_SHOES'].includes(company.storeType)
     )
       return [];
+
+    // Shared dictionaries (flag on): "2хл" → the 2XL size, "#fff" → the white
+    // colour; a value whose legacy row does not exist yet is created on import.
+    const dictionary = await applyDictionaryToImportRow(
+      this.prisma,
+      companyId,
+      row,
+      { write: false },
+    );
 
     // A colour written by name or hex is turned into its dictionary code
     // first, so it compares equal to the colour stored on the variant.
@@ -11761,7 +11790,7 @@ export class ProductsService {
       );
     }
     const color = await this.findImportColor(this.prisma, companyId, colorCode);
-    if (!color)
+    if (!color && !dictionary.colorPending)
       throw new BadRequestException(`Неизвестный код цвета: ${colorCode}`);
 
     if (!row.sizeName) throw new BadRequestException('Не указан код размера');

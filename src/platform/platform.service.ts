@@ -12,7 +12,7 @@ import {
 } from '../company-settings/product-feature-settings';
 import { applyBusinessPreset } from '../company-settings/business-presets';
 import { StoreType } from '@prisma/client';
-import { seedStoreDefaults } from '../common/store-defaults';
+import { APPAREL_STORE_TYPES, seedStoreDefaults } from '../common/store-defaults';
 
 const DEFAULT_COMPANY_ROLES = [
   { code: 'owner', name: 'Owner', isSystem: true },
@@ -246,10 +246,30 @@ export class PlatformService {
       data.blockReason = isActive ? null : (company.blockReason ?? 'manual');
     }
 
+    // Turned on only after the owner approved the attributes:audit CSV.
+    if (body.use_attribute_dictionaries !== undefined) {
+      const enabled = this.requireBoolean(
+        body.use_attribute_dictionaries,
+        'use_attribute_dictionaries',
+      );
+      const storeType = this.parseStoreType(
+        body.store_type ?? body.storeType ?? company.storeType,
+      );
+      if (enabled && !APPAREL_STORE_TYPES.includes(storeType)) {
+        throw new BadRequestException(
+          'Справочники атрибутов доступны только магазинам одежды и обуви',
+        );
+      }
+      data.useAttributeDictionaries = enabled;
+    }
+
     const storeTypeValue = body.store_type ?? body.storeType;
     if (storeTypeValue !== undefined) {
       const storeType = this.parseStoreType(storeTypeValue);
       data.storeType = storeType;
+      if (!APPAREL_STORE_TYPES.includes(storeType)) {
+        data.useAttributeDictionaries = false;
+      }
       await this.db.$transaction(async (tx) => {
         await tx.company.update({ where: { id: companyId }, data });
         await seedStoreDefaults(tx, companyId, storeType);
@@ -1469,6 +1489,7 @@ export class PlatformService {
     isActive: boolean;
     businessType?: string;
     storeType?: StoreType;
+    useAttributeDictionaries?: boolean;
     productFeatureSettings?: unknown;
     shops: Array<{
       id: string;
@@ -1505,6 +1526,7 @@ export class PlatformService {
       is_active: company.isActive,
       business_type: company.businessType ?? 'clothing_store',
       store_type: company.storeType ?? 'ACCESSORIES',
+      use_attribute_dictionaries: company.useAttributeDictionaries ?? false,
       product_features:
         company.productFeatureSettings ??
         defaultProductFeatures('clothing_store'),
