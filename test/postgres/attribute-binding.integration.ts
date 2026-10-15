@@ -269,19 +269,17 @@ describe('Binding a client to the dictionaries (audit → apply → rollback)', 
     const black = (await service.list('COLOR', c.context)).find(
       (v) => v.code === '#000000',
     )!;
-    expect(
-      (
-        await service.linkLegacy(black.id, c.context).catch((e) => e)
-      ).getStatus(),
-    ).toBe(403);
+    const link = async (id: string) =>
+      (await service.linkLegacy([id], c.context))[0];
+    expect((await link(black.id).catch((e) => e)).getStatus()).toBe(403);
     await db.company.update({
       where: { id: c.companyId },
       data: { useAttributeDictionaries: true },
     });
 
     // No legacy black: one is created and linked; asking again reuses it.
-    const created = await service.linkLegacy(black.id, c.context);
-    expect(await service.linkLegacy(black.id, c.context)).toEqual(created);
+    const created = await link(black.id);
+    expect(await link(black.id)).toEqual(created);
     const legacyBlack = await db.productColor.findUniqueOrThrow({
       where: { id: created.legacy_id! },
     });
@@ -295,9 +293,11 @@ describe('Binding a client to the dictionaries (audit → apply → rollback)', 
     const white = (await service.list('COLOR', c.context)).find(
       (v) => v.code === '#FFFFFF',
     )!;
-    expect(await service.linkLegacy(white.id, c.context)).toEqual({
+    expect(await link(white.id)).toEqual({
+      id: white.id,
       kind: 'color',
       legacy_id: c.white.id,
+      legacy_code: 'WHT',
     });
     expect(
       await db.productVariant.count({
@@ -330,7 +330,8 @@ describe('Binding a client to the dictionaries (audit → apply → rollback)', 
     const fw = (await service.list('SEASON', c.context)).find(
       (v) => v.code === 'FW26',
     )!;
-    expect(await service.linkLegacy(fw.id, c.context)).toEqual({
+    expect(await link(fw.id)).toEqual({
+      id: fw.id,
       kind: 'collection',
       collection: 'FW26',
     });

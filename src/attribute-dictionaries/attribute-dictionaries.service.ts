@@ -244,21 +244,41 @@ export class AttributeDictionariesService {
     return { deleted: true, archived: false };
   }
 
-  /** Product form: the legacy row to save for a picked dictionary value (see ensureLegacyLink). */
-  async linkLegacy(id: string, requestContext: CompanyRequestContext) {
+  /**
+   * Product form: the legacy rows to save for picked dictionary values (see
+   * ensureLegacyLink), one transaction for a whole size grid.
+   */
+  async linkLegacy(ids: unknown, requestContext: CompanyRequestContext) {
+    const list = (Array.isArray(ids) ? ids : [ids]).map(String).filter(Boolean);
+    if (!list.length || list.length > 100) {
+      throw new BadRequestException('Укажите от 1 до 100 значений');
+    }
     const store = await this.store(requestContext);
     await this.requireDictionariesOn(store.companyId);
-    const value = await this.visibleValue(id, store);
-    if (value.archivedAt) throw new BadRequestException('Значение в архиве');
-    const link = await this.prisma.$transaction((tx) =>
-      ensureLegacyLink(tx, store, value, { write: true }),
-    );
-    return link.kind === 'collection'
-      ? { kind: link.kind, collection: link.collection }
-      : {
-          kind: link.kind,
-          legacy_id: 'legacyId' in link ? link.legacyId : null,
-        };
+    const values: AttributeValue[] = [];
+    for (const id of new Set(list)) {
+      const value = await this.visibleValue(id, store);
+      if (value.archivedAt)
+        throw new BadRequestException(`Значение ${value.code} в архиве`);
+      values.push(value);
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const links: Array<Record<string, string | null>> = [];
+      for (const value of values) {
+        const link = await ensureLegacyLink(tx, store, value, { write: true });
+        links.push(
+          link.kind === 'collection'
+            ? { id: value.id, kind: link.kind, collection: link.collection }
+            : {
+                id: value.id,
+                kind: link.kind,
+                legacy_id: 'legacyId' in link ? link.legacyId : null,
+                legacy_code: 'legacyCode' in link ? link.legacyCode : null,
+              },
+        );
+      }
+      return links;
+    });
   }
 
   private async requireDictionariesOn(companyId: string) {

@@ -62,7 +62,7 @@
 | POST | `/attributes/{type}` `{code, name?, group?}` | Владелец/админ. Нормализация; при дубле — 409 `{message, existing}`; похожий цвет — `warnings` |
 | PATCH | `/attributes/{id}` | Своё: `name`, `sort_order`, `is_active`, `is_archived`. Системное: только `is_hidden`, `sort_order`, иначе 403 |
 | DELETE | `/attributes/{id}` | Своё; используемое уходит в архив. Системное — 403 |
-| POST | `/attributes/{id}/link` | Карточка товара (флаг включён): старая строка для выбранного значения |
+| POST | `/attributes/link` `{ids: [...]}` | Карточка товара (флаг включён): старые строки (`legacy_id`, `legacy_code`) для выбранных значений |
 | GET/POST/PATCH | `/admin/attributes` | Суперадмин платформы, только системные значения; код не меняется |
 
 Сезоны: тип `SEASON`, две группы — `TIME_OF_YEAR` (время года) и `COLLECTION` (SS/FW + год).

@@ -38,6 +38,15 @@ export class AttributeDictionariesController {
     );
   }
 
+  /** Product form: legacy rows for picked values. Declared before :type. */
+  @Post('link')
+  link(
+    @Body() body: { ids?: unknown },
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    return this.dictionaries.linkLegacy(body?.ids, requestContext);
+  }
+
   @Post(':type')
   create(
     @Param('type') type: string,
@@ -49,15 +58,6 @@ export class AttributeDictionariesController {
       body ?? {},
       requestContext,
     );
-  }
-
-  /** Product form: the legacy row to save for a picked dictionary value. */
-  @Post(':id/link')
-  link(
-    @Param('id') id: string,
-    @CurrentCompanyContext() requestContext: CompanyRequestContext,
-  ) {
-    return this.dictionaries.linkLegacy(id, requestContext);
   }
 
   @Patch(':id')
