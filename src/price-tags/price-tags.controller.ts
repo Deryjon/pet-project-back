@@ -1,4 +1,14 @@
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Logger,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { CurrentCompanyContext } from '../auth/company-context.decorator';
 import { CompanyAccessGuard } from '../auth/guards/company-access.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -9,8 +19,12 @@ import {
 import { CompanySettingsService } from '../company-settings/company-settings.service';
 import { PriceTagsService } from './price-tags.service';
 
+const PRINT_STAGES = new Set(['data', 'render', 'print']);
+
 @Controller()
 export class PriceTagsController {
+  private readonly logger = new Logger('PriceTagPrint');
+
   constructor(
     private readonly priceTagsService: PriceTagsService,
     private readonly companySettingsService: CompanySettingsService,
@@ -52,5 +66,40 @@ export class PriceTagsController {
   ) {
     const companyId = await this.requireCompanyId(requestContext);
     return this.companySettingsService.getPriceTags(companyId);
+  }
+
+  /**
+   * A print stage that took over 3 s on a client (data / render / print),
+   * written to the server log to find the real bottleneck on slow devices.
+   */
+  @Post(['price-tags/print-metrics', 'v1/price-tags/print-metrics'])
+  @HttpCode(204)
+  @UseGuards(JwtAuthGuard, CompanyAccessGuard)
+  logPrintMetrics(
+    @Body() body: Record<string, unknown>,
+    @CurrentCompanyContext() requestContext: CompanyRequestContext,
+  ) {
+    const context = requireCompanyContext(requestContext);
+    const stage = typeof body?.stage === 'string' ? body.stage : '';
+    const duration = Math.round(Number(body?.duration_ms));
+    if (!PRINT_STAGES.has(stage) || !Number.isFinite(duration)) return;
+    const count = (value: unknown) =>
+      Number.isFinite(Number(value)) ? Number(value) : undefined;
+    this.logger.warn(
+      JSON.stringify({
+        company_id: context.companyId,
+        user_id: context.userId,
+        shop_id: context.currentShopId,
+        stage,
+        duration_ms: duration,
+        labels: count(body.labels),
+        products: count(body.products),
+        chunk: count(body.chunk),
+        user_agent:
+          typeof body.user_agent === 'string'
+            ? body.user_agent.slice(0, 200)
+            : undefined,
+      }),
+    );
   }
 }
