@@ -1129,6 +1129,11 @@ model ChequeSettings {
   hasLowerBlock       Boolean  @default(true)
   // layout
   paperWidth          Int      @default(80)
+  // printer profile: a template per printer/roll, picked per device
+  printableWidth      Int      @default(0) // mm the head prints; 0 = usual for the roll (80→72, 58→48)
+  offsetMm            Int      @default(0) // blank strip left of the receipt
+  feedMm              Int      @default(0) // blank paper after it, for the cutter
+  printMode           String   @default("browser") // browser | pdf
   fontSize            Int      @default(13)
   dividerStyle        String   @default("single") // single | double | none
   dividerGap          Int      @default(8)

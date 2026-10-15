@@ -115,14 +115,16 @@ export class ReceiptsController {
 
   // send-telegram deferred — future work should reuse TelegramService.sendMessage()
 
-  // Read-only: the template actually used to render/print receipts (isDefault=true).
+  // Read-only: the template used to render/print receipts — the one this
+  // device picked (template_id), else the company default (isDefault=true).
   @Get(['cheque-settings', 'v1/cheque-settings'])
   @UseGuards(JwtAuthGuard, CompanyAccessGuard)
   async getChequeSettings(
+    @Query('template_id') templateId: string | undefined,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
     const companyId = await this.requireCompanyId(requestContext);
-    return this.receiptsService.getChequeSettings(companyId);
+    return this.receiptsService.getChequeSettings(companyId, templateId);
   }
 
   @Get(['cheque', 'v1/cheque'])

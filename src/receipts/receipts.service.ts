@@ -422,8 +422,17 @@ export class ReceiptsService {
     return this.reconcileTemplate(row);
   }
 
-  async getChequeSettings(companyId: string) {
-    const template = await this.getOrCreateDefaultChequeTemplate(companyId);
+  /** A device's chosen template (printer profile); a deleted or foreign one
+   * falls back to the company default rather than failing the receipt. */
+  async getChequeSettings(companyId: string, templateId?: string) {
+    const chosen = templateId?.trim()
+      ? await this.prisma.chequeSettings.findFirst({
+          where: { id: templateId.trim(), companyId },
+        })
+      : null;
+    const template = chosen
+      ? await this.reconcileTemplate(chosen)
+      : await this.getOrCreateDefaultChequeTemplate(companyId);
     return this.toSettingsResponse(template);
   }
 
@@ -457,6 +466,8 @@ export class ReceiptsService {
         id: row.id,
         name: row.name,
         is_default: row.isDefault,
+        paper_width: row.paperWidth,
+        print_mode: row.printMode === 'pdf' ? 'pdf' : 'browser',
         created_at: row.createdAt,
         updated_at: row.updatedAt,
       })),
@@ -552,6 +563,10 @@ export class ReceiptsService {
     if (dto.has_information_block !== undefined) patch.hasInformationBlock = dto.has_information_block;
     if (dto.has_lower_block !== undefined) patch.hasLowerBlock = dto.has_lower_block;
     if (dto.paper_width !== undefined) patch.paperWidth = dto.paper_width;
+    if (dto.printable_width !== undefined) patch.printableWidth = dto.printable_width;
+    if (dto.offset_mm !== undefined) patch.offsetMm = dto.offset_mm;
+    if (dto.feed_mm !== undefined) patch.feedMm = dto.feed_mm;
+    if (dto.print_mode !== undefined) patch.printMode = dto.print_mode;
     if (dto.font_size !== undefined) patch.fontSize = dto.font_size;
     if (dto.divider_style !== undefined) patch.dividerStyle = dto.divider_style;
     if (dto.divider_gap !== undefined) patch.dividerGap = dto.divider_gap;
@@ -580,6 +595,10 @@ export class ReceiptsService {
     hasInformationBlock: boolean;
     hasLowerBlock: boolean;
     paperWidth: number;
+    printableWidth?: number;
+    offsetMm?: number;
+    feedMm?: number;
+    printMode?: string;
     fontSize: number;
     dividerStyle: string;
     dividerGap: number;
@@ -617,6 +636,10 @@ export class ReceiptsService {
       has_information_block: settings.hasInformationBlock,
       has_lower_block: settings.hasLowerBlock,
       paper_width: settings.paperWidth,
+      printable_width: settings.printableWidth ?? 0,
+      offset_mm: settings.offsetMm ?? 0,
+      feed_mm: settings.feedMm ?? 0,
+      print_mode: settings.printMode === 'pdf' ? 'pdf' : 'browser',
       font_size: settings.fontSize,
       divider_style: settings.dividerStyle,
       divider_gap: settings.dividerGap,

@@ -47,8 +47,32 @@ export class UpdateChequeSettingsDto {
   @IsOptional()
   @IsInt()
   @Min(20)
-  @Max(120)
+  // The editor offers A4 (210 mm).
+  @Max(220)
   paper_width?: number;
+
+  // Printer profile of the template (0 = automatic / none).
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(220)
+  printable_width?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(30)
+  offset_mm?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100)
+  feed_mm?: number;
+
+  @IsOptional()
+  @IsIn(['browser', 'pdf'])
+  print_mode?: string;
 
   @IsOptional()
   @IsInt()

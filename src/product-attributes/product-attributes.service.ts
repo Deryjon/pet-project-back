@@ -789,9 +789,10 @@ export class ProductAttributesService {
   }
 
   /**
-   * A store's own colour is only a picked #RRGGBB: no typed name (free names
-   * gave "красный" next to "Красный"), the HEX is the identity and the label.
-   * The same HEX again is a 409 carrying the existing colour to select.
+   * A store's own colour is a picked #RRGGBB: the HEX is its identity, the
+   * name is optional (without one the HEX is the label). The same HEX again,
+   * or a name that differs only in case / ё / spaces ("красный" next to
+   * "Красный"), is a 409 carrying the existing colour to select.
    */
   async createColor(
     body: Record<string, unknown>,
@@ -814,7 +815,14 @@ export class ProductAttributesService {
       where: { companyId },
       orderBy: [{ isActive: 'desc' }, { sortOrder: 'asc' }],
     });
-    const existing = colors.find((color) => hexKey(color.hex) === hex);
+    const typedName = cleanName(body.name_ru ?? body.name);
+    if (typedName.length > 60) throw new BadRequestException('Название не длиннее 60 символов');
+    // A "name" that is itself a colour code adds nothing: the HEX labels it.
+    const looksLikeHex = /^#?[0-9a-f]{3}([0-9a-f]{3})?$/i.test(typedName);
+    const name = typedName && !looksLikeHex ? typedName : hex;
+    const existing =
+      colors.find((color) => hexKey(color.hex) === hex) ??
+      (name !== hex ? colors.find((color) => nameKey(color.name) === nameKey(name)) : undefined);
     if (existing) {
       throw new ConflictException({
         statusCode: 409,
@@ -843,9 +851,9 @@ export class ProductAttributesService {
         data: {
           companyId,
           code,
-          name: hex,
-          nameRu: hex,
-          nameUz: hex,
+          name,
+          nameRu: name,
+          nameUz: cleanName(body.name_uz) || name,
           hex,
           sortOrder: this.optionalInt(body.sort_order) ?? 1000,
           isActive: body.is_active !== false,

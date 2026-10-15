@@ -41,13 +41,28 @@ describe('Colour / size dictionaries', () => {
     createdAt: new Date(),
   };
 
-  it('a store colour is its HEX: no typed name, HEX as name and code', async () => {
+  it('a store colour without a name is labelled by its HEX', async () => {
     const { service, colorCreate } = setup();
-    const color = await service.createColor({ name: 'Тёмно-синий', hex: '#1f2a44' }, testContext());
+    const color = await service.createColor({ hex: '#1f2a44' }, testContext());
     expect(colorCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({ code: 'D1F2A44', name: '#1F2A44', nameRu: '#1F2A44', nameUz: '#1F2A44', hex: '#1F2A44' }),
     });
     expect(color.hex).toBe('#1F2A44');
+  });
+
+  it('keeps an optional name, cleaned, with the HEX code', async () => {
+    const { service, colorCreate } = setup();
+    await service.createColor({ name: '  Тёмно-синий   ночь ', hex: '#1f2a44' }, testContext());
+    expect(colorCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ code: 'D1F2A44', name: 'Тёмно-синий ночь', nameRu: 'Тёмно-синий ночь', hex: '#1F2A44' }),
+    });
+  });
+
+  it.each(['красный', 'КРАСНЫЙ ', 'Красный'])('name %p next to «Красный» is a 409 even with another HEX', async (name) => {
+    const { service, colorCreate } = setup([red]);
+    const body = await conflictBody(service.createColor({ name, hex: '#00AA00' }, testContext()));
+    expect(body.existing).toEqual(expect.objectContaining({ id: 'red' }));
+    expect(colorCreate).not.toHaveBeenCalled();
   });
 
   it('accepts the colour picker value the product form used to send as "code", and short HEX', async () => {
@@ -156,7 +171,7 @@ describe('Values of the built-in colour / size attributes', () => {
   it('adding a value to "Цвет" creates the colour from its HEX', async () => {
     const { service, colorCreate, optionCreate } = setup('color');
     const option = await service.createOption('def-1', { value: 'Бордовый', meta: { hex: '#7b1e2b' } }, testContext());
-    expect(colorCreate).toHaveBeenCalledWith({ data: expect.objectContaining({ name: '#7B1E2B', code: 'D7B1E2B' }) });
+    expect(colorCreate).toHaveBeenCalledWith({ data: expect.objectContaining({ name: 'Бордовый', code: 'D7B1E2B', hex: '#7B1E2B' }) });
     expect(optionCreate).not.toHaveBeenCalled();
     expect(option).toEqual(expect.objectContaining({ id: 'opt-1' }));
   });
