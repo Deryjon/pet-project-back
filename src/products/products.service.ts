@@ -38,6 +38,7 @@ import {
 } from '../common/variant-attributes';
 import { parseRequestNumber } from '../common/parse-number';
 import { normalizeSizeCode, resolveSize } from '../common/resolve-size';
+import { applyDictionaryToImportRow } from '../attribute-dictionaries/import-dictionary';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   DEFAULT_PRODUCT_COLORS,
@@ -10369,6 +10370,8 @@ export class ProductsService {
     const apparel =
       company &&
       ['CLOTHING', 'SHOES', 'CLOTHING_SHOES'].includes(company.storeType);
+    // Shared dictionaries (flag on): file values become legacy codes first.
+    await applyDictionaryToImportRow(tx, companyId, row, { write: true });
     const requestedColorCode = (row.colorCode ?? row.colorName)
       ?.trim()
       .toUpperCase();
@@ -11727,6 +11730,15 @@ export class ProductsService {
     )
       return [];
 
+    // Shared dictionaries (flag on): "2хл" → the 2XL size, "#fff" → the white
+    // colour; a value whose legacy row does not exist yet is created on import.
+    const dictionary = await applyDictionaryToImportRow(
+      this.prisma,
+      companyId,
+      row,
+      { write: false },
+    );
+
     // A colour written by name or hex is turned into its dictionary code
     // first, so it compares equal to the colour stored on the variant.
     const fileColor = (row.colorCode ?? row.colorName)?.trim();
@@ -11761,7 +11773,7 @@ export class ProductsService {
       );
     }
     const color = await this.findImportColor(this.prisma, companyId, colorCode);
-    if (!color)
+    if (!color && !dictionary.colorPending)
       throw new BadRequestException(`Неизвестный код цвета: ${colorCode}`);
 
     if (!row.sizeName) throw new BadRequestException('Не указан код размера');

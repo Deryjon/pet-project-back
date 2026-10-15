@@ -4,6 +4,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { AppThrottlerGuard } from './common/app-throttler.guard';
 import { APP_GUARD } from '@nestjs/core';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
+import { AttributeDictionariesModule } from './attribute-dictionaries/attribute-dictionaries.module';
 import { AuthModule } from './auth/auth.module';
 import { ClientsModule } from './clients/clients.module';
 import { CompanySettingsModule } from './company-settings/company-settings.module';
@@ -46,6 +47,7 @@ import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
     PrismaModule,
     PlatformModule,
     AuthModule,
+    AttributeDictionariesModule,
     ClientsModule,
     CompanySettingsModule,
     DashboardModule,

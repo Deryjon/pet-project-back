@@ -20,4 +20,8 @@ export class UpdateCompanyDto {
   @IsOptional()
   @IsBoolean()
   is_active?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  use_attribute_dictionaries?: boolean;
 }

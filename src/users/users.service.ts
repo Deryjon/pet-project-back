@@ -2608,6 +2608,7 @@ export class UsersService {
     subdomain: string;
     isActive: boolean;
     storeType?: string;
+    useAttributeDictionaries?: boolean;
   }) {
     return {
       id: company.id,
@@ -2617,6 +2618,7 @@ export class UsersService {
       name: company.name,
       is_active: company.isActive,
       store_type: company.storeType ?? 'ACCESSORIES',
+      use_attribute_dictionaries: company.useAttributeDictionaries ?? false,
     };
   }
 
