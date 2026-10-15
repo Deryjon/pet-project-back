@@ -7840,6 +7840,8 @@ export class ProductsService {
       season?: ProductSeason;
       seasonYear?: number | null;
       collection?: string | null;
+      seasonValueId?: string | null;
+      collectionValueId?: string | null;
       photo: string | null;
       quantity: number;
       metadata?: unknown;
@@ -7935,6 +7937,9 @@ export class ProductsService {
       season: product.season,
       season_year: product.seasonYear,
       collection: product.collection,
+      // Shared dictionaries (null until the company is bound to them).
+      season_value_id: product.seasonValueId ?? null,
+      collection_value_id: product.collectionValueId ?? null,
       additional_barcodes: null,
       measurement_values: {
         total_measurement_value: totalMeasurementValue,
@@ -8247,6 +8252,9 @@ export class ProductsService {
       season: product.season,
       season_year: product.seasonYear,
       collection: product.collection,
+      // Shared dictionaries (null until the company is bound to them).
+      season_value_id: product.seasonValueId ?? null,
+      collection_value_id: product.collectionValueId ?? null,
       description,
       measurement_type: this.resolveMeasurementTypeValue(
         product.unit,
@@ -8549,6 +8557,9 @@ export class ProductsService {
       season: product.season,
       season_year: product.seasonYear,
       collection: product.collection,
+      // Shared dictionaries (null until the company is bound to them).
+      season_value_id: product.seasonValueId ?? null,
+      collection_value_id: product.collectionValueId ?? null,
       barcode_lower: '',
       barcode_upper: '',
       base_name: product.name,
@@ -11693,11 +11704,17 @@ export class ProductsService {
 
   private async resolveSeasonOptionRelation(companyId: string, value: unknown) {
     const code = this.optionalString(value);
-    if (!code || ['NO_SEASON', 'ALL', 'DEMI'].includes(code.toUpperCase())) return undefined;
+    if (!code || code.toUpperCase() === 'NO_SEASON') return undefined;
     const company = await this.prisma.company.findUnique({
       where: { id: companyId },
-      select: { storeType: true },
+      select: { storeType: true, useAttributeDictionaries: true },
     });
+    // Without the shared dictionaries ALL/DEMI stay plain markers, as before.
+    if (
+      ['ALL', 'DEMI'].includes(code.toUpperCase()) &&
+      !company?.useAttributeDictionaries
+    )
+      return undefined;
     if (
       !company ||
       !['CLOTHING', 'SHOES', 'CLOTHING_SHOES'].includes(company.storeType)
