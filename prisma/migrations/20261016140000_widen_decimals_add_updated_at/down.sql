@@ -1,0 +1,79 @@
+-- Reverts widen_decimals_add_updated_at. Run it manually (Prisma ignores down.sql),
+-- then mark the migration with `prisma migrate resolve --rolled-back <name>`.
+-- Narrowing fails if any value reaches 10^10 (scale 2) or 10^9 (scale 3 quantity
+-- columns); check max(abs(column)) first. Everything runs in one transaction, so a
+-- failure leaves the schema unchanged. Dropping updatedAt loses those values.
+
+BEGIN;
+
+ALTER TABLE "Plan" ALTER COLUMN "priceMonthly" SET DATA TYPE DECIMAL(12,2);
+
+ALTER TABLE "Payment" ALTER COLUMN "amount" SET DATA TYPE DECIMAL(12,2);
+
+ALTER TABLE "ProductBundleComponent" ALTER COLUMN "quantity" SET DATA TYPE DECIMAL(12,3);
+
+ALTER TABLE "Client" ALTER COLUMN "balanceUzs" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "debtUzs" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "totalPurchasesUzs" SET DATA TYPE DECIMAL(12,2);
+
+ALTER TABLE "ClientDebt" ALTER COLUMN "amountUzs" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "remainingAmountUzs" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "repaidAmountUzs" SET DATA TYPE DECIMAL(12,2);
+
+ALTER TABLE "ClientDebtRepayment" ALTER COLUMN "amountUzs" SET DATA TYPE DECIMAL(12,2);
+
+ALTER TABLE "Order" ALTER COLUMN "totalPrice" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "discountAmount" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "paidAmount" SET DATA TYPE DECIMAL(12,2);
+
+ALTER TABLE "OrderItem" ALTER COLUMN "quantity" SET DATA TYPE DECIMAL(12,3),
+ALTER COLUMN "price" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "discountAmount" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "totalPrice" SET DATA TYPE DECIMAL(12,2);
+
+ALTER TABLE "OrderPayment" ALTER COLUMN "amount" SET DATA TYPE DECIMAL(12,2);
+
+ALTER TABLE "StockMovement" ALTER COLUMN "quantity" SET DATA TYPE DECIMAL(12,3),
+ALTER COLUMN "loadedMeasurementValue" SET DATA TYPE DECIMAL(12,3),
+ALTER COLUMN "beforeQuantity" SET DATA TYPE DECIMAL(12,3),
+ALTER COLUMN "afterQuantity" SET DATA TYPE DECIMAL(12,3),
+ALTER COLUMN "supplyPrice" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "retailPrice" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "newRetailPrice" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "fromRetailPrice" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "fromSupplyPrice" SET DATA TYPE DECIMAL(12,2);
+
+ALTER TABLE "ProductSupplyPriceHistory" ALTER COLUMN "supplyPrice" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "oldSupplyPrice" SET DATA TYPE DECIMAL(12,2);
+
+ALTER TABLE "ProductSupplier" DROP COLUMN IF EXISTS "updatedAt";
+
+ALTER TABLE "InventoryCountAttempt" DROP COLUMN IF EXISTS "updatedAt";
+
+ALTER TABLE "TransferItem" ALTER COLUMN "quantity" SET DATA TYPE DECIMAL(12,3),
+ALTER COLUMN "arrivedQuantity" SET DATA TYPE DECIMAL(12,3);
+
+ALTER TABLE "Sale" ALTER COLUMN "discountPercent" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "discountAmount" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "payableTotal" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "total" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "cashbackAmount" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "cashbackPaid" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "debtCredit" SET DATA TYPE DECIMAL(12,2);
+
+ALTER TABLE "SaleItem" ALTER COLUMN "quantity" SET DATA TYPE DECIMAL(12,3),
+ALTER COLUMN "salePrice" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "lineTotal" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "retailPriceAtSale" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "discountAmount" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "finalPrice" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "supplyPriceAtSale" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "profitAtSale" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "markupAtSale" SET DATA TYPE DECIMAL(12,2),
+ALTER COLUMN "sellerBonusAmount" SET DATA TYPE DECIMAL(12,2);
+
+ALTER TABLE "TelegramSubscriber" DROP COLUMN IF EXISTS "updatedAt";
+
+ALTER TABLE "TelegramLinkToken" DROP COLUMN IF EXISTS "updatedAt";
+
+COMMIT;

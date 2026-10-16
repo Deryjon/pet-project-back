@@ -130,7 +130,7 @@ Webhook Telegram регистрируется при старте приложе
 | `DATABASE_URL` для тестов `TEST_DATABASE_URL`, `TEST_LEGACY_DATABASE_URL`, `POSTGRES_TEST_ADMIN_URL`, `PG_BIN` | `test/postgres/` | см. `test/postgres/README.md` |
 | `SHOPS_JSON`, `CASH_BOXES_JSON`, `PRICE_TAGS_JSON`, `COMPANY_*_JSON`, `MEASUREMENT_UNITS_JSON`, `DEFAULT_CURRENCY_*`, `PRODUCT_TYPE_*_ID`, `DEFAULT_PRODUCT_TYPE_ID` | код компании и товаров | значения по умолчанию для тестовых и seed-данных |
 
-> **Предупреждение.** Если `PLATFORM_ADMIN_PASSWORD` не задан, `prisma/seed.ts` использует встроенное значение по умолчанию. Перед запуском seed на любой публичной базе задайте все переменные `PLATFORM_ADMIN_*` и смените пароль оператора.
+> **Предупреждение.** Если `PLATFORM_ADMIN_PASSWORD` не задан, `prisma/seed.ts` в `NODE_ENV=production` завершается ошибкой, в остальных окружениях использует пароль по умолчанию. На любой общей базе задайте все `PLATFORM_ADMIN_*`.
 
 ### 4.3 Frontend (`pet-project/.env`)
 

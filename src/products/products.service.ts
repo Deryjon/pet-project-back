@@ -821,7 +821,8 @@ export class ProductsService {
           // (companyId, code) and was silently skipped.
           code: presetSizeCode(grid.type, name),
           type: grid.type,
-          kind: grid.type === 'SHOES' ? ('SHOES' as const) : ('CLOTHING' as const),
+          kind:
+            grid.type === 'SHOES' ? ('SHOES' as const) : ('CLOTHING' as const),
           system: grid.system,
           sortOrder: index,
         })),
@@ -2593,11 +2594,23 @@ export class ProductsService {
     }
 
     if (blockedItems.length) {
+      const reason =
+        'Часть остатка по этим товарам уже израсходована (продажа/списание/трансфер) — откат увёл бы остаток в минус';
+      // The dry-run preview stays informational (HTTP 200) so the UI can list
+      // the blocked items; a real rollback is refused with 409.
+      if (!options?.dryRun) {
+        throw new ConflictException({
+          statusCode: 409,
+          message: reason,
+          error: 'Conflict',
+          can_rollback: false,
+          blocked_items: blockedItems,
+        });
+      }
       return {
         can_rollback: false,
         blocked_items: blockedItems,
-        reason:
-          'Часть остатка по этим товарам уже израсходована (продажа/списание/трансфер) — откат увёл бы остаток в минус',
+        reason,
       };
     }
 
@@ -3057,6 +3070,8 @@ export class ProductsService {
         return 'Завершен';
       case 'cancelled':
         return 'Отменен';
+      case 'rolled_back':
+        return 'Возвращён';
       case 'validating':
         return 'Проверяется';
       case 'importing':
@@ -4174,7 +4189,9 @@ export class ProductsService {
     if (normalized !== 'small_left' && normalized !== 'zero_left') {
       return undefined;
     }
-    const codes = branchCodes.map((code) => String(code ?? '').trim()).filter(Boolean);
+    const codes = branchCodes
+      .map((code) => String(code ?? '').trim())
+      .filter(Boolean);
     if (!codes.length) return [];
     const threshold = await this.getLowStockThreshold();
     const having =
@@ -8922,9 +8939,7 @@ export class ProductsService {
             }
           : { quantity: { gt: 0, lte: 5 } },
       );
-    }
-
-    else if (normalizedStatus === 'zero_left') {
+    } else if (normalizedStatus === 'zero_left') {
       and.push(
         resolvedShopIds.length
           ? {
@@ -11741,9 +11756,24 @@ export class ProductsService {
     companyId: string,
     row: ImportRowInput,
   ) {
-    row.categoryName = await this.existingRefName(db, 'category', companyId, row.categoryName);
-    row.brandName = await this.existingRefName(db, 'brand', companyId, row.brandName);
-    row.supplier = await this.existingRefName(db, 'supplier', companyId, row.supplier);
+    row.categoryName = await this.existingRefName(
+      db,
+      'category',
+      companyId,
+      row.categoryName,
+    );
+    row.brandName = await this.existingRefName(
+      db,
+      'brand',
+      companyId,
+      row.brandName,
+    );
+    row.supplier = await this.existingRefName(
+      db,
+      'supplier',
+      companyId,
+      row.supplier,
+    );
   }
 
   private async loadCompanyUnits(companyId: string): Promise<CompanyUnit[]> {
@@ -11839,8 +11869,10 @@ export class ProductsService {
     if (!normalized) return ProductSeason.NO_SEASON;
     if (normalized === ProductSeason.SS) return ProductSeason.SS;
     if (normalized === ProductSeason.AW) return ProductSeason.AW;
-    if (/SUMMER|SPRING|ЛЕТ|ВЕСН|YOZ|BAHOR|LETO|VESNA/.test(normalized)) return ProductSeason.SS;
-    if (/WINTER|AUTUMN|FALL|ЗИМ|ОСЕН|QISH|KUZ|ZIMA|OSEN/.test(normalized)) return ProductSeason.AW;
+    if (/SUMMER|SPRING|ЛЕТ|ВЕСН|YOZ|BAHOR|LETO|VESNA/.test(normalized))
+      return ProductSeason.SS;
+    if (/WINTER|AUTUMN|FALL|ЗИМ|ОСЕН|QISH|KUZ|ZIMA|OSEN/.test(normalized))
+      return ProductSeason.AW;
     return ProductSeason.NO_SEASON;
   }
 
@@ -11853,7 +11885,12 @@ export class ProductsService {
     const text = value?.trim();
     if (!text) return null;
     const code = text.toUpperCase();
-    const aliases = code === 'SS' ? ['SUMMER', 'SS'] : code === 'AW' ? ['WINTER', 'AW'] : [code];
+    const aliases =
+      code === 'SS'
+        ? ['SUMMER', 'SS']
+        : code === 'AW'
+          ? ['WINTER', 'AW']
+          : [code];
     return client.productSeasonOption.findFirst({
       where: {
         companyId,
@@ -11972,7 +12009,11 @@ export class ProductsService {
         );
       }
     } else {
-      const color = await this.findImportColor(this.prisma, companyId, colorCode);
+      const color = await this.findImportColor(
+        this.prisma,
+        companyId,
+        colorCode,
+      );
       if (!color && !dictionary.colorPending)
         throw new BadRequestException(`Неизвестный код цвета: ${colorCode}`);
     }
@@ -11994,7 +12035,9 @@ export class ProductsService {
           })
         : [];
       if (sized.length) {
-        const names = [...new Set(sized.map((v) => v.size?.name).filter(Boolean))];
+        const names = [
+          ...new Set(sized.map((v) => v.size?.name).filter(Boolean)),
+        ];
         throw new BadRequestException(
           `Не указан размер: у артикула ${row.article?.trim()} в базе есть размеры (${names.join(', ')}). Укажите размер или баркод варианта`,
         );
@@ -12026,7 +12069,11 @@ export class ProductsService {
       !seasonCode ||
       ['NO_SEASON', 'ALL', 'DEMI', 'SS', 'AW'].includes(seasonCode);
     if (!matchedVariant && !isSeasonMarker) {
-      const season = await this.findSeasonOption(this.prisma, companyId, row.seasonCode);
+      const season = await this.findSeasonOption(
+        this.prisma,
+        companyId,
+        row.seasonCode,
+      );
       if (!season)
         throw new BadRequestException(
           `Сезон «${row.seasonCode?.trim()}» не найден: укажите код или название сезона из «Цвета, размеры, сезоны»`,
@@ -12148,10 +12195,19 @@ export class ProductsService {
     const key = nameKey(trimmed);
     const colors = await db.productColor.findMany({
       where: { companyId, isActive: true },
-      select: { id: true, code: true, name: true, nameRu: true, nameUz: true, hex: true },
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        nameRu: true,
+        nameUz: true,
+        hex: true,
+      },
       orderBy: { sortOrder: 'asc' },
     });
-    const byHex = hex ? colors.filter((color) => hexKey(color.hex) === hex) : [];
+    const byHex = hex
+      ? colors.filter((color) => hexKey(color.hex) === hex)
+      : [];
     const byName = (
       byHex.length
         ? byHex
@@ -12951,7 +13007,9 @@ export class ProductsService {
       return null;
     }
 
-    if (canonicalUnit(normalizedValue) === DEFAULT_MEASUREMENT_UNIT.short_name) {
+    if (
+      canonicalUnit(normalizedValue) === DEFAULT_MEASUREMENT_UNIT.short_name
+    ) {
       return DEFAULT_MEASUREMENT_UNIT.name;
     }
 

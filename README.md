@@ -46,14 +46,14 @@ npm run prisma:seed           # компания и учётка операто�
 npm run attributes:seed       # общий справочник цветов, размеров и сезонов
 ```
 
-> Перед `prisma:seed` задайте `COMPANY_LOGIN`, `PLATFORM_ADMIN_PHONE` и `PLATFORM_ADMIN_PASSWORD`. Без `PLATFORM_ADMIN_PASSWORD` seed использует встроенное значение по умолчанию: не запускайте его на общей базе без этих переменных.
+> Перед `prisma:seed` задайте `COMPANY_LOGIN`, `PLATFORM_ADMIN_PHONE` и `PLATFORM_ADMIN_PASSWORD`. Без `PLATFORM_ADMIN_PASSWORD` seed в `NODE_ENV=production` завершается ошибкой, а в остальных окружениях использует пароль по умолчанию и печатает предупреждение.
 
 ```bash
 # 6. Запуск с перезагрузкой при изменениях
 npm run start:dev             # API на http://localhost:3001, проверка: /api/health
 ```
 
-Фронтенд: в `pet-project/.env` укажите `NUXT_PUBLIC_API_BASE=http://localhost:3001/api`, затем `npm run dev` (порт 3000). Так как `.env.example` задаёт `FRONTEND_URL=http://localhost:5173`, добавьте `CORS_ORIGINS="http://localhost:3000"` в `.env` backend, иначе браузер заблокирует запросы.
+Фронтенд: в `pet-project/.env` укажите `NUXT_PUBLIC_API_BASE=http://localhost:3001/api`, затем `npm run dev` (порт 3000). `.env.example` уже задаёт `FRONTEND_URL=http://localhost:3000`, поэтому CORS для dev-сервера фронтенда настраивать не нужно.
 
 Для новой миграции при разработке используйте `npm run prisma:migrate` (это `prisma migrate dev`). **На проде только `prisma:migrate:deploy`.**
 

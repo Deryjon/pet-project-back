@@ -15,6 +15,12 @@
 - `SupplierInvoiceService.get`: при отсутствии прихода пишется `Logger.warn` с `id` и `companyId`.
 - `PrismaExceptionFilter` (`src/common/filters/prisma-exception.filter.ts`): тело ответа теперь `{ statusCode, message, error }`. Поле `error` берётся из имени статуса. Добавлен `prisma-exception.filter.spec.ts` (пока не закоммичен).
 
+- `POST /api/v2/imports/:id/rollback`: если остаток уже израсходован, реальный откат теперь отвечает **HTTP 409** с телом `{statusCode, message, error, can_rollback: false, blocked_items}`. Dry-run (`?dry_run=true`) по-прежнему возвращает 200 с `can_rollback: false`, чтобы UI показал список. Тест: `products.rollback-blocked.spec.ts`.
+- `ProductsService.getImportStatusName`: добавлена подпись «Возвращён» для `rolled_back`.
+- `prisma/seed.ts`: при `NODE_ENV=production` без `PLATFORM_ADMIN_PASSWORD` seed завершается ошибкой, в остальных случаях печатает предупреждение.
+- `.env.example`: `FRONTEND_URL` указывает на `http://localhost:3000`.
+- Миграция `20261016140000_widen_decimals_add_updated_at` (с `down.sql`): все 48 колонок `Decimal(12,x)` расширены до `Decimal(14,x)`, добавлен nullable `updatedAt` в `TelegramSubscriber`, `TelegramLinkToken`, `ProductSupplier`, `InventoryCountAttempt`. Проверено на временной БД PostgreSQL 18: применение, откат, повторное применение, `prisma migrate diff` без расхождений. Набор `test:postgres` даёт те же 9 падений, что и до миграции (проверено сравнением), 988 unit-тестов проходят. Колонки `Float` и статусы не менялись.
+
 **Документация** (`docs/`)
 
 - `docs/architecture.md`: модули, request pipeline, мультиарендность и guards, потоки данных, структура frontend.
@@ -39,11 +45,8 @@
 
 Найдены при подготовке документации. Зафиксированы здесь, чтобы не потерять.
 
-- `ProductsService.getImportStatusName` не знает статус `rolled_back`: откаченный импорт получает подпись «Новый».
-- `POST /api/v2/imports/:id/rollback` при блокировке по остаткам возвращает HTTP 200 с `can_rollback: false` и ничего не откатывает. Клиент должен проверять поле, а не статус.
 - `OrdersService.complete` не подключён к контроллеру: маршрута завершения заказа в `/api/orders` нет.
-- `RolesController` не использует guard'ы; авторизация внутри `RolesService`.
-- `prisma/seed.ts`: если не задан `PLATFORM_ADMIN_PASSWORD`, используется встроенное значение по умолчанию.
+- `RolesController` не использует guard'ы; авторизация внутри `RolesService` (проверено: все 7 методов отказывают до обращения к БД, зафиксировано в `roles.access.spec.ts`). Стандартные guard'ы не добавлены намеренно: они сломали бы путь платформенного админа с `company_id`.
 - Во фронтенде `startRecognition` (`pages/products/import/new.vue`) выводит `e?.data?.message` без склейки массива.
 - `Product`, `ProductVariant`, `ProductStock`, `ProductVariantStock`, `Receipt`, `InventoryItem`, `SellerSalarySettings` хранят деньги и остатки в `Float`. План перехода — в `docs/data-model.md`, в этой версии не выполнен.
 - Аудит (`docs/audit-report.md`) указывал `Decimal(14,2)` для `ProductSupplyPriceHistory.supplyPrice`. В схеме это `Decimal(12,2)`.

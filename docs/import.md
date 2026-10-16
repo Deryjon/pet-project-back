@@ -66,7 +66,7 @@ POST /api/v2/imports/:id/rollback     откатить проведённый и
 | `failed` | Проверка | ошибка (сессия помечается при сбое фоновой обработки) |
 | `rolled_back` | — | откатан (см. ниже про подпись) |
 
-> Известный дефект: в `getImportStatusName` нет ветки для `rolled_back`, поэтому откаченный импорт получает подпись «Новый». Поле `status_code` при этом корректно (`rolled_back`). Исправление: добавить ветку в `ProductsService.getImportStatusName`.
+> Откаченный импорт получает подпись «Возвращён», `status_code` равен `rolled_back`.
 
 Для сводного списка `GET /api/v2/imports` приходы по накладной показываются тем же списком. Их статусы переводятся так: `DRAFT`→`draft`, `PROCESSING` и `REVIEW`→`validating`, `READY`→`preview_ready`, `COMMITTED`→`completed`, `CANCELLED`→`cancelled`, `ROLLED_BACK`→`rolled_back`.
 
@@ -96,8 +96,8 @@ POST /api/v2/imports/:id/rollback     откатить проведённый и
 - Откатить можно только `completed`. Иначе 400 `Only completed imports can be rolled back`. Повторно: 400 `Import is already rolled back`.
 - Откат ищет движения `PURCHASE` с `externalId` = id сессии. Если их нет (импорт проведён до появления функции отката), 400 `Для этого импорта нет данных для отката`.
 - Откат не должен уводить остатки в минус. Если часть товаров уже продана или списана, откат блокируется.
-- **Важно:** в этом случае ответ **HTTP 200** с телом `{ "can_rollback": false, "blocked_items": [...], "reason": "Часть остатка по этим товарам уже израсходована ..." }`. Остатки не меняются. Клиент обязан проверять `can_rollback`, а не только статус ответа.
-- `POST /api/v2/imports/:id/rollback?dry_run=true` ничего не меняет, возвращает `{ "can_rollback": true, "items": [...] }` или ту же блокировку. Фронтенд сначала вызывает dry-run и показывает список (`pages/products/import/list/[id].vue`).
+- В этом случае реальный откат отвечает **HTTP 409** с телом `{ "statusCode": 409, "message": "Часть остатка по этим товарам уже израсходована ...", "error": "Conflict", "can_rollback": false, "blocked_items": [...] }`. Остатки не меняются.
+- `POST /api/v2/imports/:id/rollback?dry_run=true` ничего не меняет, возвращает `{ "can_rollback": true, "items": [...] }` или блокировку (для dry-run она тоже приходит с HTTP 200: `{ "can_rollback": false, "blocked_items": [...], "reason": "..." }`). Фронтенд сначала вызывает dry-run и показывает список (`pages/products/import/list/[id].vue`).
 - Повторный запуск во время отката: 400 `Import commit or rollback is already in progress`.
 
 ### 1.7 Чтение и список
@@ -273,6 +273,6 @@ GET    /api/supplier-invoices/:id/files/:fileIndex  скачать оригин�
 1. Создать приход, загрузить фото, распознать, F5 на шаге 3: должен вернуться тот же приход.
 2. Нажать «Обновить» на шаге 4: адрес не меняется, шаг сохраняется.
 3. Открыть `?id=` несуществующего прихода: «Приход не найден или был удалён.».
-4. Откатить импорт файла, на котором есть продажа после импорта: `can_rollback: false` и список блокировок, остатки не меняются.
+4. Откатить импорт файла, на котором есть продажа после импорта: HTTP 409 и список блокировок, остатки не меняются.
 
 Автотесты: `npm test` (`src/imports/services/supplier-invoice.*.spec.ts`, `import-matcher.service.spec.ts`), `npm run test:postgres` (интеграционные тесты), во фронтенде `tests/api-error.test.mjs`.

@@ -341,7 +341,7 @@ model AuthSession {
 model Plan {
   id            String         @id @default(uuid())
   name          String
-  priceMonthly  Decimal        @db.Decimal(12, 2)
+  priceMonthly  Decimal        @db.Decimal(14, 2)
   maxShops      Int
   maxUsers      Int
   maxProducts   Int
@@ -374,7 +374,7 @@ model Payment {
   id             String       @id @default(uuid())
   companyId      String
   subscriptionId String
-  amount         Decimal      @db.Decimal(12, 2)
+  amount         Decimal      @db.Decimal(14, 2)
   method         String
   paidAt         DateTime     @default(now())
   periodStart    DateTime
@@ -869,7 +869,7 @@ model ProductBundleComponent {
   bundleProductId    Int
   componentProductId Int
   componentVariantId String?
-  quantity           Decimal         @db.Decimal(12, 3)
+  quantity           Decimal         @db.Decimal(14, 3)
   company            Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
   bundleProduct      Product         @relation("BundleProduct", fields: [bundleProductId], references: [id], onDelete: Cascade)
   componentProduct   Product         @relation("BundleComponentProduct", fields: [componentProductId], references: [id], onDelete: Restrict)
@@ -1184,9 +1184,9 @@ model Client {
   marketingConsentSource String?
   marketingRevokedAt     DateTime?
   registeredAt           DateTime              @default(now())
-  balanceUzs             Decimal               @default(0) @db.Decimal(12, 2)
-  debtUzs                Decimal               @default(0) @db.Decimal(12, 2)
-  totalPurchasesUzs      Decimal               @default(0) @db.Decimal(12, 2)
+  balanceUzs             Decimal               @default(0) @db.Decimal(14, 2)
+  debtUzs                Decimal               @default(0) @db.Decimal(14, 2)
+  totalPurchasesUzs      Decimal               @default(0) @db.Decimal(14, 2)
   lastPurchaseAt         DateTime?
   visitsCount            Int                   @default(0)
   smsNotifications       Boolean               @default(false)
@@ -1284,9 +1284,9 @@ model ClientDebt {
   clientId           String
   saleId             Int?
   shopId             String?
-  amountUzs          Decimal               @db.Decimal(12, 2)
-  remainingAmountUzs Decimal               @db.Decimal(12, 2)
-  repaidAmountUzs    Decimal               @default(0) @db.Decimal(12, 2)
+  amountUzs          Decimal               @db.Decimal(14, 2)
+  remainingAmountUzs Decimal               @db.Decimal(14, 2)
+  repaidAmountUzs    Decimal               @default(0) @db.Decimal(14, 2)
   dueDate            DateTime?             @db.Date
   status             ClientDebtStatus      @default(unpaid)
   comment            String?
@@ -1312,7 +1312,7 @@ model ClientDebtRepayment {
   clientId          String
   debtId            String
   createdById       Int?
-  amountUzs         Decimal    @db.Decimal(12, 2)
+  amountUzs         Decimal    @db.Decimal(14, 2)
   idempotencyKey    String?
   /// CompanyPaymentType id the money was taken with; name kept as a snapshot.
   paymentMethod     String?
@@ -1360,9 +1360,9 @@ model Order {
   orderType      OrderType       @default(SALE)
   status         OrderStatus     @default(DRAFT)
   customerId     String?
-  totalPrice     Decimal         @default(0) @db.Decimal(12, 2)
-  discountAmount Decimal         @default(0) @db.Decimal(12, 2)
-  paidAmount     Decimal         @default(0) @db.Decimal(12, 2)
+  totalPrice     Decimal         @default(0) @db.Decimal(14, 2)
+  discountAmount Decimal         @default(0) @db.Decimal(14, 2)
+  paidAmount     Decimal         @default(0) @db.Decimal(14, 2)
   comment        String?
   versionNumber  Int             @default(1)
   completedAt    DateTime?
@@ -1389,10 +1389,10 @@ model OrderItem {
   orderId        String
   productId      Int
   variantId      String?
-  quantity       Decimal         @db.Decimal(12, 3)
-  price          Decimal         @db.Decimal(12, 2)
-  discountAmount Decimal         @default(0) @db.Decimal(12, 2)
-  totalPrice     Decimal         @db.Decimal(12, 2)
+  quantity       Decimal         @db.Decimal(14, 3)
+  price          Decimal         @db.Decimal(14, 2)
+  discountAmount Decimal         @default(0) @db.Decimal(14, 2)
+  totalPrice     Decimal         @db.Decimal(14, 2)
   order          Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product        Product         @relation(fields: [productId], references: [id])
   variant        ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
@@ -1408,7 +1408,7 @@ model OrderPayment {
   id            String      @id @default(uuid())
   orderId       String
   paymentTypeId String
-  amount        Decimal     @db.Decimal(12, 2)
+  amount        Decimal     @db.Decimal(14, 2)
   order         Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
   paymentType   PaymentType @relation(fields: [paymentTypeId], references: [id])
   createdAt     DateTime    @default(now())
@@ -1430,17 +1430,17 @@ model StockMovement {
   externalId             String            @default("")
   referenceType          String            @default("")
   referenceId            String            @default("")
-  quantity               Decimal           @db.Decimal(12, 3)
-  loadedMeasurementValue Decimal           @default(0) @db.Decimal(12, 3)
-  beforeQuantity         Decimal           @db.Decimal(12, 3)
-  afterQuantity          Decimal           @db.Decimal(12, 3)
+  quantity               Decimal           @db.Decimal(14, 3)
+  loadedMeasurementValue Decimal           @default(0) @db.Decimal(14, 3)
+  beforeQuantity         Decimal           @db.Decimal(14, 3)
+  afterQuantity          Decimal           @db.Decimal(14, 3)
   fromShopId             String            @default("")
   toShopId               String            @default("")
-  supplyPrice            Decimal           @default(0) @db.Decimal(12, 2)
-  retailPrice            Decimal           @default(0) @db.Decimal(12, 2)
-  newRetailPrice         Decimal           @default(0) @db.Decimal(12, 2)
-  fromRetailPrice        Decimal           @default(0) @db.Decimal(12, 2)
-  fromSupplyPrice        Decimal           @default(0) @db.Decimal(12, 2)
+  supplyPrice            Decimal           @default(0) @db.Decimal(14, 2)
+  retailPrice            Decimal           @default(0) @db.Decimal(14, 2)
+  newRetailPrice         Decimal           @default(0) @db.Decimal(14, 2)
+  fromRetailPrice        Decimal           @default(0) @db.Decimal(14, 2)
+  fromSupplyPrice        Decimal           @default(0) @db.Decimal(14, 2)
   createdById            Int
   company                Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
   shop                   Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
@@ -1565,9 +1565,9 @@ model ProductSupplyPriceHistory {
   productId      Int
   variantId      String?
   shopId         String
-  supplyPrice    Decimal         @db.Decimal(12, 2)
+  supplyPrice    Decimal         @db.Decimal(14, 2)
   supplyCurrency String          @default("")
-  oldSupplyPrice Decimal         @default(0) @db.Decimal(12, 2)
+  oldSupplyPrice Decimal         @default(0) @db.Decimal(14, 2)
   createdById    Int?
   product        Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
   variant        ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
@@ -1601,9 +1601,10 @@ model AuditLog {
 model ProductSupplier {
   productId  Int
   supplierId Int
-  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  supplier   Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
-  createdAt  DateTime @default(now())
+  product    Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  supplier   Supplier  @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime? @updatedAt
 
   @@id([productId, supplierId])
 }
@@ -1715,6 +1716,7 @@ model InventoryCountAttempt {
   countedQuantity Float
   countedById     Int
   countedAt       DateTime      @default(now())
+  updatedAt       DateTime?     @updatedAt
   note            String?
   isFinal         Boolean       @default(true)
   item            InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
@@ -1758,8 +1760,8 @@ model TransferItem {
   transferId      String
   productId       Int
   variantId       String?
-  quantity        Decimal         @db.Decimal(12, 3)
-  arrivedQuantity Decimal         @default(0) @db.Decimal(12, 3)
+  quantity        Decimal         @db.Decimal(14, 3)
+  arrivedQuantity Decimal         @default(0) @db.Decimal(14, 3)
   transfer        Transfer        @relation(fields: [transferId], references: [id], onDelete: Cascade)
   product         Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
   variant         ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
@@ -1778,13 +1780,13 @@ model Sale {
   number            String       @unique
   saleType          String       @default("sale")
   status            String       @default("draft")
-  discountPercent   Decimal      @default(0) @db.Decimal(12, 2)
-  discountAmount    Decimal      @default(0) @db.Decimal(12, 2)
-  payableTotal      Decimal      @default(0) @db.Decimal(12, 2)
-  total             Decimal      @default(0) @db.Decimal(12, 2)
-  cashbackAmount    Decimal      @default(0) @db.Decimal(12, 2)
-  cashbackPaid      Decimal      @default(0) @db.Decimal(12, 2)
-  debtCredit        Decimal      @default(0) @db.Decimal(12, 2)
+  discountPercent   Decimal      @default(0) @db.Decimal(14, 2)
+  discountAmount    Decimal      @default(0) @db.Decimal(14, 2)
+  payableTotal      Decimal      @default(0) @db.Decimal(14, 2)
+  total             Decimal      @default(0) @db.Decimal(14, 2)
+  cashbackAmount    Decimal      @default(0) @db.Decimal(14, 2)
+  cashbackPaid      Decimal      @default(0) @db.Decimal(14, 2)
+  debtCredit        Decimal      @default(0) @db.Decimal(14, 2)
   paymentMethod     String?
   extraPayments     Json?
   clientId          String?
@@ -1833,16 +1835,16 @@ model SaleItem {
   name              String
   barcode           String?
   sku               String?
-  quantity          Decimal         @db.Decimal(12, 3)
-  salePrice         Decimal         @db.Decimal(12, 2)
-  lineTotal         Decimal         @db.Decimal(12, 2)
-  retailPriceAtSale Decimal         @default(0) @db.Decimal(12, 2)
-  discountAmount    Decimal         @default(0) @db.Decimal(12, 2)
-  finalPrice        Decimal         @default(0) @db.Decimal(12, 2)
-  supplyPriceAtSale Decimal         @default(0) @db.Decimal(12, 2)
-  profitAtSale      Decimal         @default(0) @db.Decimal(12, 2)
-  markupAtSale      Decimal?        @db.Decimal(12, 2)
-  sellerBonusAmount Decimal         @default(0) @db.Decimal(12, 2)
+  quantity          Decimal         @db.Decimal(14, 3)
+  salePrice         Decimal         @db.Decimal(14, 2)
+  lineTotal         Decimal         @db.Decimal(14, 2)
+  retailPriceAtSale Decimal         @default(0) @db.Decimal(14, 2)
+  discountAmount    Decimal         @default(0) @db.Decimal(14, 2)
+  finalPrice        Decimal         @default(0) @db.Decimal(14, 2)
+  supplyPriceAtSale Decimal         @default(0) @db.Decimal(14, 2)
+  profitAtSale      Decimal         @default(0) @db.Decimal(14, 2)
+  markupAtSale      Decimal?        @db.Decimal(14, 2)
+  sellerBonusAmount Decimal         @default(0) @db.Decimal(14, 2)
   stockComposition  Json?
   sale              Sale            @relation(fields: [saleId], references: [id], onDelete: Cascade)
   product           Product?        @relation(fields: [productId], references: [id])
@@ -1904,17 +1906,18 @@ model RolePermission {
 }
 
 model TelegramSubscriber {
-  id                    String   @id @default(uuid())
-  chatId                String   @unique
-  userId                Int      @unique
+  id                    String    @id @default(uuid())
+  chatId                String    @unique
+  userId                Int       @unique
   companyId             String
-  notifyOnSale          Boolean  @default(true)
-  notifySellerAnalytics Boolean  @default(false)
-  notifyOnLogin         Boolean  @default(false)
-  notifyOnLowStock      Boolean  @default(false)
+  notifyOnSale          Boolean   @default(true)
+  notifySellerAnalytics Boolean   @default(false)
+  notifyOnLogin         Boolean   @default(false)
+  notifyOnLowStock      Boolean   @default(false)
   branchCode            String?
-  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  linkedAt              DateTime @default(now())
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  linkedAt              DateTime  @default(now())
+  updatedAt             DateTime? @updatedAt
 
   @@index([companyId])
   @@index([companyId, notifyOnSale])
@@ -1931,6 +1934,7 @@ model TelegramLinkToken {
   expiresAt DateTime
   usedAt    DateTime?
   createdAt DateTime  @default(now())
+  updatedAt DateTime? @updatedAt
 
   @@index([token])
 }

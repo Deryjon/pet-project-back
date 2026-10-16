@@ -14,7 +14,7 @@
 - **Мультиарендность.** Почти все таблицы содержат `companyId`. Запросы сервисов всегда фильтруются по нему (см. [architecture.md](./architecture.md#4-мультиарендность-и-авторизация)).
 - **Филиал.** `Shop` идентифицируется `id` (uuid) и `branchCode`. Пара `(companyId, branchCode)` уникальна. В `ProductStock` и `ProductVariantStock` есть и `shopId`, и `branchCode`, оба уникальны в паре с товаром. В `Sale` есть только `branchCode`.
 - **Идентификаторы.** Смешанные: `Int autoincrement` (`User`, `Product`, `Supplier`, `Sale`, `Category`, `Brand`, `ProductStock`), `uuid` (`Company`, `Shop`, `Client`, `Order`, `ProductVariant`, `Receipt`, `SupplierInvoice` и большинство остальных). Таблицы `SupplierInvoice` и `PurchaseOrder` дополнительно имеют `intId`/`number` (`autoincrement`) для человекочитаемых номеров.
-- **Деньги.** `Decimal(12,2)` в продажах, заказах, клиентах и долгах. `Decimal(14,2)` в накладных поставщиков и заказах поставщикам. `Float` в каталоге, остатках, чеке и части настроек. Подробности и план перехода: раздел 6.
+- **Деньги.** Везде, где используется `Decimal`, точность `(14,2)` для сумм и `(14,3)` для количества. `Float` в каталоге, остатках, чеке и части настроек. Подробности и план перехода: раздел 6.
 - **Временные метки.** `createdAt` у всех таблиц. `updatedAt` (`@updatedAt`) у большинства изменяемых таблиц. Исключения и текстовые даты перечислены в таблице расхождений.
 - **Удаление.** Поведение `onDelete` задано у каждой связи в `schema.prisma` (всего 153 указания). Связи от `Company` и от документов к их строкам обычно `Cascade` (например, `Receipt` удаляется вместе с `Sale`). Ссылки на клиента, сотрудника и филиал из продаж и долгов обычно `SetNull`. Перед удалением сущностей проверяйте `onDelete` в схеме.
 
@@ -41,9 +41,9 @@
 
 | Модель | Ключевые поля |
 |---|---|
-| `Plan` | `name`, `priceMonthly` Decimal(12,2), `maxShops`, `maxUsers`, `maxProducts`, `status` String |
+| `Plan` | `name`, `priceMonthly` Decimal(14,2), `maxShops`, `maxUsers`, `maxProducts`, `status` String |
 | `Subscription` | `companyId`, `planId`, `status` String, `startDate`, `endDate` |
-| `Payment` | `companyId`, `subscriptionId`, `amount` Decimal(12,2), `method` String, `periodStart`, `periodEnd`. Это платёж компании за подписку, не оплата покупки |
+| `Payment` | `companyId`, `subscriptionId`, `amount` Decimal(14,2), `method` String, `periodStart`, `periodEnd`. Это платёж компании за подписку, не оплата покупки |
 | `PlatformActionLog` | журнал действий оператора (`action`, `adminId`, `companyId`) |
 | `PlatformSetting` | `id` = `'default'`, `data` Json (политика безопасности, уведомления) |
 
@@ -58,7 +58,7 @@
 | `ProductSupplier` | `productId`, `supplierId` | связь товар-поставщик |
 | `ProductColor`, `ProductSize`, `ProductSeasonOption` | legacy-справочники, `attributeValueId` | см. раздел 5 |
 | `ProductSizeKind`, `ProductSizeType`, `ProductSizeSystem` | enum'ы размеров | см. раздел 4 |
-| `ProductBundleComponent` | `bundleProductId`, `componentProductId`, `componentVariantId`, `quantity` Decimal(12,3) | комплекты |
+| `ProductBundleComponent` | `bundleProductId`, `componentProductId`, `componentVariantId`, `quantity` Decimal(14,3) | комплекты |
 | `Category`, `Brand` | `companyId`, `name` (unique в паре с `companyId`) | |
 | `AttributeValue` | `id` uuid, `type` (enum), `companyId` NULL для системных значений, `code`, `name`, `group`, `archivedAt` | общий справочник цветов/размеров/сезонов, см. [attribute-dictionaries.md](./attribute-dictionaries.md) |
 | `StoreAttributeSetting` | `companyId`, `attributeId`, `isHidden`, `sortOrder` | скрытие/порядок системных значений для компании |
@@ -76,7 +76,7 @@
 | `SupplierInvoiceItem` | `id` uuid, `invoiceId`, `rawName`, `correctedName`, `rawSku`, `rawBarcode`, `quantity` Decimal(14,3), `supplyPrice` Decimal(14,2), `totalPrice`, `matchedProductId`, `matchedVariantId`, `matchMethod`, `matchConfidence` Int, `status` (enum), `userConfirmed`, `warnings` Json | строка накладной |
 | `InvoiceAllocation` | `invoiceItemId`, `shopId`, `quantity` Decimal(14,3) | распределение строки по филиалам. Уникален `(invoiceItemId, shopId)` |
 | `SupplierProductAlias` | `companyId`, `supplierId`, `productId`, `variantId`, `supplierName`, `supplierSku`, `supplierBarcode`, `usageCount` | «псевдонимы» названий поставщика для сопоставления |
-| `ProductSupplyPriceHistory` | `productId`, `variantId`, `shopId`, `supplyPrice` Decimal(12,2), `oldSupplyPrice` Decimal(12,2) | история закупочных цен |
+| `ProductSupplyPriceHistory` | `productId`, `variantId`, `shopId`, `supplyPrice` Decimal(14,2), `oldSupplyPrice` Decimal(14,2) | история закупочных цен |
 | `PurchaseOrder` | `id` uuid, `number` Int, `companyId`, `supplierId`, `shopId`, `status` (enum), `expectedAt`, `sentAt`, `receivedAt`, `cancelledAt` | заказ поставщику |
 | `PurchaseOrderItem` | `orderId`, `productId`, `variantId`, `quantity` Decimal(14,3), `receivedQuantity` Decimal(14,3), `supplyPrice` Decimal(14,2) | |
 
@@ -84,13 +84,13 @@
 
 | Модель | Ключевые поля | Примечание |
 |---|---|---|
-| `Sale` | `id` Int, `companyId`, `number` (unique), `saleType`, `status` String (`draft`), `isDraft`, `discountPercent` Decimal(12,2), `discountAmount`, `payableTotal`, `total`, `cashbackAmount`, `cashbackPaid`, `debtCredit`, `paymentMethod`, `extraPayments` Json, `clientId`, `clientName`, `branchCode`, `userId`, `parentSaleId`, `cancelledAt`, `paidAt` | основной документ продажи/возврата. Отдельного `shopId` нет |
-| `SaleItem` | `id` Int, `saleId`, `productId`, `variantId`, `sellerId`, `name`, `barcode`, `sku`, `quantity` Decimal(12,3), `salePrice`, `lineTotal`, `retailPriceAtSale`, `supplyPriceAtSale`, `profitAtSale`, `markupAtSale`, `sellerBonusAmount`, `stockComposition` Json | строка продажи. Цены зафиксированы на момент продажи |
+| `Sale` | `id` Int, `companyId`, `number` (unique), `saleType`, `status` String (`draft`), `isDraft`, `discountPercent` Decimal(14,2), `discountAmount`, `payableTotal`, `total`, `cashbackAmount`, `cashbackPaid`, `debtCredit`, `paymentMethod`, `extraPayments` Json, `clientId`, `clientName`, `branchCode`, `userId`, `parentSaleId`, `cancelledAt`, `paidAt` | основной документ продажи/возврата. Отдельного `shopId` нет |
+| `SaleItem` | `id` Int, `saleId`, `productId`, `variantId`, `sellerId`, `name`, `barcode`, `sku`, `quantity` Decimal(14,3), `salePrice`, `lineTotal`, `retailPriceAtSale`, `supplyPriceAtSale`, `profitAtSale`, `markupAtSale`, `sellerBonusAmount`, `stockComposition` Json | строка продажи. Цены зафиксированы на момент продажи |
 | `Receipt` | `id` uuid, `saleId` (unique), `companyId`, `shopId`, `branchCode`, `number`, `status` String (`CREATED`/`PRINTED`/`SENT`), `items` Json, `subtotal`, `discount`, `totalDue`, `paidCash`, `paidCard`, `paidCashback`, `debt`, `balance*`, `debt*`, `qrPayload`, `printedAt`, `sentAt` | чек. Поля-снимок Float. См. [receipts.md](./receipts.md) |
 | `ChequeSettings` | `id` uuid, `companyId`, `name`, `isDefault`, `paperWidth`, `printableWidth`, `offsetMm`, `feedMm`, `printMode`, `fontSize`, `itemDividers`, `hasLogo`, `logoUrl`, `brandName`, `footerMessage`, `qrCodeUrl`, `elementStyles` Json, `blocks` Json | шаблон чека. Блоки: `ChequeBlockDefinition[]` |
-| `Order` | `id` uuid, `companyId`, `shopId`, `cashboxId`, `userId`, `orderNumber` (unique в паре с `companyId`), `orderType`, `status`, `customerId`, `totalPrice`, `discountAmount`, `paidAmount` Decimal(12,2), `versionNumber`, `completedAt` | параллельная модель заказа для `/api/orders`. См. раздел 6 |
-| `OrderItem` | `orderId`, `productId`, `variantId`, `quantity` Decimal(12,3), `price`, `discountAmount`, `totalPrice` | уникален `(orderId, productId)` |
-| `OrderPayment` | `orderId`, `paymentTypeId`, `amount` Decimal(12,2) | |
+| `Order` | `id` uuid, `companyId`, `shopId`, `cashboxId`, `userId`, `orderNumber` (unique в паре с `companyId`), `orderType`, `status`, `customerId`, `totalPrice`, `discountAmount`, `paidAmount` Decimal(14,2), `versionNumber`, `completedAt` | параллельная модель заказа для `/api/orders`. См. раздел 6 |
+| `OrderItem` | `orderId`, `productId`, `variantId`, `quantity` Decimal(14,3), `price`, `discountAmount`, `totalPrice` | уникален `(orderId, productId)` |
+| `OrderPayment` | `orderId`, `paymentTypeId`, `amount` Decimal(14,2) | |
 | `PaymentType` | `companyId`, `name`, `isCash`, `isActive` | системный тип оплаты компании |
 | `CompanyPaymentType` | `companyId`, `name`, `token`, `paymentTypeId`, `isCashPaymentType`, `dontShowInMakePayment`, `dontShowInSettings` | тип оплаты, который видит кассир. Используется в погашении долга |
 | `Cashbox` | `companyId`, `shopId`, `name`, `chequeId`, `ePos`, `webKassa`, `isActive` | касса филиала |
@@ -99,22 +99,22 @@
 
 | Модель | Ключевые поля | Примечание |
 |---|---|---|
-| `Client` | `id` uuid, `companyId`, `code`, `firstName`, `lastName`, `phone`, `gender` (enum), `birthDate` Date, `registrationShopId`, `marketingAllowed`, `balanceUzs`, `debtUzs`, `totalPurchasesUzs` Decimal(12,2), `visitsCount`, уведомления (`smsNotifications` и др.) | уникален `(companyId, code)`. Баланс и долг хранятся денормализованно |
+| `Client` | `id` uuid, `companyId`, `code`, `firstName`, `lastName`, `phone`, `gender` (enum), `birthDate` Date, `registrationShopId`, `marketingAllowed`, `balanceUzs`, `debtUzs`, `totalPurchasesUzs` Decimal(14,2), `visitsCount`, уведомления (`smsNotifications` и др.) | уникален `(companyId, code)`. Баланс и долг хранятся денормализованно |
 | `ClientGroup`, `ClientGroupLink`, `ClientTag`, `ClientTagLink`, `ClientNote` | группы, теги, заметки | |
 | `ClientCard` | `companyId`, `clientId`, `type` (enum), `number` (unique в паре с `companyId`), `isActive`, `expiresAt` | карта клиента |
-| `ClientDebt` | `id` uuid, `companyId`, `clientId`, `saleId`, `shopId`, `amountUzs`, `remainingAmountUzs`, `repaidAmountUzs`, `dueDate`, `status` (enum), `comment`, `receiptUrl` | долг. Decimal(12,2) |
-| `ClientDebtRepayment` | `id` uuid, `debtId`, `clientId`, `amountUzs` Decimal(12,2), `idempotencyKey`, `paymentMethod` (id `CompanyPaymentType`), `paymentMethodName`, `branchCode` | погашение. Уникален `(companyId, debtId, idempotencyKey)` |
+| `ClientDebt` | `id` uuid, `companyId`, `clientId`, `saleId`, `shopId`, `amountUzs`, `remainingAmountUzs`, `repaidAmountUzs`, `dueDate`, `status` (enum), `comment`, `receiptUrl` | долг. Decimal(14,2) |
+| `ClientDebtRepayment` | `id` uuid, `debtId`, `clientId`, `amountUzs` Decimal(14,2), `idempotencyKey`, `paymentMethod` (id `CompanyPaymentType`), `paymentMethodName`, `branchCode` | погашение. Уникален `(companyId, debtId, idempotencyKey)` |
 
 ### 2.7 Склад, инвентаризация, трансферы
 
 | Модель | Ключевые поля | Примечание |
 |---|---|---|
-| `StockMovement` | `id` uuid, `companyId`, `shopId`, `productId`, `variantId`, `orderId`, `type` (enum), `quantity` Decimal(12,3), `beforeQuantity`, `afterQuantity`, `supplyPrice`, `retailPrice`, `externalId`, `referenceType`, `referenceId`, `createdById` | журнал движений. Откат прихода ищет движения по `type = PURCHASE` и `externalId` |
+| `StockMovement` | `id` uuid, `companyId`, `shopId`, `productId`, `variantId`, `orderId`, `type` (enum), `quantity` Decimal(14,3), `beforeQuantity`, `afterQuantity`, `supplyPrice`, `retailPrice`, `externalId`, `referenceType`, `referenceId`, `createdById` | журнал движений. Откат прихода ищет движения по `type = PURCHASE` и `externalId` |
 | `InventorySession` | `id` uuid, `companyId`, `shopId`, `number` (unique в паре с `companyId`), `status` String (`DRAFT`), `countMode`, `lockStockOperations`, `version` | инвентаризация. Статусы — String |
 | `InventoryItem` | `inventorySessionId`, `productId`, `variantId`, `systemQuantitySnapshot` Float, `countedQuantity` Float, `costPriceSnapshot` Float, `status` String | строка инвентаризации |
 | `InventoryCountAttempt` | `inventoryItemId`, `attemptNumber`, `countedQuantity` Float | попытки пересчёта |
 | `Transfer` | `id` uuid, `externalId` Int (unique), `departureShopId`, `arrivalShopId`, `status` (enum), `useDepartureShopPrices` | перемещение между филиалами |
-| `TransferItem` | `transferId`, `productId`, `variantId`, `quantity` Decimal(12,3), `arrivedQuantity` Decimal(12,3) | |
+| `TransferItem` | `transferId`, `productId`, `variantId`, `quantity` Decimal(14,3), `arrivedQuantity` Decimal(14,3) | |
 
 ### 2.8 Прочее
 
@@ -248,23 +248,23 @@ erDiagram
 
 ## 6. Таблица расхождений
 
-Таблица составлена по `docs/audit-report.md` (аудит 2026-10-07) и проверена по `schema.prisma`. Одно исходное утверждение аудита исправлено: `ProductSupplyPriceHistory.supplyPrice` имеет тип `Decimal(12,2)`, а не `(14,2)`.
+Таблица составлена по `docs/audit-report.md` (аудит 2026-10-07) и проверена по `schema.prisma`. Одно исходное утверждение аудита исправлено: `ProductSupplyPriceHistory.supplyPrice` имеет тип `Decimal(14,2)`, а не `(14,2)`.
 
 | # | Тема | Факт в схеме | Риск | Рекомендация |
 |---|---|---|---|---|
-| 1 | Тип денег | `Decimal(12,2)`: `Order*`, `Sale*`, `StockMovement` (суммы), `ClientDebt`, `Client`. `Decimal(14,2)`: `SupplierInvoice*`, `PurchaseOrderItem`, `SupplierProductAlias`. `Decimal(12,2)`: `ProductSupplyPriceHistory`. `Float`: `Product`, `ProductVariant`, `ProductVariantStock`, `ProductStock`, `InventoryItem`, `Receipt`, `SellerSalarySettings` | Ошибки округления, расхождение сумм между чеком и накладной | Перейти на `Decimal` по таблицам (раздел 6.1) |
+| 1 | Тип денег | Все `Decimal` теперь `(14,2)` / `(14,3)` (миграция `20261016140000_widen_decimals_add_updated_at`). Остаётся `Float`: `Product`, `ProductVariant`, `ProductVariantStock`, `ProductStock`, `InventoryItem`, `Receipt`, `SellerSalarySettings` | Ошибки округления, расхождение сумм между чеком и накладной | Перейти на `Decimal` по таблицам (раздел 6.1) |
 | 2 | Одинаковые понятия, разные имена | `purchasePrice` / `supplyPrice` / `costPriceSnapshot`; `salePrice` / `retailPrice` / `price` | Ошибки в отчётах, путаница в коде | Канонические термины из раздела 5 |
 | 3 | Клиент в продаже и заказе | `Sale.clientId` и `Order.customerId` | Двойная логика привязки клиента | Выбрать одно имя |
 | 4 | Филиал | `Sale` имеет только `branchCode`; `Order` имеет `shopId`; `ProductStock` имеет оба | Риск рассинхронизации | Добавить `shopId` при миграции (пока не делается) |
 | 5 | Телефон | `Client.phone`, `User.phoneNumber`, `Company.ownerPhone`, `Shop.phoneNumbers` (Json), `Receipt.managerPhone`; API: `phone_number`, `owner_phone` | Неверный поиск по номеру, разный формат | Единая нормализация (см. раздел 6.4) |
-| 6 | `discountPercent` | `Sale`: Decimal(12,2); `Receipt`: Float | Расхождение в чеке и продаже | Decimal |
+| 6 | `discountPercent` | `Sale`: Decimal(14,2); `Receipt`: Float | Расхождение в чеке и продаже | Decimal |
 | 7 | Суффикс `Uzs` | только `Client`, `ClientDebt`, `ClientDebtRepayment` | Непоследовательность | Суффикс или единый формат при миграции |
 | 8 | Роли | `Role` (CRM-роли, права) и `CompanyRole` (`code`, `isSystem`) | Непонятно, какая модель источник | Уточнить назначение `CompanyRole` |
 | 9 | Два заказа | `Sale` (Int id, `/new-sale`) и `Order` (uuid id, `/orders`) | Два пути продажи, разные отчёты | Консолидация (план, раздел 6.6) |
 | 10 | Регистр enum | lower: `UserType`, `ClientGender`, `ClientDebtStatus`, `ClientCardType`. UPPER: остальные | Ошибки сравнения строк | Привести к одному регистру при миграции на enum |
 | 11 | Статусы как String | `Sale.status`, `Receipt.status`, `InventorySession.status`, `Company.status`, `User.status`, `ProductImportSession.status` и др. | Нет проверки значений в БД | Перевести на enum (раздел 6.3) |
 | 12 | Удаление | `User.deletedAt` и `Role.deletedAt` — `Int` (0 = не удалён) | Не типизированная дата | `DateTime?` |
-| 13 | `updatedAt` | нет у `TelegramSubscriber`, `TelegramLinkToken`, `OrderPayment`, `ClientDebtRepayment`, `Payment`, `ProductSupplier`, `ClientGroupLink`, `ClientTagLink`, `StockMovement`, `ProductSupplyPriceHistory`, `AuditLog`, `InventoryCountAttempt`. Проверить, какие из них изменяются | Невозможно понять время последнего изменения | Добавить nullable `updatedAt` у изменяемых |
+| 13 | `updatedAt` | нет у `TelegramSubscriber`, `TelegramLinkToken`, `OrderPayment`, `ClientDebtRepayment`, `Payment`, `ProductSupplier`, `ClientGroupLink`, `ClientTagLink`, `StockMovement`, `ProductSupplyPriceHistory`, `AuditLog`, `InventoryCountAttempt`. Проверить, какие из них изменяются | Невозможно понять время последнего изменения | Выполнено для четырёх изменяемых таблиц (`TelegramSubscriber`, `TelegramLinkToken`, `ProductSupplier`, `InventoryCountAttempt`); остальные таблицы в коде не обновляются (append-only), поле им не нужно |
 | 14 | Даты в строках | `ProductImportSession.createdAt` / `updatedAt` — `String` | Сортировка и фильтры по строке | `DateTime` |
 | 15 | Тип id | `User`, `Product`, `Sale`, `Supplier`, `Category`, `Brand` — Int; остальные uuid | Разные формы в API, сложнее интеграции | Менять только если продукт решит |
 | 16 | API-ключи | snake_case (`phone_number`, `status_code`, `on_match`, `amount_uzs`, `branch_location`) и camelCase (DTO `orders`, `supplier-invoices`, `purchase-orders`) | Клиенту нужно знать два стиля | Дуальное принятие ключей, затем переход (раздел 6.2) |
@@ -272,7 +272,7 @@ erDiagram
 ### 6.1 Деньги во Float и Decimal (план)
 
 1. Таблица за таблицей: добавить `Decimal`-колонку, заполнить, сверить суммы (reconciliation), переключить чтение, удалить Float-колонку.
-2. Расширить `Decimal(12,x)` до `Decimal(14,x)` там, где объёмы растут (остатки, движения).
+2. ~~Расширить `Decimal(14,x)` до `Decimal(14,x)`~~ — выполнено (48 колонок), откат: `down.sql` рядом с миграцией.
 3. Для остатков добавить проверку `quantity >= 0` (см. `docs/sql/check-negative-stock.sql`, сначала очистить данные).
 
 ### 6.2 API-ключи и DTO
@@ -301,9 +301,9 @@ erDiagram
 
 1. Общие типы на фронтенде (уже сделаны: `types/enums.ts`, `types/common.ts`).
 2. Типизированные DTO с дуальным приёмом ключей.
-3. Расширение точности и добавление nullable `updatedAt`.
+3. ~~Расширение точности и добавление nullable `updatedAt`~~ — выполнено 2026-10-16 (проверено на копии: применение, откат, повторное применение, нулевой drift).
 4. Enum для статусов.
 5. Float → Decimal по таблицам с reconciliation.
 6. Изменение id только по решению продукта.
 
-Изменения из этого раздела **в коде не выполнены** на 2026-10-16.
+Из этого раздела выполнен только шаг 3 (и шаг 1). Остальные изменения **не выполнены** на 2026-10-16.

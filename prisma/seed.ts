@@ -40,14 +40,27 @@ function normalizePhoneNumber(value: string) {
 
 async function main() {
   const companyLogin =
-    process.env.COMPANY_LOGIN ?? process.env.COMPANY_SUBDOMAIN ?? 'konkurentcases';
+    process.env.COMPANY_LOGIN ??
+    process.env.COMPANY_SUBDOMAIN ??
+    'konkurentcases';
   const companySubdomain = process.env.COMPANY_SUBDOMAIN ?? companyLogin;
   const companyName = process.env.COMPANY_NAME ?? 'Konkurentcases';
   const adminPhone = normalizePhoneNumber(
     process.env.PLATFORM_ADMIN_PHONE ?? '+998900000001',
   );
+  if (!process.env.PLATFORM_ADMIN_PASSWORD) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(
+        'PLATFORM_ADMIN_PASSWORD must be set when seeding in production',
+      );
+    }
+    console.warn(
+      'PLATFORM_ADMIN_PASSWORD is not set: using the development default password.',
+    );
+  }
   const adminPassword = process.env.PLATFORM_ADMIN_PASSWORD ?? 'admin123';
-  const primaryPlatformRole = DEFAULT_PLATFORM_ROLES[0]?.code ?? 'platform_admin';
+  const primaryPlatformRole =
+    DEFAULT_PLATFORM_ROLES[0]?.code ?? 'platform_admin';
 
   const company = await prisma.company.upsert({
     where: {
