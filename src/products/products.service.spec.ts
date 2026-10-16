@@ -246,6 +246,42 @@ describe('ProductsService import colours from the catalog', () => {
     ...overrides,
   });
 
+  describe('accessories store', () => {
+    const accessories = () => {
+      const service = buildService({});
+      service.prisma.company.findUnique = jest.fn().mockResolvedValue({ storeType: 'ACCESSORIES' });
+      // No size of the store matches: "iPhone 15" is not a size code.
+      service.prisma.productSize.findFirst = jest.fn().mockResolvedValue(null);
+      service.prisma.productSize.findMany = jest.fn().mockResolvedValue([]);
+      return service;
+    };
+
+    it('loads a product without colour and size as is', async () => {
+      const input = row({ name: 'Чехол', article: 'CASE-1' });
+      await expect(accessories().validateImportReferences('company-1', input)).resolves.toEqual([]);
+    });
+
+    it.each(['чёрный', 'ЧЕРНЫЙ', '#000'])('finds the colour %p by any spelling', async (value) => {
+      const input = row({ article: 'CASE-1', colorCode: value });
+      await expect(accessories().validateImportReferences('company-1', input)).resolves.toEqual([]);
+      expect(input).toMatchObject({ colorCode: 'BLK' });
+    });
+
+    it('drops an unknown colour with a warning instead of losing it silently', async () => {
+      const input = row({ article: 'CASE-1', colorCode: 'Радужный' });
+      const warnings = await accessories().validateImportReferences('company-1', input);
+      expect(warnings).toEqual([expect.stringContaining('Цвет «Радужный» не найден')]);
+      expect((input as { colorCode?: string }).colorCode).toBeUndefined();
+    });
+
+    it('drops an unreadable size with a warning instead of failing the import', async () => {
+      const input = row({ article: 'CASE-1', sizeName: 'iPhone 15' });
+      const warnings = await accessories().validateImportReferences('company-1', input);
+      expect(warnings).toEqual([expect.stringContaining('Размер «iPhone 15» не распознан')]);
+      expect((input as { sizeName?: string }).sizeName).toBeUndefined();
+    });
+  });
+
   it('takes colour, size and article of an existing variant found by barcode', async () => {
     const service = buildService({
       findFirst: jest.fn().mockResolvedValue(variant('BLK', 'M')),

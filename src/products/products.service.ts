@@ -10505,15 +10505,7 @@ export class ProductsService {
       .toUpperCase();
     const color = !requestedColorCode
       ? null
-      : apparel
-        ? await this.findImportColor(tx, companyId, requestedColorCode)
-        : await tx.productColor.findFirst({
-            where: {
-              companyId,
-              OR: [{ code: requestedColorCode }, { name: row.colorName }],
-            },
-            select: { id: true },
-          });
+      : await this.findImportColor(tx, companyId, requestedColorCode);
     if (apparel && requestedColorCode && !color) {
       throw new BadRequestException(
         `Неизвестный код цвета: ${requestedColorCode}`,
@@ -10522,10 +10514,16 @@ export class ProductsService {
 
     let sizeId: string | null = null;
     if (row.sizeName) {
-      const resolved = await resolveSize(row.sizeName, companyId, tx, {
-        autoCreate: true,
-      });
-      sizeId = resolved.sizeId ?? null;
+      try {
+        const resolved = await resolveSize(row.sizeName, companyId, tx, {
+          autoCreate: true,
+        });
+        sizeId = resolved.sizeId ?? null;
+      } catch (error) {
+        // Accessories: an unreadable size was already reported in the
+        // preview; the product loads without it.
+        if (apparel) throw error;
+      }
     }
 
     return { colorId: color?.id, sizeId };
@@ -11962,7 +11960,7 @@ export class ProductsService {
       !company ||
       !['CLOTHING', 'SHOES', 'CLOTHING_SHOES'].includes(company.storeType)
     )
-      return [];
+      return this.validateAccessoryReferences(companyId, row);
 
     // Shared dictionaries (flag on): "2хл" → the 2XL size, "#fff" → the white
     // colour; a value whose legacy row does not exist yet is created on import.
@@ -12080,6 +12078,45 @@ export class ProductsService {
         );
       // Later steps link the season by its code.
       row.seasonCode = season.code;
+    }
+    return warnings;
+  }
+
+  /**
+   * Accessories and other non-apparel stores: colour and size are optional.
+   * A colour is found by any spelling (case, ё, short HEX); one the
+   * dictionary does not know, or a size that cannot be read, is dropped with
+   * a warning, so the row still loads instead of losing it silently or
+   * failing the whole import on commit.
+   */
+  private async validateAccessoryReferences(
+    companyId: string,
+    row: ImportRowInput,
+  ) {
+    const warnings: string[] = [];
+    const fileColor = (row.colorCode ?? row.colorName)?.trim();
+    if (fileColor) {
+      const known = await this.findImportColor(this.prisma, companyId, fileColor);
+      if (known) {
+        row.colorCode = known.code;
+        row.colorName = known.code;
+      } else {
+        warnings.push(
+          `Цвет «${fileColor}» не найден в справочнике — товар загрузится без цвета`,
+        );
+        row.colorCode = undefined;
+        row.colorName = undefined;
+      }
+    }
+    if (row.sizeName) {
+      try {
+        await resolveSize(row.sizeName, companyId, this.prisma);
+      } catch {
+        warnings.push(
+          `Размер «${row.sizeName.trim()}» не распознан — товар загрузится без размера`,
+        );
+        row.sizeName = undefined;
+      }
     }
     return warnings;
   }
