@@ -63,8 +63,19 @@ type StoredColor = { id: string; name: string; nameRu: string | null; hex: strin
  * the store already has — same name, same HEX or a near-identical HEX — is
  * not added again; existing colours are never changed.
  */
+// Practically the same shade (Тёмно-серый #404040 vs a store's Графит
+// #3A3A3C). Merely similar colours (Хаки vs Серый, Пудровый vs Бежевый) are
+// different colours to a shop: they are added, with a note.
+const NEAR_IDENTICAL_DISTANCE = 12;
+
+/** «Графитовый» next to «Графит»: one name is the other one extended. */
+function sameNameStem(a: string, b: string) {
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  return short.length >= 5 && long.startsWith(short);
+}
+
 export function missingSystemColors(stored: StoredColor[]) {
-  const added: Array<{ name: string; hex: string }> = [];
+  const added: Array<{ name: string; hex: string; similarTo?: string }> = [];
   const skipped: Array<{ name: string; hex: string; existing: string }> = [];
   const known = stored.map((color) => ({
     label: color.name,
@@ -72,19 +83,24 @@ export function missingSystemColors(stored: StoredColor[]) {
     hex: hexKey(color.hex),
   }));
   for (const [name, hex] of SYSTEM_COLORS) {
-    const twin = known.find(
-      (color) =>
-        color.keys.includes(nameKey(name)) ||
-        (color.hex &&
-          (color.hex === hex || colorDistance(color.hex, hex) < SIMILAR_COLOR_DISTANCE)),
-    );
+    const key = nameKey(name);
+    const twin =
+      known.find((color) => color.keys.some((k) => k === key || sameNameStem(k, key))) ??
+      known.find(
+        (color) =>
+          color.hex &&
+          (color.hex === hex || colorDistance(color.hex, hex) < NEAR_IDENTICAL_DISTANCE),
+      );
     if (twin) {
       skipped.push({ name, hex, existing: twin.label });
       continue;
     }
     // Not added to `known`: several system colours are close to each other on
     // purpose, only the store's own colours count as "already there".
-    added.push({ name, hex });
+    const similar = known.find(
+      (color) => color.hex && colorDistance(color.hex, hex) < SIMILAR_COLOR_DISTANCE,
+    );
+    added.push({ name, hex, ...(similar ? { similarTo: similar.label } : {}) });
   }
   return { added, skipped };
 }

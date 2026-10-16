@@ -69,18 +69,29 @@ describe('system colours for a store', () => {
       { id: '1', name: 'Чёрный', nameRu: 'Чёрный', hex: '#111111' },
       // same HEX, other name
       { id: '2', name: 'Снежный', nameRu: null, hex: '#ffffff' },
-      // near-identical HEX of «Графитовый» #36454F
+      // «Графитовый» is «Графит» extended; «Тёмно-серый» #404040 is the same shade
       { id: '3', name: 'Графит', nameRu: 'Графит', hex: '#3A3A3C' },
     ]);
     const names = added.map((color) => color.name);
     expect(names).not.toContain('Чёрный');
     expect(names).not.toContain('Белый');
     expect(names).not.toContain('Графитовый');
+    expect(names).not.toContain('Тёмно-серый');
     expect(skipped.map((color) => color.existing)).toEqual(
       expect.arrayContaining(['Чёрный', 'Снежный', 'Графит']),
     );
-    // «Графит» #3A3A3C is also near-identical to «Тёмно-серый» #404040.
-    expect(names).not.toContain('Тёмно-серый');
     expect(added).toHaveLength(46);
+  });
+
+  it('adds merely similar colours with a note (seen on a live store)', () => {
+    const { added } = missingSystemColors([
+      { id: '1', name: 'Серый', nameRu: 'Серый', hex: '#808080' },
+      { id: '2', name: 'Бежевый', nameRu: 'Бежевый', hex: '#D8C3A5' },
+      { id: '3', name: 'Синий', nameRu: 'Синий', hex: '#1E5BC6' },
+    ]);
+    const byName = new Map(added.map((color) => [color.name, color]));
+    expect(byName.get('Хаки')?.similarTo).toBe('Серый');
+    expect(byName.get('Пудровый')?.similarTo).toBe('Бежевый');
+    expect(byName.get('Джинсовый')?.similarTo).toBe('Синий');
   });
 });

@@ -39,7 +39,8 @@ async function main() {
     console.log(
       `\n${company.name}: ${write ? 'добавлено' : 'будет добавлено'} ${added.length}, уже есть ${skipped.length}`,
     );
-    for (const color of added) console.log(`  + ${color.name} ${color.hex}`);
+    for (const color of added)
+      console.log(`  + ${color.name} ${color.hex}${color.similarTo ? `  (похож на «${color.similarTo}»)` : ''}`);
     for (const color of skipped)
       console.log(`  = ${color.name} ${color.hex} → «${color.existing}»`);
   }
