@@ -697,7 +697,9 @@ export class ReceiptsService {
   }
 
   private assembleResponse(
-    sale: { id: number; createdAt: Date },
+    // A cancelled sale's receipt says so on paper: reprinted, it must not
+    // pass for proof of a purchase.
+    sale: { id: number; createdAt: Date; cancelledAt?: Date | null; cancelReason?: string | null },
     receipt: {
       id: string;
       number: string;
@@ -750,6 +752,8 @@ export class ReceiptsService {
       number: receipt.number,
       status: receipt.status,
       created_at: sale.createdAt,
+      cancelled_at: sale.cancelledAt ?? null,
+      cancel_reason: sale.cancelledAt ? (sale.cancelReason ?? null) : null,
       shop_id: receipt.shopId,
       branch_code: receipt.branchCode,
       manager_name: receipt.managerName,
