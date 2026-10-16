@@ -62,7 +62,7 @@ export class SupplierInvoicesController {
     @Param('id') id: string,
     @CurrentCompanyContext() requestContext: CompanyRequestContext,
   ) {
-    return this.invoices.get(id, requestContext);
+    return this.invoices.getForClient(id, requestContext);
   }
   @Post(':id/files')
   @UseInterceptors(

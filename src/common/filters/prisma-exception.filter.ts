@@ -8,12 +8,22 @@ import {
 import { Prisma } from '@prisma/client';
 import { Response } from 'express';
 
+// Same phrases as Nest's built-in HttpException bodies.
+const STATUS_PHRASES: Record<number, string> = {
+  [HttpStatus.BAD_REQUEST]: 'Bad Request',
+  [HttpStatus.NOT_FOUND]: 'Not Found',
+  [HttpStatus.CONFLICT]: 'Conflict',
+  [HttpStatus.INTERNAL_SERVER_ERROR]: 'Internal Server Error',
+};
+
 @Catch(Prisma.PrismaClientKnownRequestError, Prisma.PrismaClientValidationError)
 export class PrismaExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(PrismaExceptionFilter.name);
 
   catch(
-    exception: Prisma.PrismaClientKnownRequestError | Prisma.PrismaClientValidationError,
+    exception:
+      | Prisma.PrismaClientKnownRequestError
+      | Prisma.PrismaClientValidationError,
     host: ArgumentsHost,
   ) {
     const ctx = host.switchToHttp();
@@ -27,7 +37,11 @@ export class PrismaExceptionFilter implements ExceptionFilter {
         requestId,
         meta: exception.meta,
       });
-      return response.status(status).json({ message, statusCode: status });
+      return response.status(status).json({
+        statusCode: status,
+        message,
+        error: STATUS_PHRASES[status] ?? 'Error',
+      });
     }
 
     this.logger.warn('Prisma validation error', {
@@ -35,8 +49,9 @@ export class PrismaExceptionFilter implements ExceptionFilter {
       message: exception.message,
     });
     return response.status(HttpStatus.BAD_REQUEST).json({
-      message: 'Invalid data',
       statusCode: HttpStatus.BAD_REQUEST,
+      message: 'Invalid data',
+      error: STATUS_PHRASES[HttpStatus.BAD_REQUEST],
     });
   }
 

@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -20,6 +21,8 @@ import { InvoiceRecognitionService } from './invoice-recognition.service';
 
 @Injectable()
 export class SupplierInvoiceService {
+  private readonly logger = new Logger(SupplierInvoiceService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly matcher: ImportMatcherService,
@@ -313,7 +316,10 @@ export class SupplierInvoiceService {
       }),
       (this.prisma as any).supplierInvoice.count({ where }),
     ]);
-    return { data, meta: { page, limit, total } };
+    return {
+      data: (data as any[]).map((row) => this.withoutStoragePaths(row)),
+      meta: { page, limit, total },
+    };
   }
   async get(id: string, requestContext: CompanyRequestContext) {
     const ctx = await this.context(requestContext);
@@ -321,7 +327,12 @@ export class SupplierInvoiceService {
       where: { id, companyId: ctx.companyId },
       include: this.include(),
     });
-    if (!invoice) throw new NotFoundException('Invoice not found');
+    if (!invoice) {
+      this.logger.warn(
+        `Supplier invoice not found: id=${id} companyId=${ctx.companyId}`,
+      );
+      throw new NotFoundException('Invoice not found');
+    }
     return {
       ...invoice,
       originalFiles: Array.isArray(invoice.originalFiles)
@@ -330,6 +341,22 @@ export class SupplierInvoiceService {
             url: `/api/supplier-invoices/${id}/files/${index}`,
           }))
         : [],
+    };
+  }
+  // Client-facing view: the server-side storage path of the files stays private.
+  async getForClient(id: string, requestContext: CompanyRequestContext) {
+    return this.withoutStoragePaths(await this.get(id, requestContext));
+  }
+  private withoutStoragePaths<T extends { originalFiles?: unknown }>(
+    invoice: T,
+  ): T {
+    if (!Array.isArray(invoice.originalFiles)) return invoice;
+    return {
+      ...invoice,
+      originalFiles: invoice.originalFiles.map((file: any) => {
+        const { path: _path, ...rest } = file ?? {};
+        return rest;
+      }),
     };
   }
   async addItems(id: string, body: any, requestContext: CompanyRequestContext) {

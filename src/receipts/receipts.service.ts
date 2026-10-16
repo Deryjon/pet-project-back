@@ -1,4 +1,10 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import {
   LOYALTY_CASHBACK_PAYMENT_METHOD,
   loadLoyaltyProgramType,
@@ -46,6 +52,8 @@ function formatWorkingHours(raw: unknown): string {
 
 @Injectable()
 export class ReceiptsService {
+  private readonly logger = new Logger(ReceiptsService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   private async resolveShop(shopIdOrCode: string, companyId: string) {
@@ -105,6 +113,9 @@ export class ReceiptsService {
     });
 
     if (!sale) {
+      this.logger.warn(
+        `Sale not found for receipt: saleId=${saleId} companyId=${companyId}`,
+      );
       throw new NotFoundException('Sale not found');
     }
 
@@ -266,6 +277,7 @@ export class ReceiptsService {
         : null;
       const snapshot = await this.buildSnapshot(sale, companyId);
 
+      try {
       receipt = await this.prisma.receipt.create({
         data: {
           saleId: sale.id,
@@ -304,6 +316,28 @@ export class ReceiptsService {
           debtAfter: snapshot.debtAfter,
         },
       });
+      } catch (error) {
+        // saleId is the only unique key besides the generated id, so P2002
+        // means a concurrent request created this receipt first.
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === 'P2002'
+        ) {
+          this.logger.debug(
+            `Receipt create raced, reusing existing: saleId=${sale.id}`,
+          );
+          receipt = await this.prisma.receipt.findUnique({
+            where: { saleId: sale.id },
+          });
+        } else {
+          this.logger.error(
+            `Failed to create receipt: saleId=${sale.id} companyId=${companyId}`,
+            error instanceof Error ? error.stack : String(error),
+          );
+          throw error;
+        }
+        if (!receipt) throw error;
+      }
     } else if (receipt.items === null) {
       // legacy row created before the snapshot columns existed — backfill once,
       // from the same sale data it would have been created from originally,
