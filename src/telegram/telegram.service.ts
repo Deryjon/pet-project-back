@@ -162,8 +162,11 @@ export class TelegramService implements OnApplicationBootstrap {
     await this.onApplicationBootstrap();
     return this.getStatus();
   }
+  // TELEGRAM_API_URL: a relay with the same Bot API paths (e.g. a Cloudflare
+  // worker or another server) for hosts that cannot reach api.telegram.org.
   private get apiBase() {
-    return `https://api.telegram.org/bot${this.token}`;
+    const base = (process.env.TELEGRAM_API_URL || 'https://api.telegram.org').replace(/\/+$/, '');
+    return `${base}/bot${this.token}`;
   }
 
   constructor(
