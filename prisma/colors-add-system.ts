@@ -37,13 +37,13 @@ async function main() {
       ensureSystemColors(tx, company.id, { write }),
     );
     console.log(
-      `\n${company.name} (${company.id}): ${write ? 'added' : 'would add'} ${added.length}, already present ${skipped.length}`,
+      `\n${company.name}: ${write ? 'добавлено' : 'будет добавлено'} ${added.length}, уже есть ${skipped.length}`,
     );
     for (const color of added) console.log(`  + ${color.name} ${color.hex}`);
     for (const color of skipped)
       console.log(`  = ${color.name} ${color.hex} → «${color.existing}»`);
   }
-  if (!write) console.log('\nDry run: nothing written. Add --apply to write.');
+  if (!write) console.log('\nПробный прогон: в базе ничего не изменено. Чтобы добавить, запустите с --apply.');
 }
 
 main()

@@ -5,7 +5,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import { canonicalUnit } from '../src/common/measurement-units';
 
-// Dry run only: lists every stored spelling of Product.unit per company with
+// CSV for Excel: UTF-8 with BOM and «;» (Russian Excel). Dry run only: lists every stored spelling of Product.unit per company with
 // the unit it is read as ("штука" → "шт") and how many products carry it.
 // It runs in a READ ONLY transaction and changes nothing: old spellings are
 // already read as the canonical unit by the app, so no rewrite is needed.
@@ -28,49 +28,52 @@ async function main() {
   const out = arg('out') ?? './units-audit';
   const companyId = arg('company-id');
 
-  const groups = await prisma.$transaction(async (tx) => {
+  const { groups, names } = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SET TRANSACTION READ ONLY`;
-    return tx.product.groupBy({
+    const groups = await tx.product.groupBy({
       by: ['companyId', 'unit'],
       where: companyId ? { companyId } : {},
       _count: { _all: true },
       orderBy: [{ companyId: 'asc' }, { unit: 'asc' }],
     });
+    const companies = await tx.company.findMany({ select: { id: true, name: true } });
+    return { groups, names: new Map(companies.map((c) => [c.id, c.name])) };
   });
 
   const rows = groups.map((group) => {
     const stored = group.unit ?? '';
     const unit = canonicalUnit(stored);
     return {
-      company_id: group.companyId ?? '',
+      company: names.get(group.companyId ?? '') ?? group.companyId ?? '',
       stored_unit: stored,
       read_as: unit ?? stored,
       status: !stored.trim()
-        ? 'empty (shown as шт)'
+        ? 'пусто (показывается как шт)'
         : unit === stored
-          ? 'canonical'
+          ? 'правильно'
           : unit
-            ? 'alias'
-            : 'unknown — check manually',
+            ? 'другое написание — читается верно'
+            : 'неизвестная единица — проверить вручную',
       products: group._count._all,
     };
   });
 
-  const columns = ['company_id', 'stored_unit', 'read_as', 'status', 'products'];
+  const columns = ['company', 'stored_unit', 'read_as', 'status', 'products'];
+  const headers = ['Компания', 'Как записано', 'Читается как', 'Статус', 'Товаров'];
   mkdirSync(out, { recursive: true });
   const file = join(out, `${companyId ?? 'all'}-units.csv`);
   writeFileSync(
     file,
     [
-      columns.join(','),
+      '\uFEFF' + headers.join(';'),
       ...rows.map((row) =>
-        columns.map((column) => csvCell((row as any)[column])).join(','),
+        columns.map((column) => csvCell((row as any)[column])).join(';'),
       ),
     ].join('\n') + '\n',
   );
 
   console.table(rows);
-  console.log(`Written ${file}. Nothing in the database was changed.`);
+  console.log(`Отчёт: ${file}. В базе ничего не изменено.`);
 }
 
 main()

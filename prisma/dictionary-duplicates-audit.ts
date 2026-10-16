@@ -6,7 +6,7 @@ import { PrismaClient } from '@prisma/client';
 import { hexKey, nameKey } from '../src/common/dictionary-names';
 import { normalizeSizeCode } from '../src/common/resolve-size';
 
-// Dry run only: lists duplicates that were created before the dictionaries
+// CSV for Excel: UTF-8 with BOM and «;» (Russian Excel). Dry run only: lists duplicates that were created before the dictionaries
 // compared values by one rule — colours (same HEX or name up to case/ё),
 // sizes ("XXL" next to "2XL", "xl" next to "XL"), seasons, brands,
 // categories, suppliers and attribute values — with how many goods use each
@@ -22,7 +22,7 @@ const arg = (name: string) =>
   process.argv.find((item) => item.startsWith(`--${name}=`))?.split('=')[1];
 
 type Row = {
-  company_id: string;
+  company: string;
   dictionary: string;
   group_key: string;
   id: string;
@@ -36,6 +36,17 @@ const csvCell = (value: unknown) => {
   const text = String(value ?? '');
   return /[",\n;]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 };
+
+/** "company|hex|#000000" → "одинаковый HEX #000000": the key without ids. */
+function groupLabel(key: string) {
+  const [, ...rest] = key.split('|');
+  const [kind, ...value] = rest;
+  if (kind === 'hex') return `одинаковый HEX ${value.join(' ')}`;
+  if (kind === 'name') return `одно название: ${value.join(' ')}`;
+  if (kind === 'CLOTHING' || kind === 'SHOES' || kind === 'OTHER')
+    return `один размер: ${value.join(' ')}`;
+  return `одно название: ${rest.join(' ')}`;
+}
 
 function duplicates<T>(items: T[], key: (item: T) => string | null) {
   const groups = new Map<string, T[]>();
@@ -55,6 +66,16 @@ async function main() {
   const rows = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SET TRANSACTION READ ONLY`;
     const result: Row[] = [];
+    const companies = await tx.company.findMany({ select: { id: true, name: true } });
+    const companyName = new Map(companies.map((c) => [c.id, c.name]));
+    const DICTIONARY_LABELS: Record<string, string> = {
+      color: 'Цвет',
+      size: 'Размер',
+      season: 'Сезон',
+      brand: 'Бренд',
+      category: 'Категория',
+      supplier: 'Поставщик',
+    };
     const push = (
       dictionary: string,
       groupKey: string,
@@ -64,13 +85,13 @@ async function main() {
       usedBy: number,
     ) =>
       result.push({
-        company_id: item.companyId ?? '',
-        dictionary,
-        group_key: groupKey,
+        company: companyName.get(item.companyId ?? '') ?? item.companyId ?? '',
+        dictionary: DICTIONARY_LABELS[dictionary] ?? dictionary.replace(/^attribute:/, 'Атрибут: '),
+        group_key: groupLabel(groupKey),
         id: String(item.id),
         value,
         code,
-        is_active: item.isActive === false ? 'no' : 'yes',
+        is_active: item.isActive === false ? 'нет' : 'да',
         used_by: usedBy,
       });
 
@@ -138,8 +159,9 @@ async function main() {
     return result;
   });
 
+  const headers = ['Компания', 'Справочник', 'Группа дублей', 'ID', 'Значение', 'Код', 'Включено', 'Используется в товарах'];
   const columns: Array<keyof Row> = [
-    'company_id',
+    'company',
     'dictionary',
     'group_key',
     'id',
@@ -153,13 +175,13 @@ async function main() {
   writeFileSync(
     file,
     [
-      columns.join(','),
-      ...rows.map((row) => columns.map((column) => csvCell(row[column])).join(',')),
+      '\uFEFF' + headers.join(';'),
+      ...rows.map((row) => columns.map((column) => csvCell(row[column])).join(';')),
     ].join('\n') + '\n',
   );
   const groups = new Set(rows.map((row) => `${row.dictionary}|${row.group_key}`));
   console.log(
-    `${groups.size} duplicate groups, ${rows.length} rows → ${file}. Nothing in the database was changed.`,
+    `Групп дублей: ${groups.size}, строк: ${rows.length}. Отчёт: ${file}. В базе ничего не изменено.`,
   );
 }
 
